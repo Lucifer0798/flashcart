@@ -1,0 +1,16 @@
+# Normalise line endings in the repository; let each working copy use its platform's.
+* text=auto
+
+# ...except anything a Linux shell has to execute. A CRLF `mvnw` fails on a CI runner with a
+# baffling "bad interpreter: /bin/sh^M", and this repo is authored on Windows.
+mvnw           text eol=lf
+*.sh           text eol=lf
+Dockerfile     text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+
+mvnw.cmd       text eol=crlf
+
+*.jar          binary
+*.png          binary
+*.jpg          binary
