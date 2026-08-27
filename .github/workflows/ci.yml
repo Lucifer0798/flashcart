@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # A second push to the same branch makes the first run's result irrelevant.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build and unit test
+        run: ./mvnw -B verify -DskipITs
+
+      # Separate step from the unit tests so a failure here is unambiguous: the runner has Docker,
+      # so an integration-test failure is the code's fault and not a missing daemon.
+      - name: Integration tests (Testcontainers)
+        run: ./mvnw -B verify -Dsurefire.skip=true
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            services/*/target/surefire-reports/
+            services/*/target/failsafe-reports/
+          retention-days: 7
+
+  docker:
+    name: Build service images
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds every image the way compose does. Catches a broken Dockerfile or a service whose
+      # module name and build arg have drifted apart — neither of which the Maven build can see.
+      - name: Build all images
+        run: docker compose build
+
+      - name: Start the stack and wait for health
+        run: |
+          docker compose up -d
+          echo "Waiting for every service to report healthy..."
+          for i in $(seq 1 60); do
+            unhealthy=$(docker compose ps --format '{{.Service}} {{.Health}}' \
+              | awk '$2 != "healthy" && $2 != "" { print $1 }')
+            if [ -z "$unhealthy" ]; then
+              echo "All services healthy."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Still not healthy: $unhealthy"
+          docker compose logs --tail=100
+          exit 1
+
+      # A green health check only proves the processes started. This proves the routing table, the
+      # catalog schema and the seed data are all actually working together.
+      - name: Smoke-test the platform through the gateway
+        run: |
+          set -e
+          echo "--- catalog: a live flash sale exists ---"
+          curl -sf http://localhost:18080/api/v1/flash-sales/active | grep -q '"phase":"ACTIVE"'
+          echo "--- catalog: the listing applies the sale price ---"
+          curl -sf 'http://localhost:18080/api/v1/products?status=ACTIVE&size=50' | grep -q '"onFlashSale":true'
+          echo "--- every stub service answers through its own gateway route ---"
+          for s in order user payment inventory shipping; do
+            curl -sf "http://localhost:18080/api/v1/$s/_info" | grep -q '"status":"skeleton"'
+          done
+          echo "--- the shared error envelope survives the hop ---"
+          curl -s http://localhost:18080/api/v1/products/00000000-0000-4000-8000-0000000000ff \
+            | grep -q '"code":"NOT_FOUND"'
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -1,0 +1,12 @@
+# Keep the build context small — the image builds from source inside the container, so nothing
+# already compiled on the host should be shipped into it (and a host-built target/ would shadow
+# the container's own build output).
+**/target/
+.git/
+.github/
+.idea/
+.mvn/
+docs/
+*.md
+mvnw
+mvnw.cmd

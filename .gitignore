@@ -1,0 +1,28 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/wrapper/maven-wrapper.jar
+
+# IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+nbproject/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local overrides — never commit real credentials or machine-specific ports
+.env
+.env.local
+*.local.yml
+application-local.yml
+
+# Logs and scratch
+*.log
+logs/

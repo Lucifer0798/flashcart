@@ -1,0 +1,234 @@
+# The whole platform on one machine.
+#
+# Host ports are all in the 15000-19000 range so this stack can run alongside anything else already
+# using 5432/6379/8080. Container-internal ports are the conventional ones.
+#
+#   docker compose up --build          bring everything up
+#   docker compose up -d postgres redis kafka   infrastructure only, services from your IDE
+
+name: flashcart
+
+x-service-base: &service-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  environment: &service-env
+    FLASHCART_VERSION: 0.1.0-SNAPSHOT
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q -O - http://localhost:$${SERVER_PORT}/actuator/health | grep -q UP"]
+    interval: 10s
+    timeout: 5s
+    retries: 12
+    start_period: 40s
+
+services:
+
+  # --- infrastructure -------------------------------------------------------------------------
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: flashcart
+      POSTGRES_PASSWORD: flashcart
+      # The per-service databases are created by the init script; this one just gives the server a
+      # database to finish initialising into.
+      POSTGRES_DB: flashcart
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Files in this directory run once, on an empty data directory only. Editing the script after
+      # the volume exists does nothing — `docker compose down -v` first.
+      - ./infra/postgres/init-databases.sql:/docker-entrypoint-initdb.d/01-init-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flashcart -d flashcart"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # appendonly keeps reservation state across a restart. Phase 7 is what makes this load-bearing;
+    # it is on from the start so the durability behaviour is the same in every phase.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  kafka:
+    image: apache/kafka:3.9.0
+    # KRaft: no ZooKeeper. One process is both broker and controller here.
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Points at localhost, not the service name. A single-node broker registering its controller
+      # through its own Service/DNS name deadlocks: nothing routes to it until it is ready, and it
+      # cannot become ready until it registers. Controller and broker are the same process anyway.
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # The empty-host form (`://:9092`), not `://0.0.0.0:9092`. Both mean "bind every interface",
+      # but Kafka 3.9 refuses to start when it can derive an advertised address of 0.0.0.0 — which
+      # it does for the controller listener, since that one is never in advertised.listeners.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:19092
+      # Without this the broker writes its log segments to /tmp/kafka-logs and the data volume below
+      # holds nothing — the cluster silently loses every topic on `docker compose down`.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # Two advertised listeners because clients inside the compose network must be told `kafka:9092`
+      # while a client on the host must be told `localhost:19092`. One value cannot serve both.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Everything below is a single-node concession: the defaults assume three brokers and would
+      # leave every internal topic under-replicated and unusable.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: flashcart-local-cluster
+    ports:
+      - "19092:19092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # The default 1s exec-probe timeout is far too short for anything that boots a JVM.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: flashcart-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    ports:
+      - "18090:8080"
+
+  # --- application services -------------------------------------------------------------------
+
+  gateway:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: gateway
+    environment:
+      <<: *service-env
+      SERVER_PORT: 8080
+      FLASHCART_CATALOG_URI: http://catalog:8081
+      FLASHCART_ORDER_URI: http://order:8082
+      FLASHCART_USER_URI: http://user:8083
+      FLASHCART_PAYMENT_URI: http://payment:8084
+      FLASHCART_INVENTORY_URI: http://inventory:8085
+      FLASHCART_SHIPPING_URI: http://shipping:8086
+    ports:
+      - "18080:8080"
+    depends_on:
+      catalog:
+        condition: service_started
+
+  catalog:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: catalog
+    environment:
+      <<: *service-env
+      SERVER_PORT: 8081
+      # `demo` adds classpath:db/seed to the Flyway locations, so a fresh stack comes up with a
+      # catalog you can actually browse. Drop the profile for an empty one.
+      SPRING_PROFILES_ACTIVE: demo
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_catalog
+      SPRING_DATASOURCE_USERNAME: flashcart
+      SPRING_DATASOURCE_PASSWORD: flashcart
+    ports:
+      - "18081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  order:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: order
+    environment:
+      <<: *service-env
+      SERVER_PORT: 8082
+    ports:
+      - "18082:8082"
+
+  user:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: user
+    environment:
+      <<: *service-env
+      SERVER_PORT: 8083
+    ports:
+      - "18083:8083"
+
+  payment:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: payment
+    environment:
+      <<: *service-env
+      SERVER_PORT: 8084
+    ports:
+      - "18084:8084"
+
+  inventory:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: inventory
+    environment:
+      <<: *service-env
+      SERVER_PORT: 8085
+    ports:
+      - "18085:8085"
+
+  shipping:
+    <<: *service-base
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: shipping
+    environment:
+      <<: *service-env
+      SERVER_PORT: 8086
+    ports:
+      - "18086:8086"
+
+volumes:
+  postgres-data:
+  redis-data:
+  kafka-data:

@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: flashcart-shipping
+
+server:
+  port: ${SERVER_PORT:8086}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # health and info for compose/Kubernetes probes; prometheus is claimed in Phase 9.
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+
+logging:
+  pattern:
+    # The correlation id is stamped into the MDC by CorrelationIdFilter in flashcart-common.
+    level: "%5p [${spring.application.name},%X{correlationId:-}]"
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+flashcart:
+  version: ${FLASHCART_VERSION:0.1.0-SNAPSHOT}

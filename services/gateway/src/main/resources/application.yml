@@ -1,0 +1,65 @@
+spring:
+  application:
+    name: flashcart-gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          default-filters:
+            # The gateway stamps X-Correlation-Id on the response, and the downstream service echoes
+            # the same header on its own response — so without this the caller receives the header
+            # twice. RETAIN_FIRST keeps the gateway's, which is the one that is always present.
+            - DedupeResponseHeader=X-Correlation-Id, RETAIN_FIRST
+          # Static URIs, not service discovery. Phase 1 has a fixed six-service topology and
+          # compose/Kubernetes DNS already resolves the names; adding a registry now would be a
+          # moving part with nothing to discover.
+          routes:
+            - id: catalog
+              uri: ${FLASHCART_CATALOG_URI:http://localhost:8081}
+              predicates:
+                - Path=/api/v1/products/**,/api/v1/categories/**,/api/v1/flash-sales/**,/api/v1/catalog/**
+            - id: order
+              uri: ${FLASHCART_ORDER_URI:http://localhost:8082}
+              predicates:
+                - Path=/api/v1/orders/**,/api/v1/order/**
+            - id: user
+              uri: ${FLASHCART_USER_URI:http://localhost:8083}
+              predicates:
+                - Path=/api/v1/users/**,/api/v1/user/**
+            - id: payment
+              uri: ${FLASHCART_PAYMENT_URI:http://localhost:8084}
+              predicates:
+                - Path=/api/v1/payments/**,/api/v1/payment/**
+            - id: inventory
+              uri: ${FLASHCART_INVENTORY_URI:http://localhost:8085}
+              predicates:
+                - Path=/api/v1/inventory/**
+            - id: shipping
+              uri: ${FLASHCART_SHIPPING_URI:http://localhost:8086}
+              predicates:
+                - Path=/api/v1/shipments/**,/api/v1/shipping/**
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,gateway
+  endpoint:
+    health:
+      probes:
+        enabled: true
+    gateway:
+      # Lets `curl /actuator/gateway/routes` answer "what is this gateway actually routing" without
+      # reading the config. Read-only; the mutating route endpoints stay off.
+      access: read_only
+
+logging:
+  level:
+    org.springframework.cloud.gateway: ${GATEWAY_LOG_LEVEL:INFO}
+
+flashcart:
+  version: ${FLASHCART_VERSION:0.1.0-SNAPSHOT}

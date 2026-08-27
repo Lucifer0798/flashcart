@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!--
+	  Spring Boot 4.0.8, not the newer 4.1.1, on purpose: spring-cloud-dependencies 2025.1.3 (the
+	  latest release train, and the one that brings Spring Cloud Gateway 5.0.3) pins
+	  <spring-boot.version>4.0.8</spring-boot.version>. Boot 4.1 would very likely work, but the
+	  gateway is load-bearing here and the tested pairing is worth more than the minor bump.
+	  Revisit when a release train that targets Boot 4.1 ships.
+	-->
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.0.8</version>
+		<relativePath/>
+	</parent>
+
+	<groupId>com.flashcart</groupId>
+	<artifactId>flashcart-parent</artifactId>
+	<version>0.1.0-SNAPSHOT</version>
+	<packaging>pom</packaging>
+	<name>flashcart-parent</name>
+	<description>FlashCart - Distributed High-Concurrency Commerce Platform</description>
+
+	<modules>
+		<module>services/common</module>
+		<module>services/gateway</module>
+		<module>services/catalog</module>
+		<module>services/order</module>
+		<module>services/user</module>
+		<module>services/payment</module>
+		<module>services/inventory</module>
+		<module>services/shipping</module>
+	</modules>
+
+	<properties>
+		<java.version>21</java.version>
+		<maven.compiler.release>21</maven.compiler.release>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<spring-cloud.version>2025.1.3</spring-cloud.version>
+		<springdoc.version>3.1.0</springdoc.version>
+	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.cloud</groupId>
+				<artifactId>spring-cloud-dependencies</artifactId>
+				<version>${spring-cloud.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<dependency>
+				<groupId>com.flashcart</groupId>
+				<artifactId>flashcart-common</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.springdoc</groupId>
+				<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+				<version>${springdoc.version}</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<pluginManagement>
+			<plugins>
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-surefire-plugin</artifactId>
+					<configuration>
+						<!-- Surefire's default includes are *Test/*Tests/*TestCase only; *IT classes
+						     are picked up by the failsafe plugin during `verify`, not by `test`. -->
+						<excludes>
+							<exclude>**/*IT.java</exclude>
+						</excludes>
+					</configuration>
+				</plugin>
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-failsafe-plugin</artifactId>
+					<executions>
+						<execution>
+							<goals>
+								<goal>integration-test</goal>
+								<goal>verify</goal>
+							</goals>
+						</execution>
+					</executions>
+				</plugin>
+			</plugins>
+		</pluginManagement>
+	</build>
+</project>

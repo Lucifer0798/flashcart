@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>com.flashcart</groupId>
+		<artifactId>flashcart-parent</artifactId>
+		<version>0.1.0-SNAPSHOT</version>
+		<relativePath>../../pom.xml</relativePath>
+	</parent>
+
+	<artifactId>flashcart-gateway</artifactId>
+	<name>flashcart-gateway</name>
+	<description>The single front door: routing, correlation IDs, and the edge concerns</description>
+
+	<dependencies>
+		<dependency>
+			<groupId>com.flashcart</groupId>
+			<artifactId>flashcart-common</artifactId>
+		</dependency>
+		<!--
+		  Spring Cloud Gateway 5.x split the old spring-cloud-starter-gateway into explicit
+		  server-webflux and server-webmvc flavours. WebFlux is the right one here: the gateway does
+		  nothing but proxy, so a non-blocking stack holds far more concurrent flash-sale
+		  connections per thread than one servlet-per-request would.
+		-->
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+</project>
