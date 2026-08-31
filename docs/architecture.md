@@ -193,7 +193,7 @@ Responses carry a computed `effectivePrice` and `discountPercent`. Clients rende
 recompute, so the grid and the checkout cannot disagree, and every surface shows the same `-40%`
 badge instead of each rounding its own way.
 
-### Concurrency, at catalog's modest scale
+### Concurrency, at catalog's modest scale (Phase 2)
 
 Catalog writes are rare and human-driven, so it uses **optimistic** locking: a JPA `@Version` on
 `Product`, plus an explicit `expectedVersion` precondition so a stale editor gets a clear 409 up
@@ -204,3 +204,99 @@ front rather than at flush time. Uniqueness is defended by database constraints 
 The genuinely contended concurrency problem is inventory's, and it is a different problem needing
 different tools (atomic Redis operations, pessimistic locks, reservation expiry). That is Phases 3
 and 7.
+
+---
+
+## Inventory design notes (Phase 3)
+
+This is the service the platform is really about. Everything else can be slow, or wrong for a
+moment, and be forgiven. This one cannot promise a unit it does not have.
+
+### The one statement that does the work
+
+```sql
+update stock_items
+   set reserved = reserved + :quantity
+ where sku = :sku
+   and on_hand - reserved >= :quantity
+```
+
+The check and the write are the same statement, so there is no window between them for a concurrent
+buyer to slip through. Zero rows affected means someone else won the unit — during a sale, the
+ordinary outcome rather than an error. Full reasoning, and why optimistic and pessimistic locking
+were both rejected for this path, in [ADR 0006](adr/0006-conditional-update-prevents-overselling.md).
+
+Behind it, `CHECK (reserved <= on_hand)` in the schema. If the application logic were ever wrong,
+PostgreSQL refuses rather than sells the unit twice.
+
+### Three checks, not one
+
+A flash-sale reservation must satisfy all three of:
+
+| Condition | Enforced by | Failure code |
+|---|---|---|
+| The warehouse has the units | `stock_items` | `INSUFFICIENT_STOCK` |
+| The sale has not sold its allocation | `sale_allocations` | `SALE_ALLOCATION_EXHAUSTED` |
+| The customer is under their cap | `customer_sale_limits` | `CUSTOMER_LIMIT_EXCEEDED` |
+
+Three separate atomic counters, checked in addition to each other, never instead. A warehouse holding
+5,000 units can still run a sale permitted to move only 500 — see
+[ADR 0008](adr/0008-atomic-counters-for-caps-and-allocations.md).
+
+All three read as "sold out" to a shopper and are entirely different operationally, which is why
+they are distinct codes rather than one generic 409.
+
+### Reservations and the two expiry paths
+
+```
+reserve ──▶ HELD ──┬──▶ COMMITTED   payment landed; units leave the warehouse
+                   ├──▶ RELEASED    abandoned, declined, cancelled
+                   └──▶ EXPIRED     the timer won
+```
+
+A hold lets a customer spend ninety seconds on a card form without anything holding a database lock
+across that. Expiry runs two ways, and both are needed:
+
+- **Lazily**, on the reserve path, so a buyer is never told "sold out" because a background job had
+  not yet reclaimed units that lapsed thirty seconds ago.
+- **On a schedule**, for SKUs nobody is asking about any more — otherwise a quiet product's expired
+  holds leak forever.
+
+[ADR 0007](adr/0007-reservations-with-two-path-expiry.md) has the reasoning, including the
+connection-pool deadlock that the obvious implementation caused.
+
+Committing an expired hold is refused with a 409. Those units are back in the pool and may already
+be someone else's, so the caller must reconcile — which is exactly the `PAYMENT_TIMEOUT` →
+reconciliation edge the order state machine already has.
+
+### Deadlock avoidance in multi-line reservations
+
+Two reservations touching SKUs `A` and `B` in opposite orders deadlock: each holds the row the other
+wants. Every reservation therefore sorts its lines by SKU before touching anything, so all callers
+take rows in the same global order. It costs one sort per request and is tested explicitly
+(`ReservationLinesTest`), because it looks like tidiness and is not.
+
+### What the ledger is for
+
+`stock_items` holds the balance; `stock_movements` holds how it got there — signed deltas that
+replay to the balance, each carrying the correlation id of the request that caused it. Without it,
+"we are three units short" is unanswerable. `RELEASED` and `EXPIRED` are deliberately distinct: who
+gave up and who ran out of time are different operational questions.
+
+### Why there is no Redis here yet
+
+Phase 7 adds it. Building the durable, provably-correct Postgres implementation first means Redis
+arrives as an optimisation in front of a system of record that already works, and can be measured
+against it — rather than becoming the system of record for the one number the platform cannot afford
+to lose. The `strategy` setting (`ATOMIC_UPDATE` / `PESSIMISTIC_LOCK`) exists for the same reason:
+Phase 10 measures the difference instead of asserting it.
+
+### What proves any of this
+
+`InventoryConcurrencyIT` fires sixty simultaneous requests, released together off a latch, at scarce
+stock, and asserts that **exactly** the available number succeed. One too many is an oversell; one
+too few is a lost sale. The same test exists for the allocation and for the per-customer cap, and one
+for sixty concurrent retries of a single order key yielding exactly one hold.
+
+Nothing in a single-threaded suite can catch the bug this service is built to prevent, because that
+bug only exists when requests overlap.

@@ -212,8 +212,17 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8085
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_inventory
+      SPRING_DATASOURCE_USERNAME: flashcart
+      SPRING_DATASOURCE_PASSWORD: flashcart
+      # ATOMIC_UPDATE is the default and the right answer; PESSIMISTIC_LOCK is here so the two can
+      # be compared under load in Phase 10 rather than argued about.
+      RESERVATION_STRATEGY: ATOMIC_UPDATE
     ports:
       - "18085:8085"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   shipping:
     <<: *service-base

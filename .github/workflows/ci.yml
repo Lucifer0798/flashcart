@@ -81,10 +81,34 @@ jobs:
           curl -sf http://localhost:18080/api/v1/flash-sales/active | grep -q '"phase":"ACTIVE"'
           echo "--- catalog: the listing applies the sale price ---"
           curl -sf 'http://localhost:18080/api/v1/products?status=ACTIVE&size=50' | grep -q '"onFlashSale":true'
-          echo "--- every stub service answers through its own gateway route ---"
-          for s in order user payment inventory shipping; do
+          echo "--- every not-yet-built service answers through its own gateway route ---"
+          for s in order user payment shipping; do
             curl -sf "http://localhost:18080/api/v1/$s/_info" | grep -q '"status":"skeleton"'
           done
+          echo "--- inventory is live, not a skeleton ---"
+          curl -sf http://localhost:18080/api/v1/inventory/_info | grep -q '"status":"live"'
+
+          echo "--- inventory: stock can be created, held, and not oversold ---"
+          SKU="CI-SMOKE-$(date +%s)"
+          curl -sf -X POST http://localhost:18080/api/v1/inventory/stock \
+            -H 'Content-Type: application/json' \
+            -d "{\"sku\":\"$SKU\",\"initialQuantity\":2,\"reason\":\"CI smoke test\"}" > /dev/null
+          # Two units exist, so the first two holds succeed...
+          for n in 1 2; do
+            curl -sf -X POST http://localhost:18080/api/v1/inventory/reservations \
+              -H 'Content-Type: application/json' \
+              -d "{\"reservationKey\":\"ci-$SKU-$n\",\"customerId\":\"ci-$n\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
+              > /dev/null
+          done
+          # ...and the third must be refused. A 201 here would mean the platform oversold.
+          curl -s -o /tmp/oversell.json -w '%{http_code}' -X POST \
+            http://localhost:18080/api/v1/inventory/reservations \
+            -H 'Content-Type: application/json' \
+            -d "{\"reservationKey\":\"ci-$SKU-3\",\"customerId\":\"ci-3\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
+            | grep -q '^409$'
+          grep -q '"code":"INSUFFICIENT_STOCK"' /tmp/oversell.json
+          curl -sf "http://localhost:18080/api/v1/inventory/stock/$SKU" | grep -q '"available":0'
+
           echo "--- the shared error envelope survives the hop ---"
           curl -s http://localhost:18080/api/v1/products/00000000-0000-4000-8000-0000000000ff \
             | grep -q '"code":"NOT_FOUND"'

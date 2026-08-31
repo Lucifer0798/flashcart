@@ -50,7 +50,7 @@ listening on 5432, 6379 or 8080.
 |---------------|-----------------------------------------------------------------|-----------------------|
 | **gateway**   | Routing, correlation IDs, the edge                              | ✅ Phase 1            |
 | **catalog**   | Products, categories, flash-sale definitions and pricing        | ✅ Phase 2            |
-| **inventory** | Stock levels, reservations, reservation expiry                  | ⬜ Phase 3            |
+| **inventory** | Stock levels, reservations, reservation expiry                  | ✅ Phase 3            |
 | **order**     | The order aggregate and its state machine                       | ⬜ Phase 4            |
 | **payment**   | Authorisation, capture, saga compensations                      | ⬜ Phase 6            |
 | **shipping**  | Shipment creation and carrier tracking                          | ⬜ Phase 6            |
@@ -157,6 +157,77 @@ Whether a sale is live is **derived from its window on every read**, not stored 
 scheduler — every second a sweeper is late is a second the storefront sells at the wrong price.
 A sale price at or above list price is rejected, so "on sale" always means cheaper.
 
+---
+
+## The inventory API
+
+The service that must not oversell. All paths are on `:18080` through the gateway, or `:18085`
+directly.
+
+### Reservations
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `POST` | `/api/v1/inventory/reservations` | Hold stock. All-or-nothing across lines, idempotent on `reservationKey` |
+| `GET`  | `/api/v1/inventory/reservations/{key}` | |
+| `GET`  | `/api/v1/inventory/reservations?customerId=` | |
+| `POST` | `/api/v1/inventory/reservations/{key}/commit` | Payment landed — units leave the warehouse |
+| `POST` | `/api/v1/inventory/reservations/{key}/release` | Abandoned, declined, cancelled |
+
+```bash
+curl -X POST http://localhost:18080/api/v1/inventory/reservations -H 'Content-Type: application/json' -d '{"reservationKey":"order-1001","customerId":"cust-42","flashSaleId":null,"lines":[{"sku":"AUD-HP-001","quantity":1}]}'
+```
+
+`reservationKey` is your order ID and is the idempotency key: retrying returns the **original** hold
+rather than taking a second one. At-least-once retries are a certainty, not a hypothetical.
+
+A hold has a TTL (default 15 minutes, server-capped at 1 hour). It resolves three ways — committed,
+released, or expired. Committing an expired hold is refused with `409 RESERVATION_NOT_HELD`, because
+those units may already belong to someone else; the caller must reconcile rather than confirm an
+order it cannot fill.
+
+### Stock and the ledger
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `GET`  | `/api/v1/inventory/stock/{sku}` | `onHand`, `reserved`, and `available` — render `available` |
+| `GET`  | `/api/v1/inventory/stock?skus=A,B,C` | Batched, for a whole product grid |
+| `POST` | `/api/v1/inventory/stock` | Start tracking a SKU |
+| `POST` | `/api/v1/inventory/stock/{sku}/receive` | Stock arrived |
+| `POST` | `/api/v1/inventory/stock/{sku}/adjust` | Signed delta, reason mandatory |
+| `GET`  | `/api/v1/inventory/stock/{sku}/movements` | The append-only ledger |
+
+`available = onHand - reserved`. A storefront must render `available`; `onHand` includes units
+already promised to someone mid-checkout.
+
+Every change writes a ledger entry carrying the correlation ID of the request that caused it, so
+"we are three units short" is answerable. `RELEASED` and `EXPIRED` stay distinct — who gave up and
+who ran out of time are different questions.
+
+### Sale allocations
+
+`GET|POST /api/v1/inventory/allocations`, `PUT /api/v1/inventory/allocations/{saleId}/{sku}`.
+
+Catalog *defines* a sale; inventory *enforces* it. A warehouse holding 5,000 units can still run a
+sale permitted to move only 500. Registered explicitly for now — Phase 5 replaces the call with an
+event.
+
+### Why a reservation can be refused
+
+Three different things all look like "sold out" to a shopper and are entirely different
+operationally, so each has its own code:
+
+| Code | Meaning |
+|------|---------|
+| `INSUFFICIENT_STOCK` | The warehouse does not have the units |
+| `SALE_ALLOCATION_EXHAUSTED` | Stock exists, but this sale has sold its allocation |
+| `CUSTOMER_LIMIT_EXCEEDED` | This customer has hit the per-customer cap |
+
+Overselling is prevented by a single conditional `UPDATE` whose predicate and mutation are the same
+statement — no read-then-write window for a concurrent buyer to slip through — backed by a
+`CHECK (reserved <= on_hand)` constraint. See
+[ADR 0006](docs/adr/0006-conditional-update-prevents-overselling.md).
+
 ### Errors
 
 Every service returns the same envelope, so a client parses failures identically no matter which hop
@@ -236,7 +307,7 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 |-------|---------------------------------------------|--------|
 | 1     | Architecture + service skeletons            | ✅     |
 | 2     | Catalog                                     | ✅     |
-| 3     | Inventory: reservations, locking, expiry    | ⬜     |
+| 3     | Inventory: reservations, locking, expiry    | ✅     |
 | 4     | Orders + the state machine                  | ⬜     |
 | 5     | Kafka event architecture                    | ⬜     |
 | 6     | Payment + saga                              | ⬜     |
@@ -247,6 +318,11 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 | 11    | Failure injection                           | ⬜     |
 | 12    | Documentation + architecture diagrams       | ⬜     |
 
-Phases 1 and 2 deliberately leave seams for what follows: the order state machine and the event
+Each phase deliberately leaves seams for what follows: the order state machine and the event
 contracts already live in `flashcart-common` and are unit-tested, every service already has its own
 database, and Redis and Kafka are already running with nothing yet using them.
+
+Phase 3 leaves two in particular. Reservation expiry is where Phase 5 will publish
+`ReservationExpired` so the order service can move its own state machine; and the
+`ATOMIC_UPDATE` / `PESSIMISTIC_LOCK` strategy switch exists so Phase 10 can measure the two under
+load, and Phase 7 can measure Redis against both, rather than anyone asserting which is faster.

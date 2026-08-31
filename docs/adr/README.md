@@ -11,3 +11,6 @@ when someone revisits it in six months.
 | [0003](0003-database-per-service.md) | A database per service, sharing one instance locally | Accepted |
 | [0004](0004-derived-flash-sale-phase.md) | Flash-sale liveness is derived, never stored | Accepted |
 | [0005](0005-catalog-owns-no-stock.md) | Catalog holds no stock count | Accepted |
+| [0006](0006-conditional-update-prevents-overselling.md) | A conditional UPDATE, not a lock, prevents overselling | Accepted |
+| [0007](0007-reservations-with-two-path-expiry.md) | Reservations expire lazily *and* on a schedule | Accepted |
+| [0008](0008-atomic-counters-for-caps-and-allocations.md) | Allocations and per-customer caps are their own atomic counters | Accepted |
