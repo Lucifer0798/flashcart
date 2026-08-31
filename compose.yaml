@@ -173,8 +173,26 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8082
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_order
+      SPRING_DATASOURCE_USERNAME: flashcart
+      SPRING_DATASOURCE_PASSWORD: flashcart
+      # Called service-to-service, not through the gateway: the gateway is the front door for
+      # clients, and routing internal traffic through it would add a hop and a shared failure point
+      # for no benefit.
+      FLASHCART_CATALOG_URL: http://catalog:8081
+      FLASHCART_INVENTORY_URL: http://inventory:8085
     ports:
       - "18082:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Started, not healthy: the order service must come up and report healthy even when its
+      # downstreams are not answering yet. Requiring them healthy here would hide the fact that it
+      # can, which is exactly the property the timeouts and the CREATED-and-retryable path exist for.
+      catalog:
+        condition: service_started
+      inventory:
+        condition: service_started
 
   user:
     <<: *service-base

@@ -51,7 +51,7 @@ listening on 5432, 6379 or 8080.
 | **gateway**   | Routing, correlation IDs, the edge                              | ✅ Phase 1            |
 | **catalog**   | Products, categories, flash-sale definitions and pricing        | ✅ Phase 2            |
 | **inventory** | Stock levels, reservations, reservation expiry                  | ✅ Phase 3            |
-| **order**     | The order aggregate and its state machine                       | ⬜ Phase 4            |
+| **order**     | The order aggregate and its state machine                       | ✅ Phase 4            |
 | **payment**   | Authorisation, capture, saga compensations                      | ⬜ Phase 6            |
 | **shipping**  | Shipment creation and carrier tracking                          | ⬜ Phase 6            |
 | **user**      | Accounts, addresses, authentication                             | ⬜ Phase 4            |
@@ -228,6 +228,70 @@ statement — no read-then-write window for a concurrent buyer to slip through �
 `CHECK (reserved <= on_hand)` constraint. See
 [ADR 0006](docs/adr/0006-conditional-update-prevents-overselling.md).
 
+---
+
+## The order API
+
+Where a checkout actually happens. Order calls catalog for prices and inventory for stock; it
+duplicates neither.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `POST` | `/api/v1/orders` | Place an order. Prices from catalog, holds stock, returns `RESERVED` |
+| `GET`  | `/api/v1/orders/{orderNumber}` | |
+| `GET`  | `/api/v1/orders?customerId=` | Newest first |
+| `GET`  | `/api/v1/orders/{orderNumber}/history` | Every transition, with reasons |
+| `POST` | `/api/v1/orders/{orderNumber}/request-payment` | → `PAYMENT_PENDING` |
+| `POST` | `/api/v1/orders/{orderNumber}/cancel` | Releases the hold, then cancels |
+| `POST` | `/api/v1/orders/{orderNumber}/payment-failed` | → `PAYMENT_FAILED` → `CANCELLED` |
+
+```bash
+curl -X POST http://localhost:18080/api/v1/orders -H 'Content-Type: application/json' -d '{"idempotencyKey":"checkout-1001","customerId":"cust-42","flashSaleId":null,"lines":[{"sku":"AUD-HP-001","quantity":1}]}'
+```
+
+**There is no price field in the request, deliberately.** A checkout that trusts a client-supplied
+price is one anyone can discount to zero. The order service asks catalog for each SKU's
+`effectivePrice` — flash sale included — and copies it onto the order line, so a historical order
+still shows what was actually charged whatever has happened to the product since.
+
+`idempotencyKey` is yours. Retrying returns the original order rather than placing a second — and if
+an earlier attempt was stranded because inventory never answered, the retry **resumes** it rather
+than handing back an order that would sit in `CREATED` forever.
+
+Every response carries `allowedNextStates`, straight from the state machine, so a client renders the
+right controls instead of keeping its own copy of rules that will drift.
+
+### When a checkout fails
+
+| Status | Code | Meaning |
+|--------|------|---------|
+| 404 | `NOT_FOUND` | A SKU is not in the catalog. Nothing was persisted. |
+| 409 | `INSUFFICIENT_STOCK` / `SALE_ALLOCATION_EXHAUSTED` / `CUSTOMER_LIMIT_EXCEEDED` | Inventory refused. The order exists and is `CANCELLED`, with the reason recorded. |
+| 409 | `ORDER_NOT_CANCELLABLE` | A payment is in flight; resolve it before cancelling. |
+| 500 | `INVENTORY_UNAVAILABLE` | Inventory did not answer. The order stays `CREATED` — **retry with the same key**. |
+
+That last row is the interesting one. A refusal and a timeout are different failures: cancelling on a
+timeout could strand real stock, and confirming on one could promise stock nobody holds. See
+[ADR 0010](docs/adr/0010-refusal-and-silence-are-different-failures.md).
+
+### The state machine
+
+```
+CREATED ──▶ RESERVED ──▶ PAYMENT_PENDING ──▶ PAID ──▶ FULFILLING ──▶ SHIPPED ──▶ DELIVERED
+
+PAYMENT_PENDING ──▶ PAYMENT_FAILED      ──▶ CANCELLED          (release inventory)
+RESERVED        ──▶ RESERVATION_EXPIRED ──▶ CANCELLED          (release inventory)
+PAYMENT_PENDING ──▶ PAYMENT_TIMEOUT     ──▶ PAID | CANCELLED   (reconciliation decides)
+```
+
+Phase 4 drives `CREATED` through `PAYMENT_PENDING` and every compensation below it; `PAID` onward
+arrives with payment in Phase 6. Transitions go through `OrderStateMachine`, so a duplicate event —
+a payment callback delivered twice, an expiry timer firing after the charge settled — is rejected by
+the machine rather than by a caller remembering to check.
+
+Compensation is a persisted state, not a side effect: a declined payment walks
+`PAYMENT_PENDING → PAYMENT_FAILED → CANCELLED`, and the history says which it was.
+
 ### Errors
 
 Every service returns the same envelope, so a client parses failures identically no matter which hop
@@ -308,7 +372,7 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 | 1     | Architecture + service skeletons            | ✅     |
 | 2     | Catalog                                     | ✅     |
 | 3     | Inventory: reservations, locking, expiry    | ✅     |
-| 4     | Orders + the state machine                  | ⬜     |
+| 4     | Orders + the state machine                  | ✅     |
 | 5     | Kafka event architecture                    | ⬜     |
 | 6     | Payment + saga                              | ⬜     |
 | 7     | Redis + concurrency                         | ⬜     |

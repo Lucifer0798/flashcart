@@ -82,11 +82,12 @@ jobs:
           echo "--- catalog: the listing applies the sale price ---"
           curl -sf 'http://localhost:18080/api/v1/products?status=ACTIVE&size=50' | grep -q '"onFlashSale":true'
           echo "--- every not-yet-built service answers through its own gateway route ---"
-          for s in order user payment shipping; do
+          for s in user payment shipping; do
             curl -sf "http://localhost:18080/api/v1/$s/_info" | grep -q '"status":"skeleton"'
           done
-          echo "--- inventory is live, not a skeleton ---"
+          echo "--- inventory and order are live, not skeletons ---"
           curl -sf http://localhost:18080/api/v1/inventory/_info | grep -q '"status":"live"'
+          curl -sf http://localhost:18080/api/v1/order/_info | grep -q '"status":"live"'
 
           echo "--- inventory: stock can be created, held, and not oversold ---"
           SKU="CI-SMOKE-$(date +%s)"
@@ -108,6 +109,29 @@ jobs:
             | grep -q '^409$'
           grep -q '"code":"INSUFFICIENT_STOCK"' /tmp/oversell.json
           curl -sf "http://localhost:18080/api/v1/inventory/stock/$SKU" | grep -q '"available":0'
+
+          echo "--- a real checkout: order -> catalog for price, order -> inventory for stock ---"
+          # A seeded catalog SKU, so the order service has something to price. Inventory starts
+          # empty, so it has to be stocked here before an order can hold any of it.
+          curl -sf -X POST http://localhost:18080/api/v1/inventory/stock \
+            -H 'Content-Type: application/json' \
+            -d '{"sku":"AUD-HP-001","initialQuantity":5,"reason":"CI checkout test"}' > /dev/null
+          curl -s -o /tmp/order.json -w '%{http_code}' -X POST http://localhost:18080/api/v1/orders \
+            -H 'Content-Type: application/json' \
+            -d "{\"idempotencyKey\":\"ci-checkout-$(date +%s)\",\"customerId\":\"ci-buyer\",\"lines\":[{\"sku\":\"AUD-HP-001\",\"quantity\":1}]}" \
+            | grep -q '^201$'
+          # Priced from catalog at the live flash-sale price, not from anything the request carried.
+          grep -q '"status":"RESERVED"' /tmp/order.json
+          grep -q '"unitPrice":179' /tmp/order.json
+          ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/order.json)
+          echo "    placed $ORDER"
+
+          echo "--- cancelling gives the stock back and records why ---"
+          curl -sf -X POST "http://localhost:18080/api/v1/orders/$ORDER/cancel" \
+            -H 'Content-Type: application/json' -d '{"reason":"CI smoke test"}' \
+            | grep -q '"status":"CANCELLED"'
+          # The audit trail of the state machine, which is what support reads.
+          curl -sf "http://localhost:18080/api/v1/orders/$ORDER/history" | grep -q '"toStatus":"RESERVED"'
 
           echo "--- the shared error envelope survives the hop ---"
           curl -s http://localhost:18080/api/v1/products/00000000-0000-4000-8000-0000000000ff \

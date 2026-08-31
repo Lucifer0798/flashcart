@@ -300,3 +300,81 @@ for sixty concurrent retries of a single order key yielding exactly one hold.
 
 Nothing in a single-threaded suite can catch the bug this service is built to prevent, because that
 bug only exists when requests overlap.
+
+---
+
+## Order design notes (Phase 4)
+
+The order is the aggregate everything else turns around. This is where the state machine declared in
+Phase 1 stops being a contract and starts being enforced.
+
+### A checkout, and every way it can fail
+
+```
+price from catalog  ─▶ CREATED ─▶ hold in inventory ─▶ RESERVED ─▶ PAYMENT_PENDING
+                          │                              │              │
+        catalog 404 ──────┘                              │              ├─▶ PAYMENT_FAILED ─▶ CANCELLED
+        (nothing persisted)                              │              └─▶ PAYMENT_TIMEOUT ─▶ reconcile
+                                                         │
+                       inventory refused ────────────────┼─▶ CANCELLED  (reason recorded)
+                       inventory silent  ────────────────┼─▶ stays CREATED, retryable
+                       hold lapsed       ────────────────┴─▶ RESERVATION_EXPIRED ─▶ CANCELLED
+```
+
+Nothing is persisted until the basket has priced, so a bad SKU leaves no wreckage. Everything after
+that has a defined destination — the point of the state machine is that there is nowhere for an
+order to end up that nobody planned for.
+
+### The state machine is enforced by the aggregate, not by callers
+
+`Order.transitionTo` is the only path to a status change, and it calls
+`OrderStateMachine.assertTransition` first. That single choice is what makes the platform safe
+against the thing distributed systems guarantee: a duplicate delivery. A payment callback arriving
+twice finds the order already `PAID`, and `PAID → PAID` is not an edge. An expiry timer firing after
+the charge settled is refused the same way. No caller has to remember.
+
+It also caught a real bug during Phase 4. `cancel()` released the stock and *then* transitioned —
+so cancelling an order with a payment in flight would have freed the units and only then discovered
+that `PAYMENT_PENDING → CANCELLED` is not a legal move, leaving stock released and the order still
+live. The guard now runs before the release.
+
+### Three answers from inventory, not two
+
+Refused and unanswered are different failures and are handled differently — see
+[ADR 0010](adr/0010-refusal-and-silence-are-different-failures.md). The short version: cancelling on
+a timeout can strand real stock, and confirming on one can promise stock nobody holds, so an order
+whose reserve went unanswered stays `CREATED` and is resumed by a retry.
+
+That resume is load-bearing and was itself a bug found by test: `place()` originally returned any
+existing order for an idempotency key, including a stranded `CREATED` one, which made the retry
+useless.
+
+### No transaction crosses the network
+
+`OrderService.place` is deliberately not `@Transactional`. Wrapping the checkout in one transaction
+would hold a database connection across two HTTP calls — so a slow inventory drains the pool — and
+would be a lie anyway, since a local rollback cannot un-reserve remote stock. Transactions are small
+and local; compensation is written out. [ADR 0009](adr/0009-no-transaction-across-a-network-call.md).
+
+### What the history table is for
+
+Every transition is persisted with its reason and the correlation id of the request that caused it.
+`orders.status` says where an order is; `order_status_history` says how it got there. "Why is this
+order cancelled" should not be answerable only from application logs that may have rotated away.
+
+Note that compensation states are recorded rather than skipped: a declined payment walks
+`PAYMENT_PENDING → PAYMENT_FAILED → CANCELLED`, not straight to `CANCELLED`. The intermediate state
+is the explanation.
+
+### Why the reservation key is the order id
+
+Inventory is idempotent on the reservation key. Making that key the order id means a retried or
+timed-out reserve is safe to repeat — it either creates the hold or returns the one the lost call
+already made. That property is what lets the unavailable case be "retry" rather than "guess", and it
+was designed into Phase 3 for exactly this.
+
+### What Phase 5 changes
+
+The `InventoryClient` interface is the seam. Today `RestInventoryClient` makes a synchronous call;
+Phase 5 replaces it with a published command and an event reply, and `OrderService` should not need
+to change. The synchronous coupling is temporary and deliberately visible rather than hidden.

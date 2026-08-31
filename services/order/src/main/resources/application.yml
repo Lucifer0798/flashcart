@@ -1,6 +1,28 @@
 spring:
   application:
     name: flashcart-order
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:15432/flashcart_order}
+    username: ${SPRING_DATASOURCE_USERNAME:flashcart}
+    password: ${SPRING_DATASOURCE_PASSWORD:flashcart}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      connection-timeout: 3000
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema; ddl-auto would let a stray entity change rewrite it silently.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
 
 server:
   port: ${SERVER_PORT:8082}
@@ -20,7 +42,8 @@ management:
 
 logging:
   pattern:
-    # The correlation id is stamped into the MDC by CorrelationIdFilter in flashcart-common.
+    # The correlation id is stamped into the MDC by CorrelationIdFilter in flashcart-common, and
+    # RestInventoryClient forwards it downstream so a checkout stays traceable across the hop.
     level: "%5p [${spring.application.name},%X{correlationId:-}]"
 
 springdoc:
@@ -29,3 +52,19 @@ springdoc:
 
 flashcart:
   version: ${FLASHCART_VERSION:0.1.0-SNAPSHOT}
+  order:
+    # Synchronous calls for now. Phase 5 replaces the inventory call with an event; the client
+    # interface is the seam that makes that a swap rather than a rewrite.
+    catalog-url: ${FLASHCART_CATALOG_URL:http://localhost:8081}
+    inventory-url: ${FLASHCART_INVENTORY_URL:http://localhost:8085}
+    # Short on purpose. A checkout that hangs for thirty seconds has already lost the customer, and
+    # a client with no read timeout will drain every request thread in this service the moment one
+    # downstream slows down. Retrying is safe because the reservation key makes inventory idempotent.
+    request-timeout: ${DOWNSTREAM_TIMEOUT:PT3S}
+    reconciler:
+      # Closes out orders whose reservation lapsed before payment did anything — the compensation
+      # nobody triggers, because the customer simply walked away.
+      enabled: ${RECONCILER_ENABLED:true}
+      batch-size: ${RECONCILER_BATCH_SIZE:200}
+      fixed-delay: ${RECONCILER_INTERVAL:PT15S}
+      initial-delay: PT20S
