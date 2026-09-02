@@ -378,3 +378,114 @@ was designed into Phase 3 for exactly this.
 The `InventoryClient` interface is the seam. Today `RestInventoryClient` makes a synchronous call;
 Phase 5 replaces it with a published command and an event reply, and `OrderService` should not need
 to change. The synchronous coupling is temporary and deliberately visible rather than hidden.
+
+---
+
+## The event backbone (Phase 5)
+
+### Commands and events are different, and live on different topics
+
+```
+flashcart.inventory.commands   ReserveInventory · ReleaseInventory · CommitInventory
+flashcart.inventory.events     InventoryReserved · InventoryReservationFailed · InventoryReleased
+                               InventoryCommitted · ReservationExpired
+flashcart.payment.commands     RequestPayment
+flashcart.payment.events       PaymentCompleted · PaymentFailed · PaymentTimedOut
+flashcart.shipping.commands    CreateShipment
+flashcart.shipping.events      ShipmentCreated
+flashcart.order.events         OrderCreated · OrderConfirmed · OrderCancelled
+flashcart.dlq                  anything a consumer could not handle
+```
+
+A **command** is an instruction to one service, with one consumer, and the sender expects something
+to happen. An **event** is a statement of fact that anyone may subscribe to. Mixing them on one topic
+makes it impossible to tell from a topic name whether a message is someone's instruction or someone's
+news — and the distinction is what makes the orchestrated saga readable.
+
+Every message is keyed by its aggregate id, almost always the order id. Kafka guarantees ordering
+*within a partition only*, so an order whose messages were spread across partitions could have its
+own saga delivered out of sequence.
+
+### One typed listener per message type, and a filter to match
+
+Each listener gets a deserializer bound to exactly one class. That alone is not enough, and the gap
+is subtle enough that it is worth stating: several listeners subscribe to the same topic under
+different consumer groups, so **every group receives every message on that topic**. A typed
+deserializer with `ignoreUnknown` will happily turn a `ReserveInventory` into a `ReleaseInventory`,
+because both carry a `reservationKey` and everything else is silently dropped.
+
+That is not theoretical. It shipped, briefly: the release listener consumed reserve commands and
+released holds the reserve listener had just taken, so stock reserved and instantly un-reserved.
+Nothing threw. Nothing was dead-lettered. It was invisible to every test that mocked the broker.
+
+`ConsumerFactories` now filters on the `eventType` header the publisher writes, so a listener only
+sees the type it asked for.
+
+### What happens when a consumer fails
+
+Retries with exponential backoff, then the message goes to `flashcart.dlq` with its original topic,
+partition and offset in headers. Without a dead-letter destination the default is to retry a poisoned
+message forever, which stops that partition — and every order sharing it — silently.
+
+Note what is deliberately *not* an exception: a sold-out SKU. Inventory publishes
+`InventoryReservationFailed` rather than throwing, because an expected business outcome that
+dead-letters would stall the partition behind it.
+
+### Idempotency, for now
+
+Consumers deduplicate by asking the state machine whether the transition is legal and ignoring it if
+not — see [ADR 0014](adr/0014-idempotency-by-state-machine.md), including why that is explicitly
+interim and what it cannot distinguish. Phase 8 replaces the inference with a recorded fact.
+
+---
+
+## The saga (Phase 6)
+
+Orchestrated by the order service; inventory, payment and shipping react and report.
+[ADR 0013](adr/0013-orchestrated-saga.md) has the reasoning — the short version is that a
+choreographed sequence exists nowhere in the codebase, and "why is this order stuck" then has no
+single place to look.
+
+```
+place order ─▶ CREATED
+   │ ReserveInventory
+   ├─◀ InventoryReserved         ─▶ RESERVED ─▶ RequestPayment ─▶ PAYMENT_PENDING
+   ├─◀ InventoryReservationFailed ─▶ CANCELLED                    (nothing held; nothing to undo)
+   ├─◀ ReservationExpired         ─▶ RESERVATION_EXPIRED ─▶ CANCELLED
+   ├─◀ PaymentCompleted           ─▶ PAID ─▶ CommitInventory + CreateShipment ─▶ FULFILLING
+   ├─◀ PaymentFailed              ─▶ PAYMENT_FAILED ─▶ ReleaseInventory ─▶ CANCELLED
+   ├─◀ PaymentTimedOut            ─▶ PAYMENT_TIMEOUT              (releases nothing, ever)
+   └─◀ ShipmentCreated            ─▶ SHIPPED
+```
+
+Two things in that diagram carry most of the weight.
+
+**`CommitInventory` is sent only after `PaymentCompleted`.** Committing earlier would take stock out
+of the building for money that had not arrived.
+
+**`PaymentTimedOut` releases nothing.** A decline is decisive and the stock is safe to return; a
+timeout means the charge may still land, so releasing would risk selling the same unit twice and then
+owing a refund. This is the `PAYMENT_TIMEOUT` branch the state machine has carried since Phase 1,
+finally reachable.
+
+### The payment provider is simulated, on purpose
+
+Outcomes are chosen by the amount's cents — `.13` declines, `.99` times out. A real sandbox approves
+everything and cannot be made to fail on demand, which would leave the compensation paths, the most
+valuable thing in this phase, unexercised end to end. [ADR 0015](adr/0015-simulated-payment-provider.md)
+covers what that costs, including the case it still cannot reproduce.
+
+### What the real-broker test is for
+
+`InventoryKafkaIT` runs an actual Kafka. It exists because a suite that never crosses a broker can be
+entirely green against a platform where nothing talks to anything — and it earned its place
+immediately, catching three bugs on its first run:
+
+- a producer `delivery.timeout.ms` that failed the client's own validation, so **no service could
+  construct a producer against a real broker at all**;
+- topics left to auto-creation, where the first publish timed out waiting for metadata;
+- a producer and consumers that read the broker address from raw properties and ignored
+  `KafkaConnectionDetails`, so anything supplying it that way was silently overridden.
+
+Then the type-filter bug above, on the second run. None of the four was visible to any test that
+faked the bus.

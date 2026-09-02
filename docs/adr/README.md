@@ -17,3 +17,7 @@ when someone revisits it in six months.
 | [0009](0009-no-transaction-across-a-network-call.md) | No database transaction spans a call to another service | Accepted |
 | [0010](0010-refusal-and-silence-are-different-failures.md) | A refusal and a timeout are different failures | Accepted |
 | [0011](0011-order-owns-no-prices.md) | Prices come from catalog, never from the request | Accepted |
+| [0012](0012-asynchronous-checkout.md) | The checkout is asynchronous and returns 202 | Accepted |
+| [0013](0013-orchestrated-saga.md) | The saga is orchestrated by the order service | Accepted |
+| [0014](0014-idempotency-by-state-machine.md) | Consumers dedupe via the state machine, for now | Accepted, interim |
+| [0015](0015-simulated-payment-provider.md) | The payment provider is simulated, keyed on the amount | Accepted |

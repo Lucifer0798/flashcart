@@ -1,6 +1,23 @@
 spring:
   application:
     name: flashcart-shipping
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:15432/flashcart_shipping}
+    username: ${SPRING_DATASOURCE_USERNAME:flashcart}
+    password: ${SPRING_DATASOURCE_PASSWORD:flashcart}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:15}
+      minimum-idle: 5
+      connection-timeout: 3000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
 
 server:
   port: ${SERVER_PORT:8086}
@@ -10,7 +27,6 @@ management:
   endpoints:
     web:
       exposure:
-        # health and info for compose/Kubernetes probes; prometheus is claimed in Phase 9.
         include: health,info,prometheus
   endpoint:
     health:
@@ -20,7 +36,6 @@ management:
 
 logging:
   pattern:
-    # The correlation id is stamped into the MDC by CorrelationIdFilter in flashcart-common.
     level: "%5p [${spring.application.name},%X{correlationId:-}]"
 
 springdoc:

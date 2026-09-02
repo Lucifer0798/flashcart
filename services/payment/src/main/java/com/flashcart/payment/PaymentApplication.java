@@ -3,7 +3,7 @@ package com.flashcart.payment;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-/** Payment authorisation, capture and the saga compensations. */
+/** Payment authorisation and capture, and the reconciliation of attempts nobody answered. */
 @SpringBootApplication
 public class PaymentApplication {
 

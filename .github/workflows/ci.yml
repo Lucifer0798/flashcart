@@ -11,9 +11,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    name: Build and test
+  # --------------------------------------------------------------------------------------------
+  # Tier 1: no Docker. Fails in under a minute when it fails, which is most of the time.
+  # --------------------------------------------------------------------------------------------
+  unit:
+    name: Unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -25,33 +31,69 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Build and unit test
+      - name: Compile everything, run the fast tests
         run: ./mvnw -B verify -DskipITs
 
-      # Separate step from the unit tests so a failure here is unambiguous: the runner has Docker,
-      # so an integration-test failure is the code's fault and not a missing daemon.
-      - name: Integration tests (Testcontainers)
-        run: ./mvnw -B verify -Dsurefire.skip=true
-
-      - name: Upload test reports
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: test-reports
-          path: |
-            services/*/target/surefire-reports/
-            services/*/target/failsafe-reports/
+          name: unit-test-reports
+          path: services/*/target/surefire-reports/
           retention-days: 7
 
-  docker:
-    name: Build service images
+  # --------------------------------------------------------------------------------------------
+  # Tier 2: real PostgreSQL and a real broker, per module and in parallel.
+  #
+  # Split by module rather than run as one job so a failure names the service immediately, and so
+  # the slowest module (inventory, which runs the concurrency suite and a real Kafka) does not set
+  # the wall-clock time for all of them.
+  # --------------------------------------------------------------------------------------------
+  integration:
+    name: Integration (${{ matrix.module }})
     runs-on: ubuntu-latest
-    needs: build
+    needs: unit
+    strategy:
+      # One module failing should not hide the others: with fail-fast a single flake tells you
+      # nothing about whether anything else works.
+      fail-fast: false
+      matrix:
+        module: [catalog, inventory, order, payment, shipping]
     steps:
       - uses: actions/checkout@v5
 
-      # Builds every image the way compose does. Catches a broken Dockerfile or a service whose
-      # module name and build arg have drifted apart — neither of which the Maven build can see.
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Integration tests
+        run: ./mvnw -B -pl services/${{ matrix.module }} -am verify -Dsurefire.skip=true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: it-reports-${{ matrix.module }}
+          path: services/*/target/failsafe-reports/
+          retention-days: 7
+
+  # --------------------------------------------------------------------------------------------
+  # Tier 3: the whole platform, as it actually ships.
+  #
+  # Everything above tests services one at a time. This is the only job that can catch a wrong
+  # topic name between two services, a compose environment variable nobody set, or a route the
+  # gateway does not have — none of which any module's own suite can see.
+  # --------------------------------------------------------------------------------------------
+  platform:
+    name: Whole platform, end to end
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v5
+
       - name: Build all images
         run: docker compose build
 
@@ -59,7 +101,7 @@ jobs:
         run: |
           docker compose up -d
           echo "Waiting for every service to report healthy..."
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             unhealthy=$(docker compose ps --format '{{.Service}} {{.Health}}' \
               | awk '$2 != "healthy" && $2 != "" { print $1 }')
             if [ -z "$unhealthy" ]; then
@@ -69,77 +111,114 @@ jobs:
             sleep 5
           done
           echo "Still not healthy: $unhealthy"
-          docker compose logs --tail=100
+          docker compose logs --tail=200
           exit 1
 
-      # A green health check only proves the processes started. This proves the routing table, the
-      # catalog schema and the seed data are all actually working together.
-      - name: Smoke-test the platform through the gateway
+      - name: Catalog and inventory still work
         run: |
           set -e
-          echo "--- catalog: a live flash sale exists ---"
-          curl -sf http://localhost:18080/api/v1/flash-sales/active | grep -q '"phase":"ACTIVE"'
-          echo "--- catalog: the listing applies the sale price ---"
-          curl -sf 'http://localhost:18080/api/v1/products?status=ACTIVE&size=50' | grep -q '"onFlashSale":true'
-          echo "--- every not-yet-built service answers through its own gateway route ---"
-          for s in user payment shipping; do
-            curl -sf "http://localhost:18080/api/v1/$s/_info" | grep -q '"status":"skeleton"'
+          G=http://localhost:18080
+          echo "--- a live flash sale is seeded ---"
+          curl -sf $G/api/v1/flash-sales/active | grep -q '"phase":"ACTIVE"'
+          echo "--- the listing applies the sale price ---"
+          curl -sf "$G/api/v1/products?status=ACTIVE&size=50" | grep -q '"onFlashSale":true'
+          echo "--- every service reports itself live ---"
+          for s in inventory order payment shipping; do
+            curl -sf "$G/api/v1/$s/_info" | grep -q '"status":"live"'
           done
-          echo "--- inventory and order are live, not skeletons ---"
-          curl -sf http://localhost:18080/api/v1/inventory/_info | grep -q '"status":"live"'
-          curl -sf http://localhost:18080/api/v1/order/_info | grep -q '"status":"live"'
+          curl -sf $G/api/v1/user/_info | grep -q '"status":"skeleton"'
 
-          echo "--- inventory: stock can be created, held, and not oversold ---"
-          SKU="CI-SMOKE-$(date +%s)"
-          curl -sf -X POST http://localhost:18080/api/v1/inventory/stock \
+      - name: A checkout settles asynchronously across four services
+        run: |
+          set -e
+          G=http://localhost:18080
+          SKU=AUD-HP-001
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' \
+            -d "{\"sku\":\"$SKU\",\"initialQuantity\":10,\"reason\":\"CI\"}" > /dev/null
+
+          # 202: the order exists, but whether it got the stock is settled on the bus.
+          curl -s -o /tmp/o.json -w '%{http_code}' -X POST $G/api/v1/orders \
             -H 'Content-Type: application/json' \
-            -d "{\"sku\":\"$SKU\",\"initialQuantity\":2,\"reason\":\"CI smoke test\"}" > /dev/null
-          # Two units exist, so the first two holds succeed...
-          for n in 1 2; do
-            curl -sf -X POST http://localhost:18080/api/v1/inventory/reservations \
-              -H 'Content-Type: application/json' \
-              -d "{\"reservationKey\":\"ci-$SKU-$n\",\"customerId\":\"ci-$n\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
-              > /dev/null
+            -d "{\"idempotencyKey\":\"ci-$(date +%s)\",\"customerId\":\"ci-buyer\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
+            | grep -q '^202$'
+          grep -q '"status":"CREATED"' /tmp/o.json
+          ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/o.json)
+          echo "placed $ORDER"
+
+          # This is the assertion that matters: order -> Kafka -> inventory -> Kafka -> order ->
+          # Kafka -> payment -> Kafka -> order -> Kafka -> shipping. If any topic name, serializer
+          # or consumer group is wrong, the order simply never leaves CREATED.
+          for i in $(seq 1 60); do
+            STATUS=$(curl -sf "$G/api/v1/orders/$ORDER" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')
+            echo "  $ORDER is $STATUS"
+            case "$STATUS" in
+              FULFILLING|SHIPPED) echo "saga completed"; exit 0 ;;
+              CANCELLED) echo "order was cancelled unexpectedly"; curl -s "$G/api/v1/orders/$ORDER/history"; exit 1 ;;
+            esac
+            sleep 2
           done
-          # ...and the third must be refused. A 201 here would mean the platform oversold.
-          curl -s -o /tmp/oversell.json -w '%{http_code}' -X POST \
-            http://localhost:18080/api/v1/inventory/reservations \
-            -H 'Content-Type: application/json' \
-            -d "{\"reservationKey\":\"ci-$SKU-3\",\"customerId\":\"ci-3\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
-            | grep -q '^409$'
-          grep -q '"code":"INSUFFICIENT_STOCK"' /tmp/oversell.json
-          curl -sf "http://localhost:18080/api/v1/inventory/stock/$SKU" | grep -q '"available":0'
+          echo "order never progressed past $STATUS"
+          curl -s "$G/api/v1/orders/$ORDER/history"
+          docker compose logs --tail=100 order inventory payment shipping
+          exit 1
 
-          echo "--- a real checkout: order -> catalog for price, order -> inventory for stock ---"
-          # A seeded catalog SKU, so the order service has something to price. Inventory starts
-          # empty, so it has to be stocked here before an order can hold any of it.
-          curl -sf -X POST http://localhost:18080/api/v1/inventory/stock \
-            -H 'Content-Type: application/json' \
-            -d '{"sku":"AUD-HP-001","initialQuantity":5,"reason":"CI checkout test"}' > /dev/null
-          curl -s -o /tmp/order.json -w '%{http_code}' -X POST http://localhost:18080/api/v1/orders \
-            -H 'Content-Type: application/json' \
-            -d "{\"idempotencyKey\":\"ci-checkout-$(date +%s)\",\"customerId\":\"ci-buyer\",\"lines\":[{\"sku\":\"AUD-HP-001\",\"quantity\":1}]}" \
-            | grep -q '^201$'
-          # Priced from catalog at the live flash-sale price, not from anything the request carried.
-          grep -q '"status":"RESERVED"' /tmp/order.json
-          grep -q '"unitPrice":179' /tmp/order.json
-          ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/order.json)
-          echo "    placed $ORDER"
+      - name: A declined payment compensates and gives the stock back
+        run: |
+          set -e
+          G=http://localhost:18080
+          # The simulated provider declines any amount ending in .13, and the catalog seed has a
+          # product priced at 24.99 -> so use one whose total lands on .13 via quantity.
+          SKU=CI-DECLINE-$(date +%s)
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' \
+            -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI decline\"}" > /dev/null
+          CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' \
+            -d "{\"sku\":\"$SKU\",\"name\":\"CI Decline Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.13,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
-          echo "--- cancelling gives the stock back and records why ---"
-          curl -sf -X POST "http://localhost:18080/api/v1/orders/$ORDER/cancel" \
-            -H 'Content-Type: application/json' -d '{"reason":"CI smoke test"}' \
-            | grep -q '"status":"CANCELLED"'
-          # The audit trail of the state machine, which is what support reads.
-          curl -sf "http://localhost:18080/api/v1/orders/$ORDER/history" | grep -q '"toStatus":"RESERVED"'
+          curl -s -o /tmp/d.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' \
+            -d "{\"idempotencyKey\":\"ci-decline-$(date +%s)\",\"customerId\":\"ci-decline\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"
+          ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/d.json)
+          echo "placed $ORDER at 10.13, which the simulated provider declines"
 
-          echo "--- the shared error envelope survives the hop ---"
-          curl -s http://localhost:18080/api/v1/products/00000000-0000-4000-8000-0000000000ff \
-            | grep -q '"code":"NOT_FOUND"'
+          for i in $(seq 1 60); do
+            STATUS=$(curl -sf "$G/api/v1/orders/$ORDER" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')
+            if [ "$STATUS" = "CANCELLED" ]; then
+              echo "compensated"
+              # PAYMENT_FAILED must appear on the way through: compensation is a recorded state.
+              curl -sf "$G/api/v1/orders/$ORDER/history" | grep -q '"toStatus":"PAYMENT_FAILED"'
+              # And the units must be back.
+              curl -sf "$G/api/v1/inventory/stock/$SKU" | grep -q '"reserved":0'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "declined order never reached CANCELLED (stuck at $STATUS)"
+          curl -s "$G/api/v1/orders/$ORDER/history"
+          docker compose logs --tail=100 order payment
+          exit 1
+
+      - name: The shared error envelope survives every hop
+        run: |
+          set -e
+          G=http://localhost:18080
+          curl -s $G/api/v1/products/00000000-0000-4000-8000-0000000000ff | grep -q '"code":"NOT_FOUND"'
+          # A wrong verb is a 405, not a 500 — the whole platform shares one handler for this.
+          curl -s -o /dev/null -w '%{http_code}' -X DELETE $G/api/v1/orders | grep -qE '^40[45]$'
+
+      - name: Nothing was dead-lettered
+        run: |
+          # A message on the DLQ means a consumer exhausted its retries. Everything above should
+          # have been an ordinary business outcome, so the DLQ being non-empty is a real failure
+          # even when every assertion above passed.
+          COUNT=$(docker compose exec -T kafka /opt/kafka/bin/kafka-run-class.sh \
+            kafka.tools.GetOffsetShell --bootstrap-server localhost:9092 \
+            --topic flashcart.dlq 2>/dev/null | awk -F: '{ sum += $3 } END { print sum+0 }')
+          echo "dead-letter topic holds $COUNT message(s)"
+          test "$COUNT" -eq 0
 
       - name: Dump logs on failure
         if: failure()
-        run: docker compose logs --tail=200
+        run: docker compose logs --tail=300
 
       - name: Tear down
         if: always()

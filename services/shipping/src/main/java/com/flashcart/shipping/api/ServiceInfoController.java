@@ -2,20 +2,17 @@ package com.flashcart.shipping.api;
 
 import java.util.Map;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * Identifies this service over HTTP so the gateway route can be verified end to end before the
- * service has any behaviour of its own.
- *
- * <p>The real shipping API arrives in Phase 6; this endpoint stays, because "which build is actually
- * running behind this route" is a question worth being able to ask in every environment.
- */
+/** Identifies the build behind this gateway route, on the singular path every service uses. */
 @RestController
 @RequestMapping("/api/v1/shipping")
+@Tag(name = "Service info")
 public class ServiceInfoController {
 
 	private final String applicationName;
@@ -28,7 +25,9 @@ public class ServiceInfoController {
 	}
 
 	@GetMapping("/_info")
+	@Operation(summary = "Which build is behind this route")
 	public Map<String, String> info() {
-		return Map.of("service", applicationName, "version", version, "status", "skeleton", "implementedIn", "Phase 6");
+		return Map.of("service", applicationName, "version", version, "status", "live",
+				"implementedIn", "Phase 6");
 	}
 }

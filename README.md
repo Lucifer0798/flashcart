@@ -52,8 +52,8 @@ listening on 5432, 6379 or 8080.
 | **catalog**   | Products, categories, flash-sale definitions and pricing        | ✅ Phase 2            |
 | **inventory** | Stock levels, reservations, reservation expiry                  | ✅ Phase 3            |
 | **order**     | The order aggregate and its state machine                       | ✅ Phase 4            |
-| **payment**   | Authorisation, capture, saga compensations                      | ⬜ Phase 6            |
-| **shipping**  | Shipment creation and carrier tracking                          | ⬜ Phase 6            |
+| **payment**   | Authorisation, capture, saga compensations                      | ✅ Phase 6            |
+| **shipping**  | Shipment creation and carrier tracking                          | ✅ Phase 6            |
 | **user**      | Accounts, addresses, authentication                             | ⬜ Phase 4            |
 | **common**    | Order state machine, event contracts, error envelope, MDC       | ✅ Phase 1            |
 
@@ -237,13 +237,16 @@ duplicates neither.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| `POST` | `/api/v1/orders` | Place an order. Prices from catalog, holds stock, returns `RESERVED` |
+| `POST` | `/api/v1/orders` | Place an order. **202 Accepted**, `CREATED` — the reservation settles on the bus |
 | `GET`  | `/api/v1/orders/{orderNumber}` | |
 | `GET`  | `/api/v1/orders?customerId=` | Newest first |
 | `GET`  | `/api/v1/orders/{orderNumber}/history` | Every transition, with reasons |
-| `POST` | `/api/v1/orders/{orderNumber}/request-payment` | → `PAYMENT_PENDING` |
-| `POST` | `/api/v1/orders/{orderNumber}/cancel` | Releases the hold, then cancels |
-| `POST` | `/api/v1/orders/{orderNumber}/payment-failed` | → `PAYMENT_FAILED` → `CANCELLED` |
+| `POST` | `/api/v1/orders/{orderNumber}/cancel` | Cancels and asks inventory to release |
+
+There is deliberately **no endpoint to request payment or to record one failing.** Both were manual
+in Phase 4 and are now the saga's, driven by events. Leaving them exposed would give the order
+lifecycle two drivers, and the one thing worse than a saga is a saga something else can reach into
+halfway through.
 
 ```bash
 curl -X POST http://localhost:18080/api/v1/orders -H 'Content-Type: application/json' -d '{"idempotencyKey":"checkout-1001","customerId":"cust-42","flashSaleId":null,"lines":[{"sku":"AUD-HP-001","quantity":1}]}'
@@ -255,8 +258,13 @@ price is one anyone can discount to zero. The order service asks catalog for eac
 still shows what was actually charged whatever has happened to the product since.
 
 `idempotencyKey` is yours. Retrying returns the original order rather than placing a second — and if
-an earlier attempt was stranded because inventory never answered, the retry **resumes** it rather
-than handing back an order that would sit in `CREATED` forever.
+an earlier attempt is still `CREATED`, the retry re-sends the reservation command, which is safe
+because inventory is idempotent on the reservation key.
+
+**A checkout is asynchronous.** `POST /orders` returns 202 with a `CREATED` order; inventory answers
+on the bus and the saga moves it to `RESERVED` or `CANCELLED`. Watch the order, or poll it. The
+trade-off — the shopper no longer gets an instant yes or no — is deliberate and is discussed in
+[ADR 0012](docs/adr/0012-asynchronous-checkout.md).
 
 Every response carries `allowedNextStates`, straight from the state machine, so a client renders the
 right controls instead of keeping its own copy of rules that will drift.
@@ -291,6 +299,36 @@ the machine rather than by a caller remembering to check.
 
 Compensation is a persisted state, not a side effect: a declined payment walks
 `PAYMENT_PENDING → PAYMENT_FAILED → CANCELLED`, and the history says which it was.
+
+---
+
+## Payment and shipping
+
+Neither service has an endpoint that *does* the thing it is named after. Payment is only ever
+initiated by a `RequestPayment` command on the bus, and a shipment only by `CreateShipment` — so the
+one operation that moves money and the one that sends real goods each have exactly one entry point.
+Both expose reads.
+
+`GET /api/v1/payments/order/{orderNumber}`, `GET /api/v1/payments/{id}`,
+`GET /api/v1/shipments/order/{orderNumber}`, `GET /api/v1/shipments/{trackingNumber}`, plus manual
+`dispatch` and `deliver` transitions a warehouse operator drives.
+
+### Making a payment fail on purpose
+
+The provider is simulated and picks its outcome from the **amount's cents**, because a real sandbox
+approves everything and cannot be made to time out on cue — which would leave the compensation paths,
+the most valuable thing in Phase 6, untested end to end.
+
+| Amount ends in | Outcome | What the saga does |
+|---|---|---|
+| `.13` | declined | `PAYMENT_FAILED` → releases the stock → `CANCELLED` |
+| `.99` | provider timeout | `PAYMENT_TIMEOUT` — and releases **nothing** |
+| anything else | approved | `PAID` → commits stock, books shipment → `FULFILLING` |
+
+That middle row is the interesting one. A decline is decisive, so the stock is safe to return; a
+timeout means the charge may still land, and releasing would risk selling the same unit twice and
+then owing a refund. The thresholds are configurable and published on
+`GET /api/v1/payment/_info`, so these docs cannot drift from the code.
 
 ### Errors
 
@@ -373,8 +411,8 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 | 2     | Catalog                                     | ✅     |
 | 3     | Inventory: reservations, locking, expiry    | ✅     |
 | 4     | Orders + the state machine                  | ✅     |
-| 5     | Kafka event architecture                    | ⬜     |
-| 6     | Payment + saga                              | ⬜     |
+| 5     | Kafka event architecture                    | ✅     |
+| 6     | Payment + saga                              | ✅     |
 | 7     | Redis + concurrency                         | ⬜     |
 | 8     | Outbox + idempotency                        | ⬜     |
 | 9     | Observability                               | ⬜     |

@@ -54,7 +54,11 @@ public class OrderController {
 		OrderResponse placed = OrderResponse.from(orders.place(request.idempotencyKey(),
 				request.customerId(), request.flashSaleId(), lines));
 
-		return ResponseEntity.created(URI.create("/api/v1/orders/" + placed.orderNumber())).body(placed);
+		// 202, not 201. The order exists, but whether it got the stock is not known yet — inventory
+		// answers on the bus. Returning 201 would imply a completed outcome the caller has to poll for.
+		return ResponseEntity.accepted()
+				.location(URI.create("/api/v1/orders/" + placed.orderNumber()))
+				.body(placed);
 	}
 
 	@GetMapping("/{orderNumber}")
@@ -77,30 +81,17 @@ public class OrderController {
 		return orders.historyOf(orderNumber).stream().map(OrderHistoryResponse::from).toList();
 	}
 
-	@PostMapping("/{orderNumber}/request-payment")
-	@Operation(summary = "Move a held order to PAYMENT_PENDING",
-			description = "Phase 6 replaces the body with a real payment request; the transition and "
-					+ "its guards are what matter now.")
-	public OrderResponse requestPayment(@PathVariable String orderNumber) {
-		return OrderResponse.from(orders.requestPayment(orderNumber));
-	}
-
 	@PostMapping("/{orderNumber}/cancel")
 	@Operation(summary = "Cancel an order and give its stock back",
-			description = "Releases the hold first, then records the cancellation — so a failed release "
-					+ "never leaves an order that looks finished while inventory still holds its units.")
+			description = "Records the cancellation and asks inventory to release the hold. Refused with "
+					+ "409 while a payment is in flight — that has to resolve first.")
 	public OrderResponse cancel(@PathVariable String orderNumber,
 			@Valid @RequestBody(required = false) CancelOrderRequest request) {
 		return OrderResponse.from(orders.cancel(orderNumber, request == null ? null : request.reason()));
 	}
 
-	@PostMapping("/{orderNumber}/payment-failed")
-	@Operation(summary = "Record a declined payment",
-			description = "Drives PAYMENT_PENDING -> PAYMENT_FAILED -> CANCELLED, releasing the stock in "
-					+ "between. Phase 6 triggers this from a real provider callback.")
-	public OrderResponse paymentFailed(@PathVariable String orderNumber,
-			@Valid @RequestBody(required = false) CancelOrderRequest request) {
-		return OrderResponse.from(
-				orders.paymentFailed(orderNumber, request == null ? null : request.reason()));
-	}
+	// Note what is deliberately absent: there is no endpoint to request payment, and none to record
+	// that one failed. Both were manual in Phase 4 and are now the saga's, driven by events from
+	// inventory and payment. Leaving them exposed would give the order lifecycle two drivers — and
+	// the one thing worse than a saga is a saga that something else can reach into halfway through.
 }
