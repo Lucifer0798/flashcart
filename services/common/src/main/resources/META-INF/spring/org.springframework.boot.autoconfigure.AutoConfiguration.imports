@@ -1,1 +1,3 @@
 com.flashcart.common.web.CommonWebAutoConfiguration
+com.flashcart.common.event.EventKafkaAutoConfiguration
+com.flashcart.common.event.EventTopicsConfiguration

@@ -16,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -94,6 +96,28 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(NoResourceFoundException.class)
 	public ResponseEntity<ApiError> handleNoResource(NoResourceFoundException ex, HttpServletRequest request) {
 		return build(HttpStatus.NOT_FOUND, "NOT_FOUND", "No endpoint for this path", request);
+	}
+
+	/**
+	 * The right path, the wrong verb.
+	 *
+	 * <p>Without this, Spring's {@code HttpRequestMethodNotSupportedException} falls through to the
+	 * catch-all below and every mistyped verb becomes a 500 — telling the caller the server is broken
+	 * when in fact their request was. It is a client error, and it says so.
+	 */
+	@ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+	public ResponseEntity<ApiError> handleWrongMethod(HttpRequestMethodNotSupportedException ex,
+			HttpServletRequest request) {
+		return build(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED",
+				"%s is not supported for this path".formatted(ex.getMethod()), request);
+	}
+
+	/** The right path and verb, a body this endpoint cannot read. Also a 4xx, for the same reason. */
+	@ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+	public ResponseEntity<ApiError> handleWrongMediaType(HttpMediaTypeNotSupportedException ex,
+			HttpServletRequest request) {
+		return build(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE",
+				"Content type is not supported for this path", request);
 	}
 
 	@ExceptionHandler(Exception.class)

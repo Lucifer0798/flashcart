@@ -3,9 +3,7 @@ package com.flashcart.order.config;
 import java.time.Clock;
 
 import com.flashcart.order.client.CatalogClient;
-import com.flashcart.order.client.InventoryClient;
 import com.flashcart.order.client.RestCatalogClient;
-import com.flashcart.order.client.RestInventoryClient;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -28,11 +26,6 @@ public class OrderConfig {
 	@Bean
 	public Clock clock() {
 		return Clock.systemUTC();
-	}
-
-	@Bean
-	public InventoryClient inventoryClient(OrderProperties properties) {
-		return new RestInventoryClient(restClient(properties.inventoryUrl(), properties));
 	}
 
 	@Bean

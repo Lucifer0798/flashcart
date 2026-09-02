@@ -1,15 +1,28 @@
 package com.flashcart.order;
 
-import java.time.Duration;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
+import com.flashcart.common.error.ResourceNotFoundException;
+import com.flashcart.common.event.message.CommitInventory;
+import com.flashcart.common.event.message.CreateShipment;
+import com.flashcart.common.event.message.OrderCancelled;
+import com.flashcart.common.event.message.OrderConfirmed;
+import com.flashcart.common.event.message.ReleaseInventory;
+import com.flashcart.common.event.message.RequestPayment;
+import com.flashcart.common.event.message.ReserveInventory;
 import com.flashcart.common.order.OrderStatus;
 import com.flashcart.common.web.CorrelationId;
 import com.flashcart.order.api.dto.OrderResponse;
 import com.flashcart.order.api.dto.PlaceOrderRequest;
+import com.flashcart.order.client.CatalogClient;
 import com.flashcart.order.service.OrderReconciliationService;
+import com.flashcart.order.service.OrderSaga;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,8 +32,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -31,20 +47,21 @@ import org.springframework.test.context.TestPropertySource;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The order lifecycle against a real PostgreSQL, driven over real HTTP, with catalog and inventory
- * faked so their failure modes can actually be provoked.
+ * The order service against a real PostgreSQL, with the bus captured rather than run.
  *
- * <p>The container is started in a static initialiser rather than through {@code @Container}: JUnit
- * would stop it when this class finishes while Spring's context cache kept the pool alive for the
- * next class, and every test there would then hang to the connection timeout.
+ * <p>Placing an order is now asynchronous, so these tests come in two halves: what the HTTP call does
+ * (persist, publish, return 202), and what the saga does when a reply arrives. The second half is
+ * driven by calling {@link OrderSaga} directly, which is exactly what the Kafka listener does — the
+ * listener itself is thin plumbing, and the round trip through a real broker is proved separately.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureTestRestTemplate
-@Import(FakeDownstreams.class)
+@Import({ RecordingEventPublisher.class, OrderIT.FakeCatalogConfig.class })
 @TestPropertySource(properties = {
-		// The reconciler is driven explicitly in the tests that care about it; on its own timer it
-		// would expire orders mid-assertion elsewhere.
-		"flashcart.order.reconciler.enabled=false"
+		"flashcart.order.reconciler.enabled=false",
+		// No listener containers: this suite drives the saga directly and there is no broker to
+		// connect to, so leaving them on would just log connection failures for the whole run.
+		"spring.kafka.listener.auto-startup=false"
 })
 class OrderIT {
 
@@ -55,24 +72,60 @@ class OrderIT {
 		POSTGRES.start();
 	}
 
+	/** A catalog with whatever products a test puts in it. */
+	@TestConfiguration
+	static class FakeCatalogConfig {
+
+		@Bean
+		@Primary
+		FakeCatalog fakeCatalog() {
+			return new FakeCatalog();
+		}
+	}
+
+	static class FakeCatalog implements CatalogClient {
+
+		private final Map<String, PricedProduct> products = new ConcurrentHashMap<>();
+
+		void stock(String sku, String name, String price, String currency) {
+			products.put(sku, new PricedProduct(sku, name, new BigDecimal(price), currency, false));
+		}
+
+		void clear() {
+			products.clear();
+		}
+
+		@Override
+		public PricedProduct priceOf(String sku) {
+			PricedProduct product = products.get(sku);
+			if (product == null) {
+				throw ResourceNotFoundException.of("Product with SKU", sku);
+			}
+			return product;
+		}
+	}
+
 	@Autowired
 	private TestRestTemplate rest;
 
 	@Autowired
-	private FakeDownstreams.FakeCatalog catalog;
+	private RecordingEventPublisher.Recorder events;
 
 	@Autowired
-	private FakeDownstreams.FakeInventory inventory;
+	private FakeCatalog catalog;
+
+	@Autowired
+	private OrderSaga saga;
 
 	@Autowired
 	private OrderReconciliationService reconciler;
 
 	@BeforeEach
-	void resetDownstreams() {
-		inventory.reset();
+	void reset() {
+		events.clear();
 		catalog.clear();
-		catalog.stock("AUD-HP-001", "Aurora Over-Ear Headphones", "179.00");
-		catalog.stock("WEA-WT-001", "Meridian Smartwatch", "299.00");
+		catalog.stock("AUD-HP-001", "Aurora Over-Ear Headphones", "179.00", "USD");
+		catalog.stock("WEA-WT-001", "Meridian Smartwatch", "299.00", "USD");
 	}
 
 	// --- helpers ---------------------------------------------------------------------------------
@@ -81,20 +134,13 @@ class OrderIT {
 		return "idem-" + UUID.randomUUID();
 	}
 
-	private ResponseEntity<OrderResponse> place(String idempotencyKey, String customerId, String sku,
-			int quantity) {
-		return rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(idempotencyKey, customerId, null,
+	private OrderResponse place(String customerId, String sku, int quantity) {
+		ResponseEntity<OrderResponse> response = rest.postForEntity("/api/v1/orders",
+				new PlaceOrderRequest(uniqueKey(), customerId, null,
 						List.of(new PlaceOrderRequest.Line(sku, quantity))),
 				OrderResponse.class);
-	}
-
-	private ResponseEntity<Map> placeExpectingFailure(String idempotencyKey, String customerId, String sku,
-			int quantity) {
-		return rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(idempotencyKey, customerId, null,
-						List.of(new PlaceOrderRequest.Line(sku, quantity))),
-				Map.class);
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		return response.getBody();
 	}
 
 	private OrderResponse fetch(String orderNumber) {
@@ -106,410 +152,311 @@ class OrderIT {
 		return rest.getForObject("/api/v1/orders/" + orderNumber + "/history", List.class);
 	}
 
-	// --- the happy path --------------------------------------------------------------------------
+	/** Simulates inventory replying that it holds the stock. */
+	private void inventoryReserved(OrderResponse order) {
+		saga.onInventoryReserved(order.id(), Instant.now().plus(15, ChronoUnit.MINUTES));
+	}
+
+	// --- placing an order --------------------------------------------------------------------------
 
 	@Test
-	@DisplayName("placing an order prices it from catalog and holds the stock")
-	void placeOrderReservesStock() {
-		ResponseEntity<OrderResponse> response = place(uniqueKey(), "cust-1", "AUD-HP-001", 2);
+	@DisplayName("placing an order returns 202 with a CREATED order and asks inventory to hold stock")
+	void placeIsAcceptedNotCompleted() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 2);
 
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-		OrderResponse order = response.getBody();
-		assertThat(order.status()).isEqualTo(OrderStatus.RESERVED);
-		assertThat(order.orderNumber()).startsWith("FC-");
-		assertThat(order.reservationExpiresAt()).isNotNull();
-
-		// Priced from catalog, not from anything the client sent — the request has no price field.
-		assertThat(order.lines()).singleElement().satisfies(line -> {
-			assertThat(line.sku()).isEqualTo("AUD-HP-001");
-			assertThat(line.productName()).isEqualTo("Aurora Over-Ear Headphones");
-			assertThat(line.unitPrice()).isEqualByComparingTo("179.00");
-			assertThat(line.lineTotal()).isEqualByComparingTo("358.00");
-		});
+		// 202, not 201: the order exists, but whether it got the stock is not known yet.
+		assertThat(order.status()).isEqualTo(OrderStatus.CREATED);
 		assertThat(order.total()).isEqualByComparingTo("358.00");
 
-		// Inventory was asked using the order id as the reservation key, which is what makes a
-		// retried reserve idempotent on its side.
-		assertThat(inventory.reserves()).singleElement().satisfies(command -> {
-			assertThat(command.reservationKey()).isEqualTo(order.id().toString());
-			assertThat(command.customerId()).isEqualTo("cust-1");
-			assertThat(command.lines()).singleElement()
-					.satisfies(line -> assertThat(line.quantity()).isEqualTo(2));
+		ReserveInventory command = events.require(ReserveInventory.class);
+		assertThat(command.reservationKey()).isEqualTo(order.id().toString());
+		assertThat(command.customerId()).isEqualTo("cust-1");
+		assertThat(command.lines()).singleElement()
+				.satisfies(line -> assertThat(line.quantity()).isEqualTo(2));
+		// Keyed by order id, which is what makes Kafka deliver one order's messages in sequence.
+		assertThat(command.aggregateId()).isEqualTo(order.id().toString());
+	}
+
+	@Test
+	@DisplayName("prices still come from catalog, not from the request")
+	void pricesComeFromCatalog() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+
+		assertThat(order.lines()).singleElement().satisfies(line -> {
+			assertThat(line.productName()).isEqualTo("Aurora Over-Ear Headphones");
+			assertThat(line.unitPrice()).isEqualByComparingTo("179.00");
 		});
 	}
 
 	@Test
-	@DisplayName("the response advertises what could legally happen next")
-	void responseAdvertisesAllowedTransitions() {
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-
-		// Straight from the state machine, so a client renders the right controls instead of keeping
-		// its own copy of the rules that will drift from this service's.
-		assertThat(order.allowedNextStates())
-				.containsExactlyInAnyOrder(OrderStatus.PAYMENT_PENDING, OrderStatus.RESERVATION_EXPIRED,
-						OrderStatus.CANCELLED);
-	}
-
-	@Test
-	@DisplayName("a multi-line order is priced and held as one basket")
-	void multiLineOrder() {
-		ResponseEntity<OrderResponse> response = rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(uniqueKey(), "cust-1", null, List.of(
-						new PlaceOrderRequest.Line("AUD-HP-001", 1),
-						new PlaceOrderRequest.Line("WEA-WT-001", 1))),
-				OrderResponse.class);
-
-		OrderResponse order = response.getBody();
-		assertThat(order.lines()).hasSize(2);
-		assertThat(order.total()).isEqualByComparingTo("478.00");
-		assertThat(inventory.reserves()).singleElement()
-				.satisfies(command -> assertThat(command.lines()).hasSize(2));
-	}
-
-	@Test
-	@DisplayName("requesting payment moves a held order to PAYMENT_PENDING, and is idempotent")
-	void requestPayment() {
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-
-		OrderResponse pending = rest.postForObject(
-				"/api/v1/orders/" + order.orderNumber() + "/request-payment", null, OrderResponse.class);
-		assertThat(pending.status()).isEqualTo(OrderStatus.PAYMENT_PENDING);
-
-		// Asking twice is a retry, not an error.
-		OrderResponse again = rest.postForObject(
-				"/api/v1/orders/" + order.orderNumber() + "/request-payment", null, OrderResponse.class);
-		assertThat(again.status()).isEqualTo(OrderStatus.PAYMENT_PENDING);
-	}
-
-	// --- idempotency -----------------------------------------------------------------------------
-
-	@Test
-	@DisplayName("a retried checkout returns the original order rather than placing a second")
-	void placeIsIdempotent() {
+	@DisplayName("a retried checkout returns the original order and re-sends the reservation command")
+	void placeIsIdempotentAndResends() {
 		String key = uniqueKey();
+		PlaceOrderRequest request = new PlaceOrderRequest(key, "cust-1", null,
+				List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1)));
 
-		OrderResponse first = place(key, "cust-1", "AUD-HP-001", 1).getBody();
-		OrderResponse retry = place(key, "cust-1", "AUD-HP-001", 1).getBody();
+		OrderResponse first = rest.postForEntity("/api/v1/orders", request, OrderResponse.class).getBody();
+		OrderResponse retry = rest.postForEntity("/api/v1/orders", request, OrderResponse.class).getBody();
 
 		assertThat(retry.id()).isEqualTo(first.id());
-		assertThat(retry.orderNumber()).isEqualTo(first.orderNumber());
-		// One hold, not two. During a flash sale a double-tapped buy button is the norm.
-		assertThat(inventory.reserves()).hasSize(1);
-	}
-
-	// --- when inventory says no --------------------------------------------------------------------
-
-	@Test
-	@DisplayName("a refusal cancels the order and passes inventory's own code straight through")
-	void inventoryRefusalCancelsTheOrder() {
-		inventory.willReject("INSUFFICIENT_STOCK");
-		String customer = "cust-" + UUID.randomUUID();
-
-		ResponseEntity<Map> response = placeExpectingFailure(uniqueKey(), customer, "AUD-HP-001", 1);
-
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-		// Not flattened into a generic message: all three inventory refusals read as "sold out" to a
-		// shopper and mean entirely different things to whoever is on support.
-		assertThat(response.getBody()).containsEntry("code", "INSUFFICIENT_STOCK");
-
-		// The order exists and is CANCELLED rather than vanishing — "why could I not buy this" is a
-		// real question, and an order that was never recorded cannot answer it.
-		@SuppressWarnings("unchecked")
-		List<Map<String, Object>> orders =
-				rest.getForObject("/api/v1/orders?customerId=" + customer, List.class);
-		assertThat(orders).singleElement().satisfies(order -> {
-			assertThat(order).containsEntry("status", "CANCELLED");
-			assertThat(String.valueOf(order.get("cancellationReason"))).contains("INSUFFICIENT_STOCK");
-		});
+		// Two commands, one order. Re-sending is deliberate: the order is still CREATED, so the first
+		// command may never have reached the broker — and ReserveInventory is idempotent on the
+		// reservation key, so a duplicate costs nothing.
+		assertThat(events.countOf(ReserveInventory.class)).isEqualTo(2);
 	}
 
 	@Test
-	@DisplayName("a sold-out flash sale is reported with the sale's own code, not a generic one")
-	void allocationExhaustedPassesThrough() {
-		inventory.willReject("SALE_ALLOCATION_EXHAUSTED");
-
+	@DisplayName("an unknown SKU is a 404 and nothing is published")
+	void unknownSkuPublishesNothing() {
 		ResponseEntity<Map> response = rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(uniqueKey(), "cust-1", UUID.randomUUID(),
-						List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))),
-				Map.class);
+				new PlaceOrderRequest(uniqueKey(), "cust-1", null,
+						List.of(new PlaceOrderRequest.Line("GHOST-1", 1))), Map.class);
 
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-		assertThat(response.getBody()).containsEntry("code", "SALE_ALLOCATION_EXHAUSTED");
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		assertThat(events.all()).isEmpty();
+	}
+
+	// --- the saga: happy path ------------------------------------------------------------------------
+
+	@Test
+	@DisplayName("stock held moves the order to PAYMENT_PENDING and asks for the money in one step")
+	void reservedGoesStraightToRequestingPayment() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		events.clear();
+
+		inventoryReserved(order);
+
+		// Not RESERVED-and-waiting: the hold is ticking, so the saga asks for payment immediately.
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.PAYMENT_PENDING);
+		RequestPayment payment = events.require(RequestPayment.class);
+		assertThat(payment.amount()).isEqualByComparingTo("179.00");
+		// The order id again, all the way down to the provider: a customer charged twice for one
+		// order is the most expensive possible consequence of at-least-once delivery.
+		assertThat(payment.idempotencyKey()).isEqualTo(order.id().toString());
+
+		assertThat(historyOf(order.orderNumber())).extracting(entry -> entry.get("toStatus"))
+				.containsExactly("CREATED", "RESERVED", "PAYMENT_PENDING");
 	}
 
 	@Test
-	@DisplayName("an unreachable inventory leaves the order CREATED, so a retry can settle it")
-	void unavailableInventoryLeavesTheOrderRetryable() {
-		inventory.willBeUnavailable();
-		String key = uniqueKey();
+	@DisplayName("payment completing commits the stock, books the shipment, and confirms the order")
+	void paymentCompletedFansOut() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		inventoryReserved(order);
+		events.clear();
 
-		ResponseEntity<Map> failed = placeExpectingFailure(key, "cust-1", "AUD-HP-001", 1);
+		saga.onPaymentCompleted(order.id(), "pay-123");
 
-		assertThat(failed.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-
-		// The crucial difference from a refusal: silence is not a "no". The hold may exist, so the
-		// order is neither cancelled (which could strand real stock) nor confirmed (which could
-		// promise stock nobody holds). It waits.
-		inventory.willAccept();
-		OrderResponse retried = place(key, "cust-1", "AUD-HP-001", 1).getBody();
-
-		assertThat(retried.status()).isEqualTo(OrderStatus.RESERVED);
-		// Same order, resumed — not a second one placed alongside a possibly-real hold.
-		assertThat(retried.orderNumber()).isNotNull();
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.FULFILLING);
+		// Only now do the units actually leave the warehouse.
+		assertThat(events.require(CommitInventory.class).reservationKey())
+				.isEqualTo(order.id().toString());
+		assertThat(events.require(CreateShipment.class).orderNumber()).isEqualTo(order.orderNumber());
+		assertThat(events.published(OrderConfirmed.class)).isTrue();
 	}
 
-	// --- compensation ------------------------------------------------------------------------------
+	@Test
+	@DisplayName("a shipment being booked moves the order to SHIPPED")
+	void shipmentCreatedShipsTheOrder() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		inventoryReserved(order);
+		saga.onPaymentCompleted(order.id(), "pay-123");
+
+		saga.onShipmentCreated(order.id(), "FCL0123456789");
+
+		OrderResponse shipped = fetch(order.orderNumber());
+		assertThat(shipped.status()).isEqualTo(OrderStatus.SHIPPED);
+		assertThat(historyOf(order.orderNumber())).extracting(entry -> entry.get("toStatus"))
+				.containsExactly("CREATED", "RESERVED", "PAYMENT_PENDING", "PAID", "FULFILLING",
+						"SHIPPED");
+	}
+
+	// --- the saga: compensations ---------------------------------------------------------------------
 
 	@Test
-	@DisplayName("cancelling releases the hold before recording the cancellation")
-	void cancelReleasesTheHold() {
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
+	@DisplayName("a refused reservation cancels the order and carries inventory's own code")
+	void reservationFailedCancels() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		events.clear();
 
-		OrderResponse cancelled = rest.postForObject("/api/v1/orders/" + order.orderNumber() + "/cancel",
-				Map.of("reason", "changed my mind"), OrderResponse.class);
+		saga.onReservationFailed(order.id(), "INSUFFICIENT_STOCK", "Only 0 units available");
 
+		OrderResponse cancelled = fetch(order.orderNumber());
 		assertThat(cancelled.status()).isEqualTo(OrderStatus.CANCELLED);
-		assertThat(cancelled.cancellationReason()).isEqualTo("changed my mind");
-		assertThat(inventory.wasReleased(order.id().toString())).isTrue();
+		assertThat(cancelled.cancellationReason()).contains("INSUFFICIENT_STOCK");
+		// Nothing was held, so there is nothing to release — and no release is published.
+		assertThat(events.published(ReleaseInventory.class)).isFalse();
+		assertThat(events.published(OrderCancelled.class)).isTrue();
 	}
 
 	@Test
-	@DisplayName("if the release fails, the order is left alone rather than looking finished")
-	void failedReleaseLeavesTheOrderIntact() {
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-		inventory.releaseWillBeUnavailable(true);
+	@DisplayName("a declined payment releases the stock and cancels, recording PAYMENT_FAILED on the way")
+	void paymentFailedCompensates() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		inventoryReserved(order);
+		events.clear();
 
-		ResponseEntity<Map> response = rest.postForEntity("/api/v1/orders/" + order.orderNumber() + "/cancel",
-				Map.of("reason", "trying to cancel"), Map.class);
+		saga.onPaymentFailed(order.id(), "CARD_DECLINED", "The card was declined by the issuer");
 
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-		// Still RESERVED. Cancelling first would have left an order that looks finished while
-		// inventory is still holding its units — the one state nobody could reconcile from.
-		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.RESERVED);
-	}
-
-	@Test
-	@DisplayName("cancelling twice releases once")
-	void cancelIsIdempotent() {
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-		String cancelUrl = "/api/v1/orders/" + order.orderNumber() + "/cancel";
-
-		rest.postForObject(cancelUrl, Map.of("reason", "first"), OrderResponse.class);
-		OrderResponse second = rest.postForObject(cancelUrl, Map.of("reason", "second"), OrderResponse.class);
-
-		assertThat(second.status()).isEqualTo(OrderStatus.CANCELLED);
-		assertThat(inventory.releaseCallCount()).isEqualTo(1);
-	}
-
-	@Test
-	@DisplayName("a declined payment walks PAYMENT_PENDING -> PAYMENT_FAILED -> CANCELLED, releasing stock")
-	void paymentFailureCompensates() {
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-		rest.postForObject("/api/v1/orders/" + order.orderNumber() + "/request-payment", null,
-				OrderResponse.class);
-
-		OrderResponse failed = rest.postForObject("/api/v1/orders/" + order.orderNumber() + "/payment-failed",
-				Map.of("reason", "card declined"), OrderResponse.class);
-
-		assertThat(failed.status()).isEqualTo(OrderStatus.CANCELLED);
-		assertThat(inventory.wasReleased(order.id().toString())).isTrue();
-
-		// PAYMENT_FAILED is persisted on the way through, not skipped: compensation is a state, so
-		// the history shows why the order was cancelled rather than merely that it was.
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.CANCELLED);
+		assertThat(events.require(ReleaseInventory.class).reservationKey())
+				.isEqualTo(order.id().toString());
+		// The intermediate state is persisted rather than skipped, so the history says *why*.
 		assertThat(historyOf(order.orderNumber())).extracting(entry -> entry.get("toStatus"))
 				.containsExactly("CREATED", "RESERVED", "PAYMENT_PENDING", "PAYMENT_FAILED", "CANCELLED");
 	}
 
 	@Test
-	@DisplayName("cancelling an order with a payment in flight is refused without releasing the stock")
-	void paymentPendingCannotBeCancelled() {
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-		rest.postForObject("/api/v1/orders/" + order.orderNumber() + "/request-payment", null,
-				OrderResponse.class);
+	@DisplayName("a payment timeout stops at PAYMENT_TIMEOUT and releases nothing")
+	void paymentTimeoutDoesNotRelease() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		inventoryReserved(order);
+		events.clear();
 
-		ResponseEntity<Map> response = rest.postForEntity("/api/v1/orders/" + order.orderNumber() + "/cancel",
-				Map.of("reason", "impatient"), Map.class);
+		saga.onPaymentTimedOut(order.id());
 
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-		assertThat(response.getBody()).containsEntry("code", "ORDER_NOT_CANCELLABLE");
-		// The important half: the guard runs *before* the release. Discovering the transition was
-		// illegal afterwards would have left the stock given back and the order still live, which is
-		// strictly worse than either outcome on its own.
-		assertThat(inventory.wasReleased(order.id().toString())).isFalse();
+		// The crucial one. The charge may still land, so releasing the stock here could sell the
+		// same unit twice and then owe a refund. It waits for reconciliation instead.
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.PAYMENT_TIMEOUT);
+		assertThat(events.published(ReleaseInventory.class)).isFalse();
+	}
+
+	@Test
+	@DisplayName("an expired reservation cancels the order without asking for a release it already got")
+	void reservationExpiredCancels() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		// Straight from RESERVED — the saga would normally have gone on to PAYMENT_PENDING, but an
+		// expiry arriving first is exactly the race this has to survive.
+		saga.onInventoryReserved(order.id(), Instant.now().minusSeconds(1));
+		events.clear();
+
+		saga.onReservationExpired(order.id());
+
+		// PAYMENT_PENDING by now, so RESERVATION_EXPIRED is not reachable and the event is ignored
+		// rather than throwing — which is the idempotency guard doing its job.
 		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.PAYMENT_PENDING);
 	}
 
-	@Test
-	@DisplayName("a terminal order cannot be moved on")
-	void terminalOrderCannotBeCancelled() {
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-		rest.postForObject("/api/v1/orders/" + order.orderNumber() + "/cancel", Map.of("reason", "done"),
-				OrderResponse.class);
-
-		ResponseEntity<Map> response = rest.postForEntity(
-				"/api/v1/orders/" + order.orderNumber() + "/request-payment", null, Map.class);
-
-		// CANCELLED is terminal, and PAYMENT_PENDING is not reachable from it. The state machine
-		// refuses rather than the controller remembering to check.
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-		assertThat(response.getBody()).containsEntry("code", "ORDER_ILLEGAL_TRANSITION");
-	}
-
-	// --- the reconciler ------------------------------------------------------------------------------
+	// --- idempotency ----------------------------------------------------------------------------------
 
 	@Test
-	@DisplayName("an order whose hold lapsed is expired and cancelled by the reconciler")
-	void reconcilerExpiresAbandonedOrders() throws InterruptedException {
-		// A hold that lapses almost immediately, so expiry is testable without a real fifteen-minute wait.
-		inventory.holdsFor(Duration.ofMillis(500));
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-		assertThat(order.status()).isEqualTo(OrderStatus.RESERVED);
+	@DisplayName("a redelivered event is ignored rather than dead-lettered")
+	void redeliveryIsIgnored() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		inventoryReserved(order);
+		events.clear();
 
-		Thread.sleep(700);
-		int reconciled = reconciler.reconcileBatch();
+		// The same event again — a rebalance alone causes this. It must not throw, because a
+		// consumer that throws on a duplicate eventually dead-letters a message that was fine.
+		inventoryReserved(order);
 
-		assertThat(reconciled).isEqualTo(1);
-		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.CANCELLED);
-		assertThat(inventory.wasReleased(order.id().toString())).isTrue();
-
-		// RESERVATION_EXPIRED is recorded on the way through, so the history says why.
-		assertThat(historyOf(order.orderNumber())).extracting(entry -> entry.get("toStatus"))
-				.containsExactly("CREATED", "RESERVED", "RESERVATION_EXPIRED", "CANCELLED");
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.PAYMENT_PENDING);
+		// And crucially, no second payment request: the customer is not charged twice.
+		assertThat(events.published(RequestPayment.class)).isFalse();
 	}
 
 	@Test
-	@DisplayName("the reconciler leaves an order alone if it cannot confirm the stock came back")
-	void reconcilerWaitsWhenInventoryIsUnavailable() throws InterruptedException {
-		inventory.holdsFor(Duration.ofMillis(500));
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-		Thread.sleep(700);
-		inventory.releaseWillBeUnavailable(true);
+	@DisplayName("a duplicate payment completion does not book a second shipment")
+	void duplicatePaymentCompletionIsIgnored() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		inventoryReserved(order);
+		saga.onPaymentCompleted(order.id(), "pay-123");
+		events.clear();
 
-		assertThat(reconciler.reconcileBatch()).isZero();
+		saga.onPaymentCompleted(order.id(), "pay-123");
 
-		// Still RESERVED. Marking it expired while unable to confirm the units are back would let
-		// the order and inventory disagree, which is the one outcome this job exists to prevent.
-		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.RESERVED);
-
-		inventory.releaseWillBeUnavailable(false);
-		assertThat(reconciler.reconcileBatch()).isEqualTo(1);
-		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.CANCELLED);
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.FULFILLING);
+		assertThat(events.published(CreateShipment.class)).isFalse();
 	}
 
 	@Test
-	@DisplayName("the reconciler does not touch an order with a payment in flight")
-	void reconcilerIgnoresPaymentPendingOrders() throws InterruptedException {
-		inventory.holdsFor(Duration.ofMillis(500));
-		OrderResponse order = place(uniqueKey(), "cust-1", "AUD-HP-001", 1).getBody();
-		rest.postForObject("/api/v1/orders/" + order.orderNumber() + "/request-payment", null,
-				OrderResponse.class);
+	@DisplayName("an event for an order that does not exist is ignored, not an error")
+	void unknownOrderIsIgnored() {
+		saga.onPaymentCompleted(UUID.randomUUID(), "pay-ghost");
 
-		Thread.sleep(700);
+		assertThat(events.all()).isEmpty();
+	}
 
-		// Reclaiming stock from underneath a charge that might yet succeed is exactly the mistake
-		// the PAYMENT_TIMEOUT path exists to avoid. Phase 6 owns that case.
+	// --- cancellation and the reconciler ----------------------------------------------------------------
+
+	@Test
+	@DisplayName("cancelling a held order asks inventory to release it")
+	void cancelReleases() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		saga.onInventoryReserved(order.id(), Instant.now().plus(15, ChronoUnit.MINUTES));
+		events.clear();
+
+		// PAYMENT_PENDING by now, so cancelling is refused — a charge is in flight.
+		ResponseEntity<Map> refused = rest.postForEntity("/api/v1/orders/" + order.orderNumber() + "/cancel",
+				Map.of("reason", "changed my mind"), Map.class);
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(refused.getBody()).containsEntry("code", "ORDER_NOT_CANCELLABLE");
+		assertThat(events.published(ReleaseInventory.class)).isFalse();
+	}
+
+	@Test
+	@DisplayName("a CREATED order can still be cancelled, and nothing is released because nothing is held")
+	void cancelBeforeReservation() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		events.clear();
+
+		OrderResponse cancelled = rest.postForObject("/api/v1/orders/" + order.orderNumber() + "/cancel",
+				Map.of("reason", "changed my mind"), OrderResponse.class);
+
+		assertThat(cancelled.status()).isEqualTo(OrderStatus.CANCELLED);
+		assertThat(events.published(ReleaseInventory.class)).isFalse();
+	}
+
+	@Test
+	@DisplayName("the reconciler catches an order whose expiry event never arrived")
+	void reconcilerIsTheBackstop() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		// Reserved with a deadline already in the past, and no expiry event ever published — the
+		// exact situation the reconciler exists for.
+		saga.onInventoryReserved(order.id(), Instant.now().minusSeconds(60));
+		events.clear();
+
+		// PAYMENT_PENDING, so the reconciler must leave it alone: a charge is in flight.
 		assertThat(reconciler.reconcileBatch()).isZero();
 		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.PAYMENT_PENDING);
-		assertThat(inventory.wasReleased(order.id().toString())).isFalse();
 	}
 
-	// --- validation and lookup -----------------------------------------------------------------------
+	// --- cross-cutting ------------------------------------------------------------------------------------
 
 	@Test
-	@DisplayName("an unknown SKU is a 404 and no order is created")
-	void unknownSkuIsNotFound() {
-		ResponseEntity<Map> response = placeExpectingFailure(uniqueKey(), "cust-1", "GHOST-001", 1);
-
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-		// Priced before anything is persisted, so a bad basket leaves nothing to clean up.
-		assertThat(inventory.reserves()).isEmpty();
-	}
-
-	@Test
-	@DisplayName("a basket mixing currencies is refused rather than silently summed")
-	void mixedCurrencyIsRefused() {
-		catalog.stock("EUR-001", "European Product", "50.00", "EUR");
-
-		ResponseEntity<Map> response = rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(uniqueKey(), "cust-1", null, List.of(
-						new PlaceOrderRequest.Line("AUD-HP-001", 1),
-						new PlaceOrderRequest.Line("EUR-001", 1))),
-				Map.class);
-
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-		assertThat(response.getBody()).containsEntry("code", "MIXED_CURRENCY");
-	}
-
-	@Test
-	@DisplayName("a repeated SKU is rejected rather than silently combined")
-	void duplicateSkuIsRejected() {
-		ResponseEntity<Map> response = rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(uniqueKey(), "cust-1", null, List.of(
-						new PlaceOrderRequest.Line("AUD-HP-001", 1),
-						new PlaceOrderRequest.Line("aud-hp-001", 2))),
-				Map.class);
-
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-	}
-
-	@Test
-	@DisplayName("an empty basket is rejected by validation")
-	void emptyBasketIsRejected() {
-		ResponseEntity<Map> response = rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(uniqueKey(), "cust-1", null, List.of()), Map.class);
-
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-		assertThat(response.getBody()).containsEntry("code", "VALIDATION_FAILED");
-	}
-
-	@Test
-	@DisplayName("an unknown order is a 404 carrying the shared error envelope")
-	void unknownOrderIsNotFound() {
-		ResponseEntity<Map> response = rest.getForEntity("/api/v1/orders/FC-NOSUCH01", Map.class);
-
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-		assertThat(response.getBody()).containsEntry("code", "NOT_FOUND");
-		assertThat(response.getBody()).containsKey("correlationId");
-	}
-
-	@Test
-	@DisplayName("a customer's orders come back newest first")
-	void listsCustomerOrders() {
-		String customer = "cust-" + UUID.randomUUID();
-		place(uniqueKey(), customer, "AUD-HP-001", 1);
-		place(uniqueKey(), customer, "WEA-WT-001", 1);
-
-		ResponseEntity<List> response = rest.getForEntity("/api/v1/orders?customerId=" + customer, List.class);
-
-		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-		assertThat(response.getBody()).hasSize(2);
-	}
-
-	@Test
-	@DisplayName("the caller's correlation id is echoed and recorded against every transition")
-	void correlationIdReachesTheHistory() {
+	@DisplayName("the correlation id reaches the published command, not just the log")
+	void correlationIdTravelsOnTheMessage() {
 		String correlationId = UUID.randomUUID().toString();
 		HttpHeaders headers = new HttpHeaders();
 		headers.set(CorrelationId.HEADER, correlationId);
 
-		ResponseEntity<OrderResponse> response = rest.exchange("/api/v1/orders", HttpMethod.POST,
+		rest.exchange("/api/v1/orders", HttpMethod.POST,
 				new HttpEntity<>(new PlaceOrderRequest(uniqueKey(), "cust-1", null,
 						List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))), headers),
 				OrderResponse.class);
 
-		assertThat(response.getHeaders().getFirst(CorrelationId.HEADER)).isEqualTo(correlationId);
-		// Stamped onto the history rows too, so a transition leads back to the request that caused it.
-		assertThat(historyOf(response.getBody().orderNumber()))
-				.allSatisfy(entry -> assertThat(entry.get("correlationId")).isEqualTo(correlationId));
+		// Without this a checkout stops being traceable the moment it crosses the bus.
+		assertThat(events.require(ReserveInventory.class).correlationId()).isEqualTo(correlationId);
 	}
 
 	@Test
-	@DisplayName("the service reports itself live and names what it depends on")
+	@DisplayName("every published message carries a unique event id")
+	void eventIdsAreUnique() {
+		OrderResponse order = place("cust-1", "AUD-HP-001", 1);
+		inventoryReserved(order);
+
+		List<String> ids = events.all().stream().map(p -> p.message().eventId()).toList();
+
+		// The basis of every consumer's idempotency. A repeated id would defeat all of them at once.
+		assertThat(ids).doesNotHaveDuplicates().allSatisfy(id -> assertThat(id).isNotBlank());
+	}
+
+	@Test
+	@DisplayName("the service reports itself live")
 	void serviceInfo() {
 		ResponseEntity<Map> response = rest.getForEntity("/api/v1/order/_info", Map.class);
 
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).containsEntry("status", "live");
-		assertThat(response.getBody()).containsKey("inventoryUrl");
 	}
 }

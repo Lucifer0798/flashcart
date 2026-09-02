@@ -180,11 +180,13 @@ services:
       # clients, and routing internal traffic through it would add a hop and a shared failure point
       # for no benefit.
       FLASHCART_CATALOG_URL: http://catalog:8081
-      FLASHCART_INVENTORY_URL: http://inventory:8085
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     ports:
       - "18082:8082"
     depends_on:
       postgres:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
       # Started, not healthy: the order service must come up and report healthy even when its
       # downstreams are not answering yet. Requiring them healthy here would hide the fact that it
@@ -217,8 +219,21 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8084
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_payment
+      SPRING_DATASOURCE_USERNAME: flashcart
+      SPRING_DATASOURCE_PASSWORD: flashcart
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # The simulated provider picks its outcome from the amount's cents, so a declined or timed-out
+      # checkout can be demonstrated with nothing but a product price — no test hook in the API.
+      PAYMENT_DECLINE_CENTS: 13
+      PAYMENT_TIMEOUT_CENTS: 99
     ports:
       - "18084:8084"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
 
   inventory:
     <<: *service-base
@@ -236,10 +251,13 @@ services:
       # ATOMIC_UPDATE is the default and the right answer; PESSIMISTIC_LOCK is here so the two can
       # be compared under load in Phase 10 rather than argued about.
       RESERVATION_STRATEGY: ATOMIC_UPDATE
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     ports:
       - "18085:8085"
     depends_on:
       postgres:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
 
   shipping:
@@ -252,8 +270,17 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8086
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_shipping
+      SPRING_DATASOURCE_USERNAME: flashcart
+      SPRING_DATASOURCE_PASSWORD: flashcart
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     ports:
       - "18086:8086"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
 
 volumes:
   postgres-data:

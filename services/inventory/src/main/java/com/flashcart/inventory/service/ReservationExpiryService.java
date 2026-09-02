@@ -3,6 +3,10 @@ package com.flashcart.inventory.service;
 import java.util.List;
 import java.util.UUID;
 
+import com.flashcart.common.event.EventMetadata;
+import com.flashcart.common.event.EventPublisher;
+import com.flashcart.common.event.Topics;
+import com.flashcart.common.event.message.ReservationExpired;
 import com.flashcart.inventory.config.InventoryProperties;
 import com.flashcart.inventory.domain.Reservation;
 import com.flashcart.inventory.domain.ReservationLine;
@@ -50,16 +54,18 @@ public class ReservationExpiryService {
 	private final CustomerSaleLimitRepository customerLimits;
 	private final MovementRecorder movements;
 	private final InventoryProperties properties;
+	private final EventPublisher events;
 
 	public ReservationExpiryService(ReservationRepository reservations, StockItemRepository stockItems,
 			SaleAllocationRepository allocations, CustomerSaleLimitRepository customerLimits,
-			MovementRecorder movements, InventoryProperties properties) {
+			MovementRecorder movements, InventoryProperties properties, EventPublisher events) {
 		this.reservations = reservations;
 		this.stockItems = stockItems;
 		this.allocations = allocations;
 		this.customerLimits = customerLimits;
 		this.movements = movements;
 		this.properties = properties;
+		this.events = events;
 	}
 
 	/**
@@ -140,6 +146,13 @@ public class ReservationExpiryService {
 
 		reservation.setStatus(ReservationStatus.EXPIRED);
 		reservation.setReleasedAt(java.time.Instant.now());
+
+		// Tell the order service rather than leaving it to notice. Its own reconciler mirrors the
+		// expiry time and would eventually catch up, but that is the backstop; this is the signal.
+		events.publish(Topics.INVENTORY_EVENTS, new ReservationExpired(
+				EventMetadata.of(ReservationExpired.TYPE, reservation.getReservationKey()),
+				reservation.getReservationKey()));
+
 		log.debug("Expired reservation {} via {}", reservation.getReservationKey(), source);
 		return true;
 	}
