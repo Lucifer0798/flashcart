@@ -200,7 +200,7 @@ class PaymentIT {
 	@Test
 	@DisplayName("the service publishes how its simulated provider behaves, so docs cannot drift")
 	void infoDescribesTheSimulation() {
-		ResponseEntity<Map> response = rest.getForEntity("/api/v1/payments/_info", Map.class);
+		ResponseEntity<Map> response = rest.getForEntity("/api/v1/payment/_info", Map.class);
 
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).containsEntry("status", "live");

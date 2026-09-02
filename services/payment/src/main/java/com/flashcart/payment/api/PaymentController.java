@@ -1,15 +1,12 @@
 package com.flashcart.payment.api;
 
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.payment.api.dto.PaymentResponse;
-import com.flashcart.payment.config.PaymentProperties;
 import com.flashcart.payment.service.PaymentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -28,17 +25,9 @@ import org.springframework.web.bind.annotation.RestController;
 public class PaymentController {
 
 	private final PaymentService payments;
-	private final PaymentProperties properties;
-	private final String applicationName;
-	private final String version;
 
-	public PaymentController(PaymentService payments, PaymentProperties properties,
-			@Value("${spring.application.name}") String applicationName,
-			@Value("${flashcart.version:0.1.0-SNAPSHOT}") String version) {
+	public PaymentController(PaymentService payments) {
 		this.payments = payments;
-		this.properties = properties;
-		this.applicationName = applicationName;
-		this.version = version;
 	}
 
 	@GetMapping("/{paymentId}")
@@ -59,17 +48,4 @@ public class PaymentController {
 		return payments.forCustomer(customerId).stream().map(PaymentResponse::from).toList();
 	}
 
-	@GetMapping("/_info")
-	@Operation(summary = "Which build is behind this route, and how the simulated provider behaves")
-	public Map<String, String> info() {
-		return Map.of(
-				"service", applicationName,
-				"version", version,
-				"status", "live",
-				"implementedIn", "Phase 6",
-				"provider", "simulated",
-				// Published so the compose stack and the docs cannot drift from the code.
-				"declinesOnAmountEndingIn", "." + properties.declineOnCents(),
-				"timesOutOnAmountEndingIn", "." + properties.timeoutOnCents());
-	}
 }

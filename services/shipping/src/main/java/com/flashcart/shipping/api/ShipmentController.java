@@ -1,13 +1,11 @@
 package com.flashcart.shipping.api;
 
 import java.util.List;
-import java.util.Map;
 
 import com.flashcart.shipping.api.dto.ShipmentResponse;
 import com.flashcart.shipping.service.ShipmentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,15 +26,9 @@ import org.springframework.web.bind.annotation.RestController;
 public class ShipmentController {
 
 	private final ShipmentService shipments;
-	private final String applicationName;
-	private final String version;
 
-	public ShipmentController(ShipmentService shipments,
-			@Value("${spring.application.name}") String applicationName,
-			@Value("${flashcart.version:0.1.0-SNAPSHOT}") String version) {
+	public ShipmentController(ShipmentService shipments) {
 		this.shipments = shipments;
-		this.applicationName = applicationName;
-		this.version = version;
 	}
 
 	@GetMapping("/order/{orderNumber}")
@@ -69,10 +61,4 @@ public class ShipmentController {
 		return ShipmentResponse.from(shipments.deliver(trackingNumber));
 	}
 
-	@GetMapping("/_info")
-	@Operation(summary = "Which build is behind this route")
-	public Map<String, String> info() {
-		return Map.of("service", applicationName, "version", version, "status", "live",
-				"implementedIn", "Phase 6");
-	}
 }

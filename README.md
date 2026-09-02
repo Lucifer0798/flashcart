@@ -328,7 +328,7 @@ the most valuable thing in Phase 6, untested end to end.
 That middle row is the interesting one. A decline is decisive, so the stock is safe to return; a
 timeout means the charge may still land, and releasing would risk selling the same unit twice and
 then owing a refund. The thresholds are configurable and published on
-`GET /api/v1/payments/_info`, so these docs cannot drift from the code.
+`GET /api/v1/payment/_info`, so these docs cannot drift from the code.
 
 ### Errors
 
