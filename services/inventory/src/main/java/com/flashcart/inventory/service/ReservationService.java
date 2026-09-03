@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -66,12 +67,13 @@ public class ReservationService {
 	private final MovementRecorder movements;
 	private final InventoryProperties properties;
 	private final Clock clock;
+	private final AvailabilityGate gate;
 	private final TransactionTemplate transactions;
 
 	public ReservationService(ReservationRepository reservations, StockItemRepository stockItems,
 			SaleAllocationRepository allocations, CustomerSaleLimitRepository customerLimits,
 			ReservationExpiryService expiry, MovementRecorder movements, InventoryProperties properties,
-			Clock clock, PlatformTransactionManager transactionManager) {
+			Clock clock, AvailabilityGate gate, PlatformTransactionManager transactionManager) {
 		this.reservations = reservations;
 		this.stockItems = stockItems;
 		this.allocations = allocations;
@@ -80,7 +82,18 @@ public class ReservationService {
 		this.movements = movements;
 		this.properties = properties;
 		this.clock = clock;
+		this.gate = gate;
 		this.transactions = new TransactionTemplate(transactionManager);
+		// REQUIRES_NEW, because a refusal is an ordinary outcome that must not damage the caller's
+		// transaction. Since Phase 8 the Kafka listener runs the claim and this call in one
+		// transaction; joining it would mean a sold-out SKU marks that transaction rollback-only, the
+		// listener's InventoryReservationFailed publish would be discarded with it, and the commit
+		// would fail with UnexpectedRollbackException -- turning the single most ordinary flash-sale
+		// outcome into a dead-lettered message and an order stuck in CREATED for ever.
+		//
+		// Its own transaction also keeps the all-lines-or-none guarantee: partial holds still roll
+		// back, they just roll back alone.
+		this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
 
 	/** One requested line, normalised. */
@@ -98,11 +111,16 @@ public class ReservationService {
 	 * block forever waiting for a second that only they could release. Every buyer then gets a
 	 * connection timeout instead of an answer.
 	 *
-	 * <p>So the reclaim happens here, before any transaction is open, and the transactional work is
-	 * opened explicitly afterwards. One connection per request, and the reclaim still commits
-	 * independently. A {@link TransactionTemplate} rather than a second bean because the alternative
-	 * — self-invoking an {@code @Transactional} method — silently bypasses the proxy and would not be
-	 * transactional at all.
+	 * <p>So the reclaim happens here, before this method opens a transaction of its own, and the
+	 * transactional work is opened explicitly afterwards. A {@link TransactionTemplate} rather than a
+	 * second bean because the alternative — self-invoking an {@code @Transactional} method — silently
+	 * bypasses the proxy and would not be transactional at all.
+	 *
+	 * <p>On the HTTP path nothing else is open, so that is one connection per request and the
+	 * deadlock above cannot arise. Since Phase 8 the Kafka path does arrive with the idempotency
+	 * claim's transaction already open, so a reserve there briefly holds two connections. That is
+	 * bounded by listener concurrency — a handful of consumer threads, not sixty simultaneous
+	 * buyers — which is why it is acceptable here and would not be on the request path.
 	 *
 	 * @param reservationKey the caller's idempotency key, normally the order id
 	 * @param ttl            how long to hold for; falls back to the configured default, capped by
@@ -242,6 +260,8 @@ public class ReservationService {
 
 		for (ReservationLine line : reservation.getLines()) {
 			stockItems.releaseReserved(line.getSku(), line.getQuantity());
+			// Back into circulation, so the gate stops refusing units that are available again.
+			gate.release(line.getSku(), line.getQuantity());
 			if (reservation.getFlashSaleId() != null) {
 				allocations.releaseReserved(reservation.getFlashSaleId(), line.getSku(), line.getQuantity());
 				customerLimits.release(reservation.getCustomerId(), reservation.getFlashSaleId(),
@@ -268,13 +288,42 @@ public class ReservationService {
 
 	// --- the three checks -------------------------------------------------------------------------
 
+	/**
+	 * Hold the units, asking Redis first whether it is even worth asking PostgreSQL.
+	 *
+	 * <p>The gate can only refuse, never approve — see {@link AvailabilityGate}. So the structure
+	 * below is not "Redis decides, database confirms"; it is "database decides, Redis skips the
+	 * hopeless cases". During a sale that is most of them, and each one skipped is a connection and a
+	 * row lock the buyers who <em>can</em> be served get to use instead.
+	 */
 	private void holdStock(RequestedLine line) {
+		AvailabilityGate.Decision decision = gate.tryAdmit(line.sku(), line.quantity());
+		if (decision == AvailabilityGate.Decision.REFUSED) {
+			// Answered without touching the database at all. The gate may be wrong, and being wrong
+			// this way costs a sale rather than oversells — the TTL repairs it within a minute.
+			throw new InsufficientStockException(line.sku(), line.quantity());
+		}
+
 		boolean held = switch (properties.strategy()) {
 			case ATOMIC_UPDATE -> stockItems.tryReserve(line.sku(), line.quantity()) == 1;
 			case PESSIMISTIC_LOCK -> holdStockPessimistically(line);
 		};
+
 		if (!held) {
+			if (decision == AvailabilityGate.Decision.ADMITTED) {
+				// The gate let this through and the database said no, so its estimate was too
+				// generous. Hand the token straight back: keeping it would make the counter
+				// progressively more pessimistic and start refusing stock that genuinely exists.
+				gate.release(line.sku(), line.quantity());
+			}
 			throw new InsufficientStockException(line.sku(), line.quantity());
+		}
+
+		if (decision == AvailabilityGate.Decision.UNKNOWN) {
+			// The counter was cold or Redis was unreachable. Seed it from what the database now
+			// knows, so the next buyer for this SKU gets the cheap answer.
+			stockItems.findBySku(line.sku())
+					.ifPresent(item -> gate.warm(item.getSku(), item.available()));
 		}
 	}
 

@@ -1,6 +1,6 @@
 # 0014 — Consumers are idempotent by consulting the state machine, not a dedup table
 
-**Status:** Accepted · **Date:** 2026-09-02 · **Phase:** 5 · **Superseded in part by Phase 8**
+**Status:** Superseded by [ADR 0017](0017-outbox-and-processed-events.md) · **Date:** 2026-09-02 · **Phase:** 5
 
 ## Context
 
@@ -50,4 +50,5 @@ It also cannot detect a duplicate whose transition happens to be legal again lat
 current flow revisits a state, so this is theoretical today and would stop being theoretical the
 moment a retry or reopen path is added.
 
-Phase 8 replaces the inference with a recorded fact.
+Phase 8 replaced the inference with a recorded fact — see [ADR 0017](0017-outbox-and-processed-events.md).
+The `advance` guard itself stays, now as a second defence rather than the only one.

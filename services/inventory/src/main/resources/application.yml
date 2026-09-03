@@ -72,6 +72,11 @@ flashcart:
     # How many expired holds one reserve call reclaims inline before getting on with its own work,
     # so an unlucky request never inherits an unbounded backlog.
     lazy-reclaim-limit: ${LAZY_RECLAIM_LIMIT:50}
+    # Redis admission control. Only ever refuses; PostgreSQL still decides. Turning it off is a
+    # correct deployment, just a slower one — which is what Phase 10 measures against.
+    gate:
+      enabled: ${AVAILABILITY_GATE_ENABLED:true}
+      ttl: ${AVAILABILITY_GATE_TTL:PT60S}
     sweeper:
       enabled: ${SWEEPER_ENABLED:true}
       batch-size: ${SWEEPER_BATCH_SIZE:500}

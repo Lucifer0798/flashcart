@@ -35,12 +35,14 @@ public class StockService {
 	private final StockItemRepository stockItems;
 	private final StockMovementRepository movements;
 	private final MovementRecorder recorder;
+	private final AvailabilityGate gate;
 
 	public StockService(StockItemRepository stockItems, StockMovementRepository movements,
-			MovementRecorder recorder) {
+			MovementRecorder recorder, AvailabilityGate gate) {
 		this.stockItems = stockItems;
 		this.movements = movements;
 		this.recorder = recorder;
+		this.gate = gate;
 	}
 
 	public StockItem get(String sku) {
@@ -106,6 +108,9 @@ public class StockService {
 		item.setOnHand(item.getOnHand() + quantity);
 		flushOrConflict(sku);
 		recorder.record(item.getSku(), MovementType.RECEIVED, quantity, 0, null, null, reason);
+		// Invalidated rather than incremented: a warehouse change is rare and the next reserve can
+		// afford one database read to re-seed a counter that is now certainly correct.
+		gate.invalidate(item.getSku());
 		return item;
 	}
 
@@ -140,6 +145,7 @@ public class StockService {
 		item.setOnHand(newOnHand);
 		flushOrConflict(sku);
 		recorder.record(item.getSku(), MovementType.ADJUSTED, delta, 0, null, null, reason);
+		gate.invalidate(item.getSku());
 		return item;
 	}
 

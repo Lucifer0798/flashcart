@@ -59,6 +59,16 @@
 			<artifactId>spring-boot-starter-jackson</artifactId>
 			<optional>true</optional>
 		</dependency>
+		<!--
+		  The outbox writes through JdbcTemplate rather than JPA. It is one flat table, and JPA
+		  entities living in this library would have to be @EntityScan-ed by every service that used
+		  it — coupling every service's persistence configuration to a shared jar for two tables.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-jdbc</artifactId>
+			<optional>true</optional>
+		</dependency>
 	</dependencies>
 
 	<build>

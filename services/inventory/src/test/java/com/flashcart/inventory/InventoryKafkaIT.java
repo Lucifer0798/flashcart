@@ -14,7 +14,6 @@ import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.ReserveInventory;
 import com.flashcart.inventory.api.dto.CreateStockRequest;
 import com.flashcart.inventory.api.dto.StockResponse;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.kafka.KafkaContainer;
@@ -27,8 +26,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.stereotype.Component;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -78,26 +75,11 @@ class InventoryKafkaIT {
 		KAFKA.start();
 	}
 
-	/** Captures what inventory publishes back, off the real topic. */
-	@Component
-	static class ReplyCollector {
-
-		private final List<Object> replies = java.util.Collections.synchronizedList(
-				new java.util.ArrayList<>());
-
-		@KafkaListener(topics = Topics.INVENTORY_EVENTS, groupId = "inventory-kafka-it",
-				containerFactory = "reserveInventoryFactory")
-		void collect(ConsumerRecord<String, ?> record) {
-			replies.add(record.value());
-		}
-
-		List<Object> replies() {
-			return List.copyOf(replies);
-		}
-	}
-
 	@Autowired
 	private EventPublisher publisher;
+
+	@Autowired
+	private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
 	@Autowired
 	private TestRestTemplate rest;
@@ -148,7 +130,20 @@ class InventoryKafkaIT {
 			StockResponse position = rest.getForObject("/api/v1/inventory/stock/" + sku,
 					StockResponse.class);
 			assertThat(position.reserved()).isZero();
+
+			// Holding no stock is only half of it, and the weaker half: a handler that blew up
+			// before publishing anything also holds no stock. This assertion is the one that
+			// distinguishes "refused and said so" from "crashed quietly", and its absence is why a
+			// refusal could dead-letter for a whole phase without a single test noticing.
+			assertThat(jdbc.queryForObject(
+					"select count(*) from outbox_messages where event_type = ? and payload->>'reservationKey' = ?",
+					Integer.class, InventoryReservationFailed.TYPE, orderId.toString()))
+					.isEqualTo(1);
 		});
+
+		// And the claim was kept, so a redelivery is skipped rather than refused a second time.
+		assertThat(jdbc.queryForObject("select count(*) from processed_events where consumer = ?",
+				Integer.class, "inventory-commands")).isPositive();
 	}
 
 	@Test

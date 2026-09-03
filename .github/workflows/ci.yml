@@ -205,14 +205,36 @@ jobs:
           # A wrong verb is a 405, not a 500 — the whole platform shares one handler for this.
           curl -s -o /dev/null -w '%{http_code}' -X DELETE $G/api/v1/orders | grep -qE '^40[45]$'
 
+      - name: The outbox drained
+        run: |
+          set -e
+          # Every message above was published through the outbox, so by now every row should be
+          # stamped. A row left unpublished means the relay is not draining — the saga would still
+          # have looked healthy above, because the messages that mattered got through before it
+          # stalled. This is the assertion that catches a relay dying quietly.
+          for db in order inventory payment shipping; do
+            STUCK=$(docker compose exec -T postgres psql -U flashcart -d flashcart_$db -tAc "select count(*) from outbox_messages where published_at is null and created_at < now() - interval '30 seconds'")
+            echo "$db: $STUCK message(s) stuck in the outbox"
+            test "$STUCK" -eq 0
+          done
+          # And the consumers recorded what they handled, rather than relying on the state machine
+          # to quietly ignore replays.
+          CLAIMS=$(docker compose exec -T postgres psql -U flashcart -d flashcart_order -tAc "select count(*) from processed_events")
+          echo "order recorded $CLAIMS processed event(s)"
+          test "$CLAIMS" -gt 0
+
       - name: Nothing was dead-lettered
         run: |
           # A message on the DLQ means a consumer exhausted its retries. Everything above should
           # have been an ordinary business outcome, so the DLQ being non-empty is a real failure
           # even when every assertion above passed.
-          COUNT=$(docker compose exec -T kafka /opt/kafka/bin/kafka-run-class.sh \
-            kafka.tools.GetOffsetShell --bootstrap-server localhost:9092 \
-            --topic flashcart.dlq 2>/dev/null | awk -F: '{ sum += $3 } END { print sum+0 }')
+          # kafka-get-offsets.sh, not kafka-run-class.sh kafka.tools.GetOffsetShell: that class was
+          # removed in Kafka 4, so the old call died with ClassNotFoundException, awk summed an empty
+          # stream, and this step printed 0 and passed regardless of what sat on the topic. Stderr is
+          # no longer discarded either, so a broken invocation fails loudly instead of silently.
+          COUNT=$(docker compose exec -T kafka /opt/kafka/bin/kafka-get-offsets.sh \
+            --bootstrap-server localhost:9092 \
+            --topic flashcart.dlq | awk -F: '{ sum += $3 } END { print sum+0 }')
           echo "dead-letter topic holds $COUNT message(s)"
           test "$COUNT" -eq 0
 

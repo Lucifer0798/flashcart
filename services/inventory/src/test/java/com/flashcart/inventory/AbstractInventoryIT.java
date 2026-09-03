@@ -10,6 +10,7 @@ import com.flashcart.inventory.api.dto.CreateStockRequest;
 import com.flashcart.inventory.api.dto.ReservationResponse;
 import com.flashcart.inventory.api.dto.ReserveRequest;
 import com.flashcart.inventory.api.dto.StockResponse;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,8 +73,22 @@ abstract class AbstractInventoryIT {
 	@ServiceConnection
 	static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
 
+	/**
+	 * A real Redis, so the whole suite — including the concurrency proof — runs with the availability
+	 * gate switched on.
+	 *
+	 * <p>This is the important placement. The gate sits in front of the reserve path, and the only
+	 * claim that matters about it is that it cannot break the no-oversell guarantee. Running the
+	 * concurrency suite without it would leave that claim untested, and running it against a fake
+	 * Redis would test the fake.
+	 */
+	@ServiceConnection(name = "redis")
+	static final GenericContainer<?> REDIS = new GenericContainer<>("redis:7-alpine")
+			.withExposedPorts(6379);
+
 	static {
 		POSTGRES.start();
+		REDIS.start();
 	}
 
 	@Autowired

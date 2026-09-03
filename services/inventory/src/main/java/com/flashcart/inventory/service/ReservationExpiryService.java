@@ -19,8 +19,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Returns units held by reservations whose time ran out.
@@ -55,10 +58,13 @@ public class ReservationExpiryService {
 	private final MovementRecorder movements;
 	private final InventoryProperties properties;
 	private final EventPublisher events;
+	private final AvailabilityGate gate;
+	private final TransactionTemplate sweepTransaction;
 
 	public ReservationExpiryService(ReservationRepository reservations, StockItemRepository stockItems,
 			SaleAllocationRepository allocations, CustomerSaleLimitRepository customerLimits,
-			MovementRecorder movements, InventoryProperties properties, EventPublisher events) {
+			MovementRecorder movements, InventoryProperties properties, EventPublisher events,
+			AvailabilityGate gate, PlatformTransactionManager transactionManager) {
 		this.reservations = reservations;
 		this.stockItems = stockItems;
 		this.allocations = allocations;
@@ -66,6 +72,9 @@ public class ReservationExpiryService {
 		this.movements = movements;
 		this.properties = properties;
 		this.events = events;
+		this.gate = gate;
+		this.sweepTransaction = new TransactionTemplate(transactionManager);
+		this.sweepTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 	}
 
 	/**
@@ -106,11 +115,20 @@ public class ReservationExpiryService {
 		}
 	}
 
-	/** The sweep body, separated so tests can drive one batch deterministically. */
-	@Transactional(propagation = Propagation.REQUIRES_NEW)
+	/**
+	 * The sweep body, separated so tests can drive one batch deterministically.
+	 *
+	 * <p>The transaction is opened with a {@link TransactionTemplate} rather than
+	 * {@code @Transactional}, because {@link #sweep()} calls this method on {@code this}: a
+	 * self-invocation does not pass through the proxy, so the annotation applied to the scheduled
+	 * path exactly never. Tests calling this bean directly did go through the proxy and so passed,
+	 * which is why it took a running stack to notice the sweeper had never once completed.
+	 */
 	public int sweepBatch() {
-		List<UUID> expiredIds = reservations.claimExpired(properties.sweeper().batchSize());
-		return expireAll(expiredIds, "sweeper");
+		return sweepTransaction.execute(status -> {
+			List<UUID> expiredIds = reservations.claimExpired(properties.sweeper().batchSize());
+			return expireAll(expiredIds, "sweeper");
+		});
 	}
 
 	private int expireAll(List<UUID> reservationIds, String source) {
@@ -134,6 +152,8 @@ public class ReservationExpiryService {
 
 		for (ReservationLine line : reservation.getLines()) {
 			stockItems.releaseReserved(line.getSku(), line.getQuantity());
+			// The gate must hear about this too, or it keeps refusing units that are free again.
+			gate.release(line.getSku(), line.getQuantity());
 			if (reservation.getFlashSaleId() != null) {
 				allocations.releaseReserved(reservation.getFlashSaleId(), line.getSku(), line.getQuantity());
 				// The customer's allowance comes back: their hold lapsed, they did not buy.

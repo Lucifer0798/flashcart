@@ -19,6 +19,7 @@ public record InventoryProperties(
 		Duration maxReservationTtl,
 		ReservationStrategy strategy,
 		Sweeper sweeper,
+		Gate gate,
 		int lazyReclaimLimit) {
 
 	public InventoryProperties {
@@ -26,6 +27,7 @@ public record InventoryProperties(
 		maxReservationTtl = maxReservationTtl == null ? Duration.ofHours(1) : maxReservationTtl;
 		strategy = strategy == null ? ReservationStrategy.ATOMIC_UPDATE : strategy;
 		sweeper = sweeper == null ? new Sweeper(true, 500) : sweeper;
+		gate = gate == null ? new Gate(true, Duration.ofSeconds(60)) : gate;
 		lazyReclaimLimit = lazyReclaimLimit <= 0 ? 50 : lazyReclaimLimit;
 	}
 
@@ -37,6 +39,22 @@ public record InventoryProperties(
 
 		public Sweeper {
 			batchSize = batchSize <= 0 ? 500 : batchSize;
+		}
+	}
+
+	/**
+	 * The Redis availability gate.
+	 *
+	 * @param enabled false falls back to a no-op gate, so every reserve goes to the database — the
+	 *                baseline Phase 10 measures against
+	 * @param ttl     how long an estimate lives before it is re-read from PostgreSQL. This is the
+	 *                self-healing interval: a counter that has drifted low, and is therefore refusing
+	 *                stock that exists, repairs itself within one TTL.
+	 */
+	public record Gate(boolean enabled, Duration ttl) {
+
+		public Gate {
+			ttl = ttl == null ? Duration.ofSeconds(60) : ttl;
 		}
 	}
 

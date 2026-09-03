@@ -230,6 +230,30 @@ statement — no read-then-write window for a concurrent buyer to slip through �
 
 ---
 
+### The availability gate
+
+Redis sits in front of every reservation as an admission gate, and it has exactly one power: **it can
+refuse a request, and it can never approve one.**
+
+Under a flash sale, once the stock is gone, the next fifty thousand requests would each open a
+transaction, take a lock, run the conditional `UPDATE`, match nothing and roll back — contending with
+the few requests that still have stock to claim. The gate refuses those without touching a
+connection.
+
+What it never does is decide a sale. An admitted request still goes to PostgreSQL, and the
+conditional `UPDATE` still has the final say, so the cache is allowed to be wrong: too low loses a
+sale until the TTL expires, too high wastes one query. Neither can oversell. If Redis is unreachable
+the gate returns `UNKNOWN` and everything proceeds exactly as it did before Phase 7.
+
+```yaml
+flashcart.inventory.gate.enabled: true   # false takes it out of the path entirely
+flashcart.inventory.gate.ttl: 60s        # how long any drift can survive
+```
+
+The concurrency test that proves the platform cannot oversell runs **with the gate switched on** —
+an optimisation that is only safe when disabled is not safe. See
+[ADR 0016](docs/adr/0016-the-gate-may-only-refuse.md).
+
 ## The order API
 
 Where a checkout actually happens. Order calls catalog for prices and inventory for stock; it
@@ -293,9 +317,11 @@ PAYMENT_PENDING ──▶ PAYMENT_TIMEOUT     ──▶ PAID | CANCELLED   (reco
 ```
 
 Phase 4 drives `CREATED` through `PAYMENT_PENDING` and every compensation below it; `PAID` onward
-arrives with payment in Phase 6. Transitions go through `OrderStateMachine`, so a duplicate event —
-a payment callback delivered twice, an expiry timer firing after the charge settled — is rejected by
-the machine rather than by a caller remembering to check.
+arrives with payment in Phase 6. Transitions go through `OrderStateMachine`, so an illegal move —
+an expiry timer firing after the charge settled — is rejected by the machine rather than by a caller
+remembering to check. Since Phase 8 that is the second line of defence rather than the only one:
+duplicates are caught earlier and explicitly by `processed_events`, which means the state machine
+declining something now signals a real anomaly instead of routine redelivery.
 
 Compensation is a persisted state, not a side effect: a declined payment walks
 `PAYMENT_PENDING → PAYMENT_FAILED → CANCELLED`, and the history says which it was.
@@ -361,6 +387,33 @@ ERROR [flashcart-catalog,d63d883f-ba11-4cb7-8d5b-a6e398283b59] ...
 
 ---
 
+## The bus, the outbox, and duplicates
+
+Persisting a state change and publishing an event are two systems, and one can fail without the
+other. A crash between the two leaves an order in `PAID` that nothing was ever told about: the saga
+stops, silently, and the only evidence is an order that never ships.
+
+So nothing publishes to Kafka directly. `OutboxEventPublisher` writes the message into
+`outbox_messages` **inside the caller's transaction** — the state change and the intent to publish
+commit together or not at all. A scheduled relay then claims unpublished rows with
+`SELECT ... FOR UPDATE SKIP LOCKED`, sends them, waits for the broker to acknowledge, and only then
+marks them published. A relay that dies mid-send simply retries; the worst case is a duplicate, never
+a loss.
+
+Duplicates are then the consumer's problem, and they are certain — a rebalance alone redelivers.
+Every listener claims `(event_id, consumer)` in `processed_events` and does its work in the same
+transaction, so a handler that rolls back releases its claim and will be retried rather than being
+recorded as done. The claim is per consumer, because several services legitimately handle the same
+message and a single "seen" flag would let the first one to arrive suppress it for everyone.
+
+```yaml
+flashcart.outbox.enabled: true              # false publishes directly, for comparison
+flashcart.outbox.relay.fixed-delay: PT1S    # added latency on every message
+```
+
+Both tables grow without bound today; retention is Phase 10's problem and is noted as debt in
+[ADR 0017](docs/adr/0017-outbox-and-processed-events.md).
+
 ## Building and testing
 
 ```bash
@@ -413,8 +466,8 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 | 4     | Orders + the state machine                  | ✅     |
 | 5     | Kafka event architecture                    | ✅     |
 | 6     | Payment + saga                              | ✅     |
-| 7     | Redis + concurrency                         | ⬜     |
-| 8     | Outbox + idempotency                        | ⬜     |
+| 7     | Redis + concurrency                         | ✅     |
+| 8     | Outbox + idempotency                        | ✅     |
 | 9     | Observability                               | ⬜     |
 | 10    | Load testing                                | ⬜     |
 | 11    | Failure injection                           | ⬜     |
@@ -427,4 +480,4 @@ database, and Redis and Kafka are already running with nothing yet using them.
 Phase 3 leaves two in particular. Reservation expiry is where Phase 5 will publish
 `ReservationExpired` so the order service can move its own state machine; and the
 `ATOMIC_UPDATE` / `PESSIMISTIC_LOCK` strategy switch exists so Phase 10 can measure the two under
-load, and Phase 7 can measure Redis against both, rather than anyone asserting which is faster.
+load, and Phase 7 could measure Redis against both, rather than anyone asserting which is faster.
