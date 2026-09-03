@@ -186,9 +186,23 @@ jobs:
               echo "compensated"
               # PAYMENT_FAILED must appear on the way through: compensation is a recorded state.
               curl -sf "$G/api/v1/orders/$ORDER/history" | grep -q '"toStatus":"PAYMENT_FAILED"'
-              # And the units must be back.
-              curl -sf "$G/api/v1/inventory/stock/$SKU" | grep -q '"reserved":0'
-              exit 0
+
+              # The units come back on a further hop, so this is polled rather than read once.
+              # CANCELLED means the order service has recorded the outcome; it does not mean
+              # inventory has yet consumed the release. Since Phase 8 that gap is wider, because
+              # every message now waits for the outbox relay's next tick. Asserting immediately
+              # here passed for six phases and then failed roughly half the time.
+              for j in $(seq 1 15); do
+                RESERVED=$(curl -sf "$G/api/v1/inventory/stock/$SKU" | grep -o '"reserved":[0-9]*' | cut -d: -f2)
+                # An "if", not "[ ... ] && exit 0": under set -e a failing && list ends the step,
+                # so the shorter form would abort on the first poll instead of retrying.
+                if [ "$RESERVED" = "0" ]; then exit 0; fi
+                sleep 2
+              done
+              echo "compensation never returned the units (reserved=$RESERVED)"
+              curl -s "$G/api/v1/inventory/stock/$SKU"
+              docker compose logs --tail=100 inventory order
+              exit 1
             fi
             sleep 2
           done
