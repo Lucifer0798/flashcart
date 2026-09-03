@@ -35,7 +35,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureTestRestTemplate
 @Import(RecordingEventPublisher.class)
-@TestPropertySource(properties = "spring.kafka.listener.auto-startup=false")
+@TestPropertySource(properties = {
+		"spring.kafka.listener.auto-startup=false",
+		// This suite records what the service decides, so its own publisher must win. Turning the
+		// queue off leaves the consumer-side dedup beans in place, which the listeners still need.
+		"flashcart.outbox.enabled=false",
+})
 class ShippingIT {
 
 	@ServiceConnection

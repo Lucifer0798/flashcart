@@ -43,6 +43,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 		// Driven explicitly in the test that cares; on its own timer it would time out attempts
 		// mid-assertion elsewhere.
 		"flashcart.payment.reconciler.enabled=false",
+		// This suite records what the service decides, so its own publisher must win. Turning the
+		// queue off leaves the consumer-side dedup beans in place, which the listeners still need.
+		"flashcart.outbox.enabled=false",
 		"spring.kafka.listener.auto-startup=false"
 })
 class PaymentIT {

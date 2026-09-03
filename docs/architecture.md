@@ -136,9 +136,9 @@ Three fields carry the design (`DomainEvent`):
 - **`correlationId`** carries the originating request's ID across the async hop — the only thing
   that keeps a checkout traceable once it stops being a single HTTP call.
 
-Contracts are declared in Phase 1; producers and consumers arrive in Phase 5, and Phase 8 backs
-publication with a transactional outbox so an event can never be published for a transaction that
-rolled back.
+Contracts are declared in Phase 1; producers and consumers arrived in Phase 5, and Phase 8 backed
+publication with a transactional outbox, so an event can never be published for a transaction that
+rolled back — nor lost by a transaction that committed.
 
 ---
 
@@ -283,13 +283,24 @@ replay to the balance, each carrying the correlation id of the request that caus
 "we are three units short" is unanswerable. `RELEASED` and `EXPIRED` are deliberately distinct: who
 gave up and who ran out of time are different operational questions.
 
-### Why there is no Redis here yet
+### Redis, and why it arrived second
 
-Phase 7 adds it. Building the durable, provably-correct Postgres implementation first means Redis
-arrives as an optimisation in front of a system of record that already works, and can be measured
-against it — rather than becoming the system of record for the one number the platform cannot afford
-to lose. The `strategy` setting (`ATOMIC_UPDATE` / `PESSIMISTIC_LOCK`) exists for the same reason:
-Phase 10 measures the difference instead of asserting it.
+Building the durable, provably-correct Postgres implementation first meant Redis could arrive in
+Phase 7 as an optimisation in front of a system of record that already worked — rather than becoming
+the system of record for the one number the platform cannot afford to lose.
+
+It is an **admission gate**, and it has exactly one power: it may refuse a request, and it may never
+approve one. `AvailabilityGate.tryAdmit` answers `REFUSED`, `ADMITTED` or `UNKNOWN`; only the first
+short-circuits anything. `ADMITTED` means "not obviously impossible", and the conditional `UPDATE`
+above still decides. A missing key, or a Redis that is simply down, yields `UNKNOWN` and the request
+proceeds to PostgreSQL exactly as it did in Phase 6.
+
+That asymmetry is what makes the cache safe to be wrong. Drift low loses a sale until the TTL expires;
+drift high wastes one query. Neither can oversell, because Redis is never asked to authorise
+anything. See [ADR 0016](adr/0016-the-gate-may-only-refuse.md).
+
+The `strategy` setting (`ATOMIC_UPDATE` / `PESSIMISTIC_LOCK`) exists for the same reason the gate is
+switchable: Phase 10 measures the difference instead of asserting it.
 
 ### What proves any of this
 
@@ -431,11 +442,24 @@ Note what is deliberately *not* an exception: a sold-out SKU. Inventory publishe
 `InventoryReservationFailed` rather than throwing, because an expected business outcome that
 dead-letters would stall the partition behind it.
 
-### Idempotency, for now
+### Idempotency, and the outbox
 
-Consumers deduplicate by asking the state machine whether the transition is legal and ignoring it if
-not — see [ADR 0014](adr/0014-idempotency-by-state-machine.md), including why that is explicitly
-interim and what it cannot distinguish. Phase 8 replaces the inference with a recorded fact.
+Both ends of the bus are now closed, and the two halves are separate concerns.
+
+**Outbound**, `OutboxEventPublisher` writes the message into `outbox_messages` on the caller's
+connection, inside the caller's transaction: the state change and the intent to publish commit
+together or not at all. A scheduled `OutboxRelay` then claims unpublished rows with
+`SELECT ... FOR UPDATE SKIP LOCKED`, sends the stored JSON verbatim, waits for the broker to
+acknowledge it, and only then stamps `published_at`. Because the publisher is `@Primary`, every
+caller written in Phase 5 switched over without a line of domain code changing.
+
+**Inbound**, `IdempotentHandler` claims `(event_id, consumer)` in `processed_events` and runs the
+handler in the same transaction, so work that rolls back releases its claim instead of being recorded
+as done. The claim is per consumer, because several services legitimately handle the same message.
+
+This supersedes [ADR 0014](adr/0014-idempotency-by-state-machine.md), which inferred "already
+processed" from "not currently legal". The state-machine guard stays as a second defence — it now
+means only what it says. See [ADR 0017](adr/0017-outbox-and-processed-events.md).
 
 ---
 

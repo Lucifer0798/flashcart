@@ -19,5 +19,7 @@ when someone revisits it in six months.
 | [0011](0011-order-owns-no-prices.md) | Prices come from catalog, never from the request | Accepted |
 | [0012](0012-asynchronous-checkout.md) | The checkout is asynchronous and returns 202 | Accepted |
 | [0013](0013-orchestrated-saga.md) | The saga is orchestrated by the order service | Accepted |
-| [0014](0014-idempotency-by-state-machine.md) | Consumers dedupe via the state machine, for now | Accepted, interim |
+| [0014](0014-idempotency-by-state-machine.md) | Consumers dedupe via the state machine, for now | Superseded by 0017 |
 | [0015](0015-simulated-payment-provider.md) | The payment provider is simulated, keyed on the amount | Accepted |
+| [0016](0016-the-gate-may-only-refuse.md) | The Redis availability gate may only ever refuse | Accepted |
+| [0017](0017-outbox-and-processed-events.md) | A transactional outbox out, a processed-events table in | Accepted |

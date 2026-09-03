@@ -16,12 +16,11 @@ import com.flashcart.common.event.message.InventoryReservationFailed;
 import com.flashcart.common.event.message.InventoryReserved;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.ReserveInventory;
-import com.flashcart.common.web.CorrelationId;
+import com.flashcart.common.event.outbox.IdempotentHandler;
 import com.flashcart.inventory.domain.Reservation;
 import com.flashcart.inventory.service.ReservationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -48,18 +47,24 @@ public class InventoryCommandListener {
 
 	private static final Logger log = LoggerFactory.getLogger(InventoryCommandListener.class);
 
+	/** Names this consumer in processed_events, so each service dedupes independently. */
+	private static final String CONSUMER = "inventory-commands";
+
 	private final ReservationService reservations;
 	private final EventPublisher events;
+	private final IdempotentHandler handler;
 
-	public InventoryCommandListener(ReservationService reservations, EventPublisher events) {
+	public InventoryCommandListener(ReservationService reservations, EventPublisher events,
+			IdempotentHandler handler) {
 		this.reservations = reservations;
 		this.events = events;
+		this.handler = handler;
 	}
 
 	@KafkaListener(topics = Topics.INVENTORY_COMMANDS, containerFactory = "reserveInventoryFactory",
 			groupId = InventoryKafkaConfig.GROUP + "-reserve")
 	public void onReserve(ReserveInventory command) {
-		withCorrelationId(command.correlationId(), () -> {
+		handler.handle(command, CONSUMER, () -> {
 			log.debug("Reserving stock for {}", command.reservationKey());
 			try {
 				List<ReservationService.RequestedLine> lines = command.lines().stream()
@@ -95,7 +100,7 @@ public class InventoryCommandListener {
 	@KafkaListener(topics = Topics.INVENTORY_COMMANDS, containerFactory = "releaseInventoryFactory",
 			groupId = InventoryKafkaConfig.GROUP + "-release")
 	public void onRelease(ReleaseInventory command) {
-		withCorrelationId(command.correlationId(), () -> {
+		handler.handle(command, CONSUMER, () -> {
 			try {
 				reservations.release(command.reservationKey(), command.reason());
 			}
@@ -115,7 +120,7 @@ public class InventoryCommandListener {
 	@KafkaListener(topics = Topics.INVENTORY_COMMANDS, containerFactory = "commitInventoryFactory",
 			groupId = InventoryKafkaConfig.GROUP + "-commit")
 	public void onCommit(CommitInventory command) {
-		withCorrelationId(command.correlationId(), () -> {
+		handler.handle(command, CONSUMER, () -> {
 			reservations.commit(command.reservationKey());
 			events.publish(Topics.INVENTORY_EVENTS, new InventoryCommitted(
 					EventMetadata.of(InventoryCommitted.TYPE, command.aggregateId()),
@@ -128,23 +133,4 @@ public class InventoryCommandListener {
 				? flashCart.getCode() : "INVENTORY_REJECTED";
 	}
 
-	/**
-	 * Puts the originating request's correlation id back into the MDC for the duration of the
-	 * handler.
-	 *
-	 * <p>Without this a checkout stops being traceable the instant it crosses the bus: the listener
-	 * runs on a Kafka consumer thread that never saw the HTTP request, so every log line it writes
-	 * would be unattributable.
-	 */
-	private static void withCorrelationId(String correlationId, Runnable work) {
-		if (correlationId != null) {
-			MDC.put(CorrelationId.MDC_KEY, correlationId);
-		}
-		try {
-			work.run();
-		}
-		finally {
-			MDC.remove(CorrelationId.MDC_KEY);
-		}
-	}
 }

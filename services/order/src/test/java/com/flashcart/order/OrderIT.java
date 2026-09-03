@@ -59,6 +59,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Import({ RecordingEventPublisher.class, OrderIT.FakeCatalogConfig.class })
 @TestPropertySource(properties = {
 		"flashcart.order.reconciler.enabled=false",
+		// This suite records what the service decides, so its own publisher must win. Turning the
+		// queue off leaves the consumer-side dedup beans in place, which the listeners still need.
+		"flashcart.outbox.enabled=false",
 		// No listener containers: this suite drives the saga directly and there is no broker to
 		// connect to, so leaving them on would just log connection failures for the whole run.
 		"spring.kafka.listener.auto-startup=false"

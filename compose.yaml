@@ -252,12 +252,20 @@ services:
       # be compared under load in Phase 10 rather than argued about.
       RESERVATION_STRATEGY: ATOMIC_UPDATE
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # The admission gate. It can only ever refuse; PostgreSQL still decides every reservation, so
+      # losing Redis costs throughput and nothing else. Set AVAILABILITY_GATE_ENABLED=false to
+      # take it out of the path and compare.
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      AVAILABILITY_GATE_ENABLED: "true"
     ports:
       - "18085:8085"
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   shipping:
