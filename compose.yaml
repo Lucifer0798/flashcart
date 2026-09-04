@@ -290,7 +290,55 @@ services:
       kafka:
         condition: service_healthy
 
+  # --- observability (Phase 9) ---------------------------------------------------------------------
+  #
+  # Two containers, both small. Deliberately not a full LGTM stack: this runs on a laptop alongside
+  # seven services, Postgres, Redis and Kafka, and memory pressure here has already turned one test
+  # run into a nine-hour one. Tracing is Phase 11's problem, when failure injection gives it
+  # something worth tracing.
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+      # Six hours, because nothing here is worth keeping overnight and the volume is a laptop's.
+      - --web.enable-lifecycle
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "19090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      # Anonymous admin: this is a local demonstration stack, and a login prompt between someone and
+      # the dashboard is friction with no security value on a laptop-only port binding.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: light
+      GF_FEATURE_TOGGLES_ENABLE: ""
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "13000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+
 volumes:
   postgres-data:
   redis-data:
   kafka-data:
+  prometheus-data:
+  grafana-data:

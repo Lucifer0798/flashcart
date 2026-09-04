@@ -4,6 +4,7 @@ import java.time.Clock;
 
 import com.flashcart.inventory.service.AvailabilityGate;
 import com.flashcart.inventory.service.DisabledAvailabilityGate;
+import com.flashcart.inventory.service.MeteredAvailabilityGate;
 import com.flashcart.inventory.service.RedisAvailabilityGate;
 
 import io.swagger.v3.oas.models.OpenAPI;
@@ -11,6 +12,7 @@ import io.swagger.v3.oas.models.info.Info;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -43,13 +45,19 @@ public class InventoryConfig {
 	 */
 	@Bean
 	public AvailabilityGate availabilityGate(InventoryProperties properties,
-			ObjectProvider<StringRedisTemplate> redis) {
+			ObjectProvider<StringRedisTemplate> redis, MeterRegistry meters) {
 		StringRedisTemplate template = redis.getIfAvailable();
+		AvailabilityGate gate;
 		if (!properties.gate().enabled() || template == null) {
 			log.info("Availability gate disabled; every reservation goes straight to the database");
-			return new DisabledAvailabilityGate();
+			gate = new DisabledAvailabilityGate();
 		}
-		return new RedisAvailabilityGate(template, properties.gate().ttl());
+		else {
+			gate = new RedisAvailabilityGate(template, properties.gate().ttl());
+		}
+		// Wrapped either way, so a run with the gate switched off is measured the same as a run with
+		// it on. A control you cannot compare against is not a control.
+		return new MeteredAvailabilityGate(gate, meters);
 	}
 
 	@Bean

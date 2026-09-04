@@ -237,6 +237,45 @@ jobs:
           echo "order recorded $CLAIMS processed event(s)"
           test "$CLAIMS" -gt 0
 
+      - name: The platform is observable
+        run: |
+          set -e
+          # Every service has listed `prometheus` in its actuator exposure since Phase 1. Until
+          # Phase 9 added the micrometer registry that line was aspirational and the endpoint
+          # returned 404 -- exactly the kind of config that looks right and does nothing, which is
+          # why it is asserted here rather than assumed.
+          for s in gateway:8080 catalog:8081 order:8082 user:8083 payment:8084 inventory:8085 shipping:8086; do
+            NAME=${s%%:*}
+            docker compose exec -T $NAME wget -qO- "http://localhost:${s##*:}/actuator/prometheus" | grep -q '^# HELP' || { echo "$NAME exposes no metrics"; exit 1; }
+            echo "$NAME is scrapeable"
+          done
+
+          # Prometheus must have actually scraped them. A green target list is the difference between
+          # "the endpoint exists" and "the endpoint is being collected", and only the second is
+          # observability.
+          for i in $(seq 1 30); do
+            UP=$(docker compose exec -T prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=up{job="flashcart"}' | grep -o '"value":\[[^]]*,"1"\]' | wc -l)
+            echo "  $UP of 7 targets up"
+            if [ "$UP" -ge 7 ]; then break; fi
+            sleep 5
+          done
+          test "$UP" -ge 7
+
+          # And the domain metrics must carry real values, not just exist. The checkout above went
+          # through the saga, so a transition counter with no samples means the instrumentation is
+          # wired to nothing.
+          SAGA=$(docker compose exec -T prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=sum(flashcart_saga_transitions_total)' | grep -o '"value":\[[^]]*\]' | grep -oE '"[0-9.]+"$' | tr -d '"')
+          echo "saga transitions recorded: ${SAGA:-none}"
+          test -n "$SAGA"
+
+          # The outbox gauge is the one that makes a silently stalled relay visible, so it has to be
+          # present and sane -- drained, because everything above completed.
+          docker compose exec -T prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=max(flashcart_outbox_oldest_age_seconds)' | grep -q '"value"' || { echo "outbox gauge is missing"; exit 1; }
+
+          # Grafana provisioned itself from the repo rather than from a volume someone edited by hand.
+          docker compose exec -T grafana wget -qO- http://localhost:3000/api/dashboards/uid/flashcart-overview | grep -q '"title"' 
+          echo "grafana dashboard provisioned"
+
       - name: Nothing was dead-lettered
         run: |
           # A message on the DLQ means a consumer exhausted its retries. Everything above should

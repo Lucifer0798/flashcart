@@ -23,3 +23,4 @@ when someone revisits it in six months.
 | [0015](0015-simulated-payment-provider.md) | The payment provider is simulated, keyed on the amount | Accepted |
 | [0016](0016-the-gate-may-only-refuse.md) | The Redis availability gate may only ever refuse | Accepted |
 | [0017](0017-outbox-and-processed-events.md) | A transactional outbox out, a processed-events table in | Accepted |
+| [0018](0018-metrics-answer-questions-the-logs-cannot.md) | Instrument the silences, not the traffic | Accepted |

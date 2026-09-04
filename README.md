@@ -113,6 +113,8 @@ Each service's `application.yml` already defaults to the published host ports.
 | Catalog Swagger UI      | http://localhost:18081/swagger-ui.html         |
 | Gateway's routing table | http://localhost:18080/actuator/gateway/routes |
 | Kafka UI                | http://localhost:18090                         |
+| Grafana                 | http://localhost:13000                         |
+| Prometheus              | http://localhost:19090                         |
 
 ---
 
@@ -414,6 +416,37 @@ flashcart.outbox.relay.fixed-delay: PT1S    # added latency on every message
 Both tables grow without bound today; retention is Phase 10's problem and is noted as debt in
 [ADR 0017](docs/adr/0017-outbox-and-processed-events.md).
 
+## Watching it work
+
+Every service exposes `/actuator/prometheus`. Prometheus scrapes all seven; Grafana displays them,
+with the dashboard and the alert rules provisioned from `infra/` rather than clicked together.
+
+- **Grafana** — <http://localhost:13000> (no login; it is a laptop stack on a local port binding)
+- **Prometheus** — <http://localhost:19090>
+
+The hand-written metrics all exist for one reason: **this platform's dangerous failures are silent by
+design, and health checks answer a question nobody was asking.** The relay swallows its exceptions so
+that a transient fault does not stop it being rescheduled — which means a dead relay leaves every
+service reporting `UP` while nothing reaches the bus. The gate degrades to `UNKNOWN` when Redis is
+gone, and the platform stays perfectly correct while doing it.
+
+| Metric | The silence it breaks |
+|---|---|
+| `flashcart_outbox_oldest_age_seconds` | A relay that stopped. Queue *depth* cannot tell you this — under a flash sale a deep queue is correct; an old row never is |
+| `flashcart_outbox_unpublished` | Depth, for shape. Meaningless alone, necessary next to the age |
+| `flashcart_outbox_send_failures_total` | One poisoned row retried for ever, which climbs here while depth sits at one |
+| `flashcart_gate_decisions_total{decision}` | `refused` is the gate's whole payoff; sustained `unknown` means Redis is gone and the gate is doing nothing |
+| `flashcart_saga_transitions_total{from,to}` | Where orders actually end up, and which compensation is firing |
+| `flashcart_saga_transitions_declined_total` | Since Phase 8 this should be zero — duplicates are caught earlier, so anything here is a real anomaly |
+
+The alert rules in `infra/prometheus/rules.yml` follow the same rule: each one describes a state that
+is wrong on its own terms, never a metric merely being high. A threshold nobody can justify is a
+threshold that gets silenced.
+
+There is deliberately **no tracing yet**. Correlation IDs already stitch a checkout together in the
+logs, and a tracing backend earns its container once Phase 11 is injecting failures worth tracing —
+see [ADR 0018](docs/adr/0018-metrics-answer-questions-the-logs-cannot.md).
+
 ## Building and testing
 
 ```bash
@@ -448,6 +481,7 @@ it through the gateway — because a green unit suite proves nothing about the r
 | Redis | 7 |
 | Kafka | 3.9 (KRaft, no ZooKeeper) |
 | Migrations | Flyway |
+| Metrics | Micrometer → Prometheus 3, Grafana 11 |
 | Tests | JUnit 5, AssertJ, Testcontainers 2 |
 
 Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies:2025.1.3` pins
@@ -468,7 +502,7 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 | 6     | Payment + saga                              | ✅     |
 | 7     | Redis + concurrency                         | ✅     |
 | 8     | Outbox + idempotency                        | ✅     |
-| 9     | Observability                               | ⬜     |
+| 9     | Observability                               | ✅     |
 | 10    | Load testing                                | ⬜     |
 | 11    | Failure injection                           | ⬜     |
 | 12    | Documentation + architecture diagrams       | ⬜     |

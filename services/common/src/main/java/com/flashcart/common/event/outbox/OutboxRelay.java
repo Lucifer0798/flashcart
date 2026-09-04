@@ -6,6 +6,8 @@ import java.util.UUID;
 import com.flashcart.common.web.CorrelationId;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -63,11 +65,15 @@ public class OutboxRelay {
 	private final KafkaTemplate<String, String> kafka;
 	private final TransactionTemplate transactions;
 	private final int batchSize;
+	private final Counter published;
+	private final Counter sendFailures;
 
 	public OutboxRelay(JdbcTemplate jdbc, KafkaTemplate<String, String> kafka,
-			PlatformTransactionManager transactionManager, int batchSize) {
+			PlatformTransactionManager transactionManager, MeterRegistry registry, int batchSize) {
 		this.jdbc = jdbc;
 		this.kafka = kafka;
+		this.published = OutboxMetrics.published(registry);
+		this.sendFailures = OutboxMetrics.sendFailures(registry);
 		// A TransactionTemplate rather than @Transactional: relayBatch is called from relay() on
 		// this same object, and self-invocation does not pass through the proxy, so the annotation
 		// would silently do nothing. That is not a cosmetic difference here — without a surrounding
@@ -89,6 +95,11 @@ public class OutboxRelay {
 		catch (RuntimeException ex) {
 			// A scheduled method that throws stops being rescheduled by some executors, and a relay
 			// that quietly stops means every saga in the system halts with no error anywhere.
+			//
+			// Swallowing it is what keeps the relay alive, and also what makes the failure silent:
+			// the service stays healthy while nothing new reaches the bus. OutboxMetrics is the
+			// counterweight — the queue depth and the age of its oldest row are what actually
+			// surface this.
 			log.error("Outbox relay failed; will retry on the next tick", ex);
 		}
 	}
@@ -111,14 +122,15 @@ public class OutboxRelay {
 						rs.getInt("attempts")),
 				batchSize);
 
-		int published = 0;
+		int sent = 0;
 		for (Pending message : pending) {
 			if (send(message)) {
 				jdbc.update(MARK_PUBLISHED, message.id());
-				published++;
+				sent++;
+				this.published.increment();
 			}
 		}
-		return published;
+		return sent;
 	}
 
 	private boolean send(Pending message) {
@@ -145,6 +157,7 @@ public class OutboxRelay {
 			return false;
 		}
 		catch (Exception ex) {
+			sendFailures.increment();
 			jdbc.update(RECORD_FAILURE, ex.getMessage(), message.id());
 			if (message.attempts() > 0 && message.attempts() % 10 == 0) {
 				log.error("Outbox message {} has failed {} times; a saga is stalled behind it",

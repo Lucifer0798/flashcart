@@ -1,0 +1,36 @@
+# Scrape config for the local stack.
+#
+# Every service has exposed `prometheus` in its actuator endpoints since Phase 1; until Phase 9 added
+# the micrometer registry, that line was aspirational and the endpoint returned 404.
+#
+# The `job` label is what distinguishes services here, which is why no common `application` tag is
+# set in the applications themselves — two names for one thing is how dashboards end up querying the
+# wrong one.
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+  # Short, because the things worth watching here move fast: a flash sale is over in minutes and an
+  # outbox stall is interesting within seconds. This is a laptop stack, not a fleet.
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  - job_name: flashcart
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["gateway:8080"]
+        labels: { service: gateway }
+      - targets: ["catalog:8081"]
+        labels: { service: catalog }
+      - targets: ["order:8082"]
+        labels: { service: order }
+      - targets: ["user:8083"]
+        labels: { service: user }
+      - targets: ["payment:8084"]
+        labels: { service: payment }
+      - targets: ["inventory:8085"]
+        labels: { service: inventory }
+      - targets: ["shipping:8086"]
+        labels: { service: shipping }

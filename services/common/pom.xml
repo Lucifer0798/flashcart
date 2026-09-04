@@ -64,6 +64,13 @@
 		  entities living in this library would have to be @EntityScan-ed by every service that used
 		  it — coupling every service's persistence configuration to a shared jar for two tables.
 		-->
+		<!-- Metrics. Optional like everything else here: a service without a registry still gets the
+		     outbox and the listeners, it just does not get instrumented. -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-core</artifactId>
+			<optional>true</optional>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-jdbc</artifactId>

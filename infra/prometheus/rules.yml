@@ -1,0 +1,55 @@
+# Alerting rules, each one written for a failure this project actually had.
+#
+# Nothing here fires on a metric being "high". Every rule below describes a state that is wrong on
+# its own terms, because a threshold nobody can justify is a threshold that gets silenced.
+groups:
+  - name: flashcart
+    rules:
+      - alert: OutboxStalled
+        # Depth alone cannot distinguish a busy relay from a dead one: under a flash sale a deep
+        # queue is correct. An *old* row is never correct. Two minutes is far beyond the 1s poll.
+        expr: flashcart_outbox_oldest_age_seconds > 120
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.service }}: outbox has not drained for over two minutes"
+          description: >
+            The relay swallows its own exceptions so that a transient failure does not stop it being
+            rescheduled, which means a dead relay looks completely healthy: HTTP still answers, the
+            service is UP, and nothing new ever reaches the bus. Sagas in flight will stop silently.
+            Check the relay logs and outbox_messages.last_error.
+
+      - alert: OutboxSendFailing
+        # A single poisoned row retried every tick climbs here while depth stays at one -- a
+        # different shape from a broker outage, and worth telling apart.
+        expr: rate(flashcart_outbox_send_failures_total[2m]) > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }}: outbox sends are failing"
+
+      - alert: AvailabilityGateBlind
+        # UNKNOWN means Redis said nothing. Correctness is unaffected -- PostgreSQL still decides --
+        # so the platform degrades to Phase 6 performance and looks perfectly healthy while doing it.
+        # That silence is the whole reason this alert exists.
+        expr: rate(flashcart_gate_decisions_total{decision="unknown"}[5m]) > 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "inventory: the availability gate is returning UNKNOWN steadily"
+          description: >
+            Redis is unreachable or the counters are never warming. Every reservation is going
+            straight to PostgreSQL. Nothing is incorrect; the gate is simply not doing anything.
+
+      - alert: SagaTransitionsDeclined
+        # Before Phase 8 this guard doubled as the deduplicator, so a decline was routine and
+        # unalertable. Now that processed_events catches duplicates first, a decline means a
+        # transition was genuinely attempted that should not have been.
+        expr: rate(flashcart_saga_transitions_declined_total[5m]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "order: the state machine is refusing transitions"
+          description: >
+            Duplicates are caught by processed_events before reaching the guard, so this is not
+            redelivery. Something is driving an order into a state it cannot reach from.
