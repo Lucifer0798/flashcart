@@ -264,9 +264,13 @@ jobs:
           # And the domain metrics must carry real values, not just exist. The checkout above went
           # through the saga, so a transition counter with no samples means the instrumentation is
           # wired to nothing.
-          SAGA=$(docker compose exec -T prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=sum(flashcart_saga_transitions_total)' | grep -o '"value":\[[^]]*\]' | grep -oE '"[0-9.]+"$' | tr -d '"')
+          SAGA_RAW=$(docker compose exec -T prometheus wget -qO- 'http://localhost:9090/api/v1/query?query=sum(flashcart_saga_transitions_total)')
+          # Unanchored on purpose: the value array ends "4"] so a $ anchor after the quote never
+          # matches. That typo made this step report "none" for a metric Prometheus was holding
+          # perfectly well -- a check that fails for its own reasons is worse than no check.
+          SAGA=$(echo "$SAGA_RAW" | grep -oE '"[0-9.]+"\]' | tr -d '"]')
           echo "saga transitions recorded: ${SAGA:-none}"
-          test -n "$SAGA"
+          if [ -z "$SAGA" ]; then echo "raw response: $SAGA_RAW"; exit 1; fi
 
           # The outbox gauge is the one that makes a silently stalled relay visible, so it has to be
           # present and sane -- drained, because everything above completed.
