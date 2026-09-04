@@ -3,6 +3,9 @@ package com.flashcart.order.service;
 import java.util.UUID;
 
 import com.flashcart.common.event.EventMetadata;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
 import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
 import com.flashcart.common.event.message.CommitInventory;
@@ -75,11 +78,14 @@ public class OrderSaga {
 	private final OrderRepository orders;
 	private final OrderStatusChangeRepository history;
 	private final EventPublisher events;
+	private final MeterRegistry meters;
 
-	public OrderSaga(OrderRepository orders, OrderStatusChangeRepository history, EventPublisher events) {
+	public OrderSaga(OrderRepository orders, OrderStatusChangeRepository history, EventPublisher events,
+			MeterRegistry meters) {
 		this.orders = orders;
 		this.history = history;
 		this.events = events;
+		this.meters = meters;
 	}
 
 	// --- outbound: the commands this saga issues ---------------------------------------------------
@@ -217,8 +223,28 @@ public class OrderSaga {
 		if (!OrderStateMachine.canTransition(order.getStatus(), next)) {
 			log.info("Ignoring {} for order {}: not reachable from {} (most likely a redelivery)",
 					next, order.getOrderNumber(), order.getStatus());
+			// Since Phase 8 this should be close to zero: processed_events catches duplicates before
+			// they ever reach here, so what is left is transitions that genuinely should not have
+			// been attempted. A rising rate is a real anomaly, which is precisely what this guard
+			// could not tell you when it was also the deduplicator.
+			Counter.builder("flashcart.saga.transitions.declined")
+					.description("Transitions the state machine refused as unreachable")
+					.tag("from", order.getStatus().name())
+					.tag("to", next.name())
+					.register(meters)
+					.increment();
 			return;
 		}
+
+		// Tagged from -> to rather than counted per handler, so the compensation paths are legible
+		// without knowing the code: PAYMENT_PENDING -> PAYMENT_FAILED and RESERVED ->
+		// RESERVATION_EXPIRED are the two that say the platform is losing orders, and to what.
+		Counter.builder("flashcart.saga.transitions")
+				.description("Order state transitions the saga applied")
+				.tag("from", order.getStatus().name())
+				.tag("to", next.name())
+				.register(meters)
+				.increment();
 
 		history.save(order.transitionTo(next, reason, CorrelationId.current()));
 		thenDo.accept(order);

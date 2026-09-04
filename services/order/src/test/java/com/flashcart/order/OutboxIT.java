@@ -8,6 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.event.message.ReserveInventory;
+import com.flashcart.common.event.outbox.OutboxMetrics;
 import com.flashcart.common.event.outbox.ProcessedEvents;
 import com.flashcart.common.order.OrderStatus;
 import com.flashcart.order.api.dto.OrderResponse;
@@ -31,6 +32,8 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+
+import io.micrometer.core.instrument.MeterRegistry;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -95,6 +98,12 @@ class OutboxIT {
 
 	@Autowired
 	private ObjectMapper objectMapper;
+
+	@Autowired
+	private OutboxMetrics outboxMetrics;
+
+	@Autowired
+	private MeterRegistry meters;
 
 	@Autowired
 	private OrderSaga saga;
@@ -240,6 +249,32 @@ class OutboxIT {
 		assertThat(outbox()).hasSize(afterFirst);
 		assertThat(rest.getForObject("/api/v1/orders/" + order.orderNumber(), OrderResponse.class)
 				.status()).isEqualTo(OrderStatus.PAYMENT_PENDING);
+	}
+
+	// --- the gauges that make a stalled relay visible ------------------------------------------------
+
+	@Test
+	@DisplayName("the outbox gauges report what is actually in the table")
+	void gaugesFollowTheTable() {
+		// The relay is switched off in this suite, so everything placed here stays queued. That is
+		// exactly the situation the gauges exist to make visible, and it is the one a healthy-looking
+		// service is otherwise indistinguishable from.
+		place();
+		place();
+		outboxMetrics.sample();
+
+		assertThat(meters.get("flashcart.outbox.unpublished").gauge().value()).isEqualTo(2.0);
+		// Age is asserted as "not negative" rather than a value: what matters is that it tracks the
+		// oldest row at all. Pinning a number here would be asserting the clock.
+		assertThat(meters.get("flashcart.outbox.oldest.age.seconds").gauge().value())
+				.isGreaterThanOrEqualTo(0.0);
+
+		jdbc.update("update outbox_messages set published_at = now()");
+		outboxMetrics.sample();
+
+		// Drained. A gauge that only ever climbs would alert for ever after one busy moment.
+		assertThat(meters.get("flashcart.outbox.unpublished").gauge().value()).isZero();
+		assertThat(meters.get("flashcart.outbox.oldest.age.seconds").gauge().value()).isZero();
 	}
 
 	@Test

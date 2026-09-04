@@ -5,6 +5,9 @@ import java.util.Map;
 import com.flashcart.common.event.EventPublisher;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringSerializer;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -87,9 +90,35 @@ public class OutboxAutoConfiguration {
 	@ConditionalOnProperty(name = "flashcart.outbox.enabled", havingValue = "true", matchIfMissing = true)
 	public OutboxRelay outboxRelay(JdbcTemplate jdbc, KafkaTemplate<String, String> outboxKafkaTemplate,
 			org.springframework.transaction.PlatformTransactionManager transactionManager,
+			ObjectProvider<MeterRegistry> registry,
 			@org.springframework.beans.factory.annotation.Value(
 					"${flashcart.outbox.relay.batch-size:100}") int batchSize) {
-		return new OutboxRelay(jdbc, outboxKafkaTemplate, transactionManager, batchSize);
+		return new OutboxRelay(jdbc, outboxKafkaTemplate, transactionManager, meterRegistry(registry),
+				batchSize);
+	}
+
+	/**
+	 * The outbox gauges, which are the only thing that makes a stalled relay visible.
+	 *
+	 * <p>Registered next to the relay rather than in a separate observability module, because the
+	 * two are the same fact: the relay is allowed to fail silently precisely so it keeps running,
+	 * and these are what turn that silence into a number.
+	 */
+	@Bean
+	@ConditionalOnProperty(name = "flashcart.outbox.enabled", havingValue = "true", matchIfMissing = true)
+	public OutboxMetrics outboxMetrics(JdbcTemplate jdbc, ObjectProvider<MeterRegistry> registry) {
+		return new OutboxMetrics(jdbc, meterRegistry(registry));
+	}
+
+	/**
+	 * Falls back to a throwaway registry when the service has no actuator.
+	 *
+	 * <p>Metrics are optional here in the same way the web and Kafka pieces are: a service without a
+	 * registry still gets a working outbox, it just is not instrumented. Recording into a discarded
+	 * registry is cheaper than threading null checks through the relay's hot path.
+	 */
+	private static MeterRegistry meterRegistry(ObjectProvider<MeterRegistry> registry) {
+		return registry.getIfAvailable(SimpleMeterRegistry::new);
 	}
 
 	@Bean

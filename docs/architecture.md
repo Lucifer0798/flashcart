@@ -513,3 +513,47 @@ immediately, catching three bugs on its first run:
 
 Then the type-filter bug above, on the second run. None of the four was visible to any test that
 faked the bus.
+
+---
+
+## Observability (Phase 9)
+
+Health checks answer "is the process alive". That was never the question.
+
+Every genuinely dangerous failure in this platform is **silent by design**, and each silence is the
+direct consequence of a decision made earlier for good reasons:
+
+- The **outbox relay** swallows its own exceptions, because a scheduled method that throws stops
+  being rescheduled by some executors, and a relay that quietly stops halts every saga. Swallowing is
+  correct — and it is precisely what makes a dead relay indistinguishable from an idle one. Every
+  service still reports `UP`.
+- The **availability gate** degrades to `UNKNOWN` when Redis is unreachable and the platform stays
+  completely correct, because PostgreSQL still decides every reservation. Degrading quietly is the
+  gate's whole design; it also means losing Redis costs throughput invisibly.
+- The **reservation sweeper** ran from Phase 3 to Phase 8 without once completing, throwing on every
+  tick into a log nobody was reading. Nothing counted sweeps, so nothing noticed.
+
+So the metrics written by hand are not a survey of the system. They are a list of those silences.
+`flashcart_outbox_oldest_age_seconds` is the sharpest of them: queue *depth* cannot distinguish a busy
+relay from a dead one, because under a flash sale a deep queue is correct. An old row is only ever
+wrong.
+
+The gauges are polled from the tables rather than incremented in memory, because an in-memory count
+resets on restart and drifts from the rows it describes — and the case worth catching is exactly the
+one where the process is running and wrong. The gate is instrumented with a **decorator**, so the
+disabled gate is measured identically: a run with the gate off is the control, and a control you
+cannot compare against is not a control.
+
+Alert rules follow the same discipline. Each describes a state that is wrong on its own terms — an
+outbox row two minutes old, a sustained `UNKNOWN` rate, a declined transition now that Phase 8 makes
+duplicates impossible at that guard. None fires on a metric merely being high, because a threshold
+nobody can justify is a threshold that gets silenced.
+
+CI asserts that all seven targets are actually **scraped**, not merely that the endpoints exist. That
+distinction is the entire lesson of this phase: `prometheus` sat in every service's actuator exposure
+list from Phase 1 to Phase 8 while the endpoint returned 404, because no registry was on the
+classpath. Configuration that looks right and does nothing is the failure mode this platform keeps
+producing, and the only defence is asserting the observable behaviour rather than the setting.
+
+There is deliberately no tracing yet — see
+[ADR 0018](adr/0018-metrics-answer-questions-the-logs-cannot.md) for why it waits for Phase 11.

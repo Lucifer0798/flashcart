@@ -4,6 +4,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.inventory.service.AvailabilityGate;
+import com.flashcart.inventory.service.MeteredAvailabilityGate;
+import com.flashcart.inventory.service.RedisAvailabilityGate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -41,7 +43,13 @@ class AvailabilityGateIT extends AbstractInventoryIT {
 	void gateIsWiredIn() {
 		// Guards against the whole suite silently proving nothing: if this were the disabled gate,
 		// every test below would pass while exercising none of the code they are about.
-		assertThat(gate.getClass().getSimpleName()).isEqualTo("RedisAvailabilityGate");
+		//
+		// Unwrapped because Phase 9 wraps every gate in a metrics decorator, including the disabled
+		// one -- which is deliberate, so that a run with the gate off is measured identically. That
+		// makes the wrapper's own type useless as evidence, and the delegate's type the real answer.
+		assertThat(gate).isInstanceOf(MeteredAvailabilityGate.class);
+		assertThat(((MeteredAvailabilityGate) gate).delegate())
+				.isInstanceOf(RedisAvailabilityGate.class);
 	}
 
 	@Test

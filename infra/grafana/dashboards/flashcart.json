@@ -1,0 +1,136 @@
+{
+  "uid": "flashcart-overview",
+  "title": "FlashCart — the bus and the gate",
+  "tags": ["flashcart"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "type": "row",
+      "title": "The outbox — is anything stuck?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Oldest unpublished message (seconds)",
+      "description": "The number that actually matters. Depth alone cannot tell a busy relay from a dead one — under a flash sale a deep queue is correct. An old row never is.",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 30 },
+              { "color": "red", "value": 120 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (service) (flashcart_outbox_oldest_age_seconds)",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox depth",
+      "description": "Queued messages awaiting the relay. A steady small number is normal under load; a line that only climbs is a relay that has stopped.",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 1 },
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } },
+      "targets": [
+        {
+          "expr": "flashcart_outbox_unpublished",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Relay throughput vs send failures",
+      "description": "A single poisoned row retried every tick climbs the failure line while depth stays at one — a different shape from a broker outage.",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(rate(flashcart_outbox_published_total[1m]))",
+          "legendFormat": "published/s"
+        },
+        {
+          "expr": "sum(rate(flashcart_outbox_send_failures_total[1m]))",
+          "legendFormat": "failures/s"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "The availability gate — is it earning its place?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Gate decisions",
+      "description": "REFUSED is the gate's entire reason to exist: requests answered without touching a connection. If it stays near zero under load, the gate is pure overhead. A sustained UNKNOWN rate means Redis is unreachable and the gate is doing nothing — while the platform stays perfectly correct, because PostgreSQL still decides.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 20, "stacking": { "mode": "normal" } } } },
+      "targets": [
+        {
+          "expr": "sum by (decision) (rate(flashcart_gate_decisions_total[1m]))",
+          "legendFormat": "{{decision}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Share of requests refused before the database",
+      "description": "The gate's payoff, as a fraction. Everything else still reached PostgreSQL, where the conditional UPDATE decided it.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(flashcart_gate_decisions_total{decision=\"refused\"}[5m])) / clamp_min(sum(rate(flashcart_gate_decisions_total[5m])), 0.001)",
+          "legendFormat": "refused"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "The saga — where orders are going",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Order transitions",
+      "description": "Tagged from → to, so the compensation paths are legible without reading the code. PAYMENT_PENDING → PAYMENT_FAILED and RESERVED → RESERVATION_EXPIRED are the two that say the platform is losing orders, and to what.",
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (from, to) (rate(flashcart_saga_transitions_total[1m]))",
+          "legendFormat": "{{from}} → {{to}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Transitions the state machine declined",
+      "description": "Should sit at zero. Since Phase 8, duplicates are caught by processed_events before reaching the guard, so anything here is a transition that was genuinely attempted and should not have been.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (from, to) (rate(flashcart_saga_transitions_declined_total[5m]))",
+          "legendFormat": "{{from}} → {{to}}"
+        }
+      ]
+    }
+  ]
+}
