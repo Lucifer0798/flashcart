@@ -45,6 +45,10 @@ public class ServiceInfoController {
 				"implementedIn", "Phase 3",
 				"reservationStrategy", properties.strategy().name(),
 				"reservationTtl", properties.reservationTtl().toString(),
-				"sweeperEnabled", String.valueOf(properties.sweeper().enabled()));
+				"sweeperEnabled", String.valueOf(properties.sweeper().enabled()),
+				// Reported so a load run can be labelled with the configuration that actually ran,
+				// rather than the one it was asked for. A measurement labelled with an intention is
+				// a number that gets quoted later and cannot be checked.
+				"availabilityGate", String.valueOf(properties.gate().enabled()));
 	}
 }

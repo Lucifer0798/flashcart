@@ -13,6 +13,9 @@ import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.order.IllegalOrderTransitionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -118,6 +121,31 @@ public class GlobalExceptionHandler {
 			HttpServletRequest request) {
 		return build(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "UNSUPPORTED_MEDIA_TYPE",
 				"Content type is not supported for this path", request);
+	}
+
+	/**
+	 * The pool said no, which is the pool working.
+	 *
+	 * <p>Inventory runs a 30-connection pool with a two-second {@code connection-timeout}, chosen so
+	 * that a stampede sheds load rather than queueing every buyer for thirty seconds behind a
+	 * connection that will not arrive in time to matter. When that fires, the request has not failed
+	 * because anything is broken — it has been deliberately turned away.
+	 *
+	 * <p>A 500 says "this service is faulty" and invites a client to give up or page someone. A 503
+	 * with {@code Retry-After} says "come back", which is both true and actionable. The Phase 10 load
+	 * run made the difference concrete: at 200 concurrent buyers against 100 units, 49 of 2000
+	 * requests were shed this way. Nothing was wrong; every one of them reported a server error.
+	 */
+	@ExceptionHandler({ TransientDataAccessException.class, DataAccessResourceFailureException.class })
+	public ResponseEntity<ApiError> handleOverloaded(Exception ex, HttpServletRequest request) {
+		log.warn("Shedding a request: no database connection available in time ({})", ex.getMessage());
+		return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+				// One second, because the pool timeout is two: a client that retries sooner than the
+				// queue can drain simply rejoins the back of it.
+				.header(HttpHeaders.RETRY_AFTER, "1")
+				.body(ApiError.of(HttpStatus.SERVICE_UNAVAILABLE.value(), "SERVICE_BUSY",
+						"Too many requests in flight; retry shortly", request.getRequestURI(),
+						CorrelationId.current()));
 	}
 
 	@ExceptionHandler(Exception.class)

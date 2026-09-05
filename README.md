@@ -447,6 +447,39 @@ There is deliberately **no tracing yet**. Correlation IDs already stitch a check
 logs, and a tracing backend earns its container once Phase 11 is injecting failures worth tracing —
 see [ADR 0018](docs/adr/0018-metrics-answer-questions-the-logs-cannot.md).
 
+## Under load
+
+```bash
+./load/run.sh ATOMIC_UPDATE true 100 200 2000
+```
+
+2000 shoppers arriving at once for **100 units**. The result that matters is not throughput:
+
+| Strategy | Gate | Granted | Refused | Errors | `reserved` in PostgreSQL |
+|---|---|---|---|---|---|
+| `ATOMIC_UPDATE` | on | 100 | 1900 | 0 | 100 |
+| `ATOMIC_UPDATE` | off | 100 | 1900 | 0 | 100 |
+| `PESSIMISTIC_LOCK` | on | 100 | 1900 | 0 | 100 |
+| `PESSIMISTIC_LOCK` | off | 100 | 1900 | 0 | 100 |
+
+Every configuration sold exactly 100 units, and every rejected buyer got a clean `409` rather than a
+timeout. That is the platform's whole thesis, tested under the only conditions that could disprove it.
+
+**There is deliberately no throughput ranking here.** Run-to-run variance inside a single
+configuration spans 271–460 req/s, wider than any gap between configurations, so this hardware cannot
+tell them apart — and a table with a winner in it would be a ranking of which run got a quieter
+machine. [ADR 0019](docs/adr/0019-measure-or-say-you-cannot.md) explains why the absence of a number
+is the honest artefact, and retires a figure Phase 7 quoted too confidently.
+
+The load run found two real defects anyway. Deliberate load-shedding was surfacing as `500` when it
+should be `503` with `Retry-After` — a client cannot tell "we are overloaded, retry" from "we are
+broken" — and the harness itself miscounted three times before it told the truth, because a repeated
+`reservationKey` is answered idempotently with `201` and k6 counted every replay as a sale. `run.sh`
+now fails the run when its own tally disagrees with the database.
+
+Full detail, including the retention policy for the Phase 8 tables, is in
+[docs/load-testing.md](docs/load-testing.md).
+
 ## Building and testing
 
 ```bash
@@ -503,7 +536,7 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 | 7     | Redis + concurrency                         | ✅     |
 | 8     | Outbox + idempotency                        | ✅     |
 | 9     | Observability                               | ✅     |
-| 10    | Load testing                                | ⬜     |
+| 10    | Load testing                                | ✅     |
 | 11    | Failure injection                           | ⬜     |
 | 12    | Documentation + architecture diagrams       | ⬜     |
 
