@@ -26,3 +26,4 @@ application-local.yml
 # Logs and scratch
 *.log
 logs/
+load/results

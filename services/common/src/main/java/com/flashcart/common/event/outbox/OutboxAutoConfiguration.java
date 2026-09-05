@@ -104,6 +104,24 @@ public class OutboxAutoConfiguration {
 	 * two are the same fact: the relay is allowed to fail silently precisely so it keeps running,
 	 * and these are what turn that silence into a number.
 	 */
+	/**
+	 * Keeps the two Phase 8 tables from growing for ever.
+	 *
+	 * <p>Not gated on {@code flashcart.outbox.enabled} for the same reason the dedup beans are not:
+	 * a service that publishes directly still consumes idempotently, so {@code processed_events}
+	 * still fills up and still needs pruning.
+	 */
+	@Bean
+	public OutboxRetention outboxRetention(JdbcTemplate jdbc,
+			@org.springframework.beans.factory.annotation.Value(
+					"${flashcart.outbox.retention.published:P7D}") java.time.Duration published,
+			@org.springframework.beans.factory.annotation.Value(
+					"${flashcart.outbox.retention.processed:P7D}") java.time.Duration processed,
+			@org.springframework.beans.factory.annotation.Value(
+					"${flashcart.outbox.retention.batch-size:5000}") int batchSize) {
+		return new OutboxRetention(jdbc, published, processed, batchSize);
+	}
+
 	@Bean
 	@ConditionalOnProperty(name = "flashcart.outbox.enabled", havingValue = "true", matchIfMissing = true)
 	public OutboxMetrics outboxMetrics(JdbcTemplate jdbc, ObjectProvider<MeterRegistry> registry) {

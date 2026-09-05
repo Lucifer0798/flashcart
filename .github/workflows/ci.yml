@@ -280,6 +280,34 @@ jobs:
           docker compose exec -T grafana wget -qO- http://localhost:3000/api/dashboards/uid/flashcart-overview | grep -q '"title"' 
           echo "grafana dashboard provisioned"
 
+      - name: The anti-oversell invariant holds under concurrency
+        run: |
+          set -e
+          # A small, deliberately un-timed load run. CI cannot measure throughput -- a shared runner
+          # is noisier than the laptop that already could not distinguish the configurations -- so
+          # this asserts only the thing that is not a matter of degree: with 5 units and 100
+          # simultaneous buyers, exactly 5 succeed.
+          #
+          # It also keeps the harness from rotting. The load script found two real defects in Phase
+          # 10 and silently miscounted three times before that; an unused tool would have done
+          # neither.
+          G=http://localhost:18080
+          SKU=CI-RUSH-$(date +%s)
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json'             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI rush\"}" > /dev/null
+
+          docker run --rm --network flashcart_default             -v "$PWD/load/scripts:/scripts:ro"             -e GATEWAY=http://gateway:8080 -e SKU="$SKU" -e VUS=100 -e ITERATIONS=300             grafana/k6:0.56.0 run /scripts/flash-sale.js > /tmp/k6.txt 2>&1 || true
+          grep -E 'reservations_(granted|refused|shed|errored)' /tmp/k6.txt || true
+
+          GRANTED=$(grep -oE 'reservations_granted[. ]*: *[0-9]+' /tmp/k6.txt | grep -oE '[0-9]+$')
+          RESERVED=$(docker compose exec -T postgres psql -U flashcart -d flashcart_inventory -tAc             "select reserved from stock_items where sku = '$SKU'" | tr -d '[:space:]')
+          AVAILABLE=$(docker compose exec -T postgres psql -U flashcart -d flashcart_inventory -tAc             "select on_hand - reserved from stock_items where sku = '$SKU'" | tr -d '[:space:]')
+          echo "granted=$GRANTED reserved=$RESERVED available=$AVAILABLE"
+
+          # The ledger is the authority; k6 agreeing with it is what makes k6 worth reading.
+          test "$RESERVED" = "5"
+          test "$AVAILABLE" = "0"
+          test "$GRANTED" = "5"
+
       - name: Nothing was dead-lettered
         run: |
           # A message on the DLQ means a consumer exhausted its retries. Everything above should

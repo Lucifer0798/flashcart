@@ -250,14 +250,17 @@ services:
       SPRING_DATASOURCE_PASSWORD: flashcart
       # ATOMIC_UPDATE is the default and the right answer; PESSIMISTIC_LOCK is here so the two can
       # be compared under load in Phase 10 rather than argued about.
-      RESERVATION_STRATEGY: ATOMIC_UPDATE
+      # Overridable from the environment so the Phase 10 load harness can restart this one service
+      # with a different strategy and re-run the identical scenario. The defaults are the correct
+      # production answer; the alternatives exist to be measured, not chosen.
+      RESERVATION_STRATEGY: ${RESERVATION_STRATEGY:-ATOMIC_UPDATE}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       # The admission gate. It can only ever refuse; PostgreSQL still decides every reservation, so
       # losing Redis costs throughput and nothing else. Set AVAILABILITY_GATE_ENABLED=false to
       # take it out of the path and compare.
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      AVAILABILITY_GATE_ENABLED: "true"
+      AVAILABILITY_GATE_ENABLED: "${AVAILABILITY_GATE_ENABLED:-true}"
     ports:
       - "18085:8085"
     depends_on:
