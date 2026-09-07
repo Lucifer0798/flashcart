@@ -13,6 +13,18 @@ x-service-base: &service-base
     context: .
     dockerfile: Dockerfile
   restart: unless-stopped
+  # The Dockerfile runs the JVM with -XX:MaxRAMPercentage=75 so it sizes its heap from the
+  # container's cgroup limit rather than a hard-coded -Xmx. That only works if something sets a
+  # limit -- and nothing did, so every service sized itself against the whole 7.6GB host and the
+  # seven JVMs together held 2.9GB. The Dockerfile was right; compose was not holding up its end.
+  #
+  # Services that need more override this individually below.
+  #
+  # 384m rather than 320m: at 320 the busier services sat at 95% of their limit at idle, and under
+  # the Phase 10 load run the extra GC pressure turned into connection-pool timeouts -- 29 of 2000
+  # requests shed where the unlimited baseline shed none. Memory saved by making the platform worse
+  # under load is not saved.
+  mem_limit: 384m
   environment: &service-env
     FLASHCART_VERSION: 0.1.0-SNAPSHOT
   healthcheck:
@@ -66,6 +78,9 @@ services:
     image: apache/kafka:3.9.0
     # KRaft: no ZooKeeper. One process is both broker and controller here.
     environment:
+      # The broker defaults to a 1G heap, which it comes nowhere near with four topics and a
+      # handful of partitions. Capped so the ceiling matches the actual workload.
+      KAFKA_HEAP_OPTS: -Xms128m -Xmx320m
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       # Points at localhost, not the service name. A single-node broker registering its controller
@@ -107,6 +122,11 @@ services:
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
+    # Behind a profile: 305MB resident for a browsing convenience, on a machine where memory pressure
+    # has already turned one test run into a nine-hour one. Start it when you actually want to look
+    # at a topic:  docker compose --profile tools up -d kafka-ui
+    profiles: [tools]
+    mem_limit: 384m
     depends_on:
       kafka:
         condition: service_healthy
@@ -167,6 +187,8 @@ services:
 
   order:
     <<: *service-base
+    # Drives the saga and holds the outbox relay, so it is the busiest of the rest.
+    mem_limit: 512m
     build:
       context: .
       dockerfile: Dockerfile
@@ -242,6 +264,9 @@ services:
 
   inventory:
     <<: *service-base
+    # The write-contended service: a 30-connection pool, the availability gate and the
+    # expiry sweeper, and the one that peaked highest under the Phase 10 load runs.
+    mem_limit: 640m
     build:
       context: .
       dockerfile: Dockerfile

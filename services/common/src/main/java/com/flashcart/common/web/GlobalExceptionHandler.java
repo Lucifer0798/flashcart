@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.TransientDataAccessException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -136,8 +137,16 @@ public class GlobalExceptionHandler {
 	 * with {@code Retry-After} says "come back", which is both true and actionable. The Phase 10 load
 	 * run made the difference concrete: at 200 concurrent buyers against 100 units, 49 of 2000
 	 * requests were shed this way. Nothing was wrong; every one of them reported a server error.
+	 *
+	 * <p>{@link CannotCreateTransactionException} is in this list because the first version of this
+	 * handler missed it. The same pool timeout arrives as a {@code DataAccessException} when the
+	 * connection is fetched directly, but as a {@code TransactionException} -- a different hierarchy
+	 * entirely -- when it happens while opening a transaction. Half the shedding was still reported
+	 * as a server fault, and it only became visible once tighter container memory limits made pool
+	 * timeouts common enough to notice.
 	 */
-	@ExceptionHandler({ TransientDataAccessException.class, DataAccessResourceFailureException.class })
+	@ExceptionHandler({ TransientDataAccessException.class, DataAccessResourceFailureException.class,
+			CannotCreateTransactionException.class })
 	public ResponseEntity<ApiError> handleOverloaded(Exception ex, HttpServletRequest request) {
 		log.warn("Shedding a request: no database connection available in time ({})", ex.getMessage());
 		return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
