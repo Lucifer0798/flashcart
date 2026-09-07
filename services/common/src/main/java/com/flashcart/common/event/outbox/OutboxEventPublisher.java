@@ -6,6 +6,7 @@ import com.flashcart.common.event.DomainEvent;
 import com.flashcart.common.event.EventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import tools.jackson.databind.ObjectMapper;
@@ -49,8 +50,9 @@ public class OutboxEventPublisher implements EventPublisher {
 
 	private static final String INSERT = """
 			insert into outbox_messages
-			  (id, topic, message_key, event_id, event_type, correlation_id, payload, created_at)
-			values (?, ?, ?, ?, ?, ?, ?::jsonb, now())
+			  (id, topic, message_key, event_id, event_type, correlation_id, trace_parent, payload,
+			   created_at)
+			values (?, ?, ?, ?, ?, ?, ?, ?::jsonb, now())
 			on conflict (event_id) do nothing
 			""";
 
@@ -73,8 +75,29 @@ public class OutboxEventPublisher implements EventPublisher {
 				message.eventId(),
 				message.eventType(),
 				message.correlationId(),
+				traceParent(),
 				json.writeValueAsString(message));
 
 		log.debug("Queued {} for {} to {}", message.eventType(), message.aggregateId(), topic);
+	}
+
+	/**
+	 * The current trace, as a W3C {@code traceparent}, so the relay can resume it later.
+	 *
+	 * <p>Built from the MDC rather than by injecting a {@code Tracer}, which keeps this class free of
+	 * a hard dependency on tracing being present at all: a service without it simply queues a null
+	 * and nothing else changes.
+	 *
+	 * <p>The sampled flag is hard-coded to {@code 01}. That is honest for this platform, where
+	 * sampling is 1.0 and every trace is recorded; it would need to carry the real decision anywhere
+	 * that sampled selectively, or the relay would resurrect traces the sampler had dropped.
+	 */
+	private static String traceParent() {
+		String traceId = MDC.get("traceId");
+		String spanId = MDC.get("spanId");
+		if (traceId == null || spanId == null) {
+			return null;
+		}
+		return "00-" + traceId + "-" + spanId + "-01";
 	}
 }

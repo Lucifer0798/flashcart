@@ -557,3 +557,56 @@ producing, and the only defence is asserting the observable behaviour rather tha
 
 There is deliberately no tracing yet — see
 [ADR 0018](adr/0018-metrics-answer-questions-the-logs-cannot.md) for why it waits for Phase 11.
+
+---
+
+## Failure injection and tracing (Phase 11)
+
+Phase 10 showed the platform refuses cleanly when overwhelmed. It did not show what happens when a
+dependency simply disappears, and those are different questions: overload is the system doing its job
+under strain, while a dead dependency is the system being asked to do its job without a limb.
+
+`chaos/inject.sh` kills Redis mid-sale, Kafka with messages already committed to the outbox, inventory
+mid-saga, and catalog during a checkout. Each scenario asserts what a specific ADR claims must still
+hold, because the interesting question is never "did it break" but "did it break the way we said it
+would".
+
+### The trace is the artefact
+
+Tracing was deferred twice — Phase 9 judged it not worth the memory until there were injected failures
+worth following. That judgement was right, and it is also why the tracing work here was harder than
+adding a container.
+
+The outbox deliberately separates deciding to publish from publishing. The relay sends later, on
+another thread, in another request, possibly after a restart. That separation is the whole point of
+ADR 0017, and it is precisely what cuts a distributed trace in half: the buyer's request ends at the
+outbox write, and a rootless relay span begins somewhere else. The fragments are least useful exactly
+when a saga stalls, which is when following it end to end matters most.
+
+So the W3C `traceparent` is captured into the outbox row at queue time and replayed onto the record
+when the relay sends. The result is one trace of 21 spans across five services for a single checkout,
+including the Redis `evalsha` where the availability gate runs its Lua script.
+
+The counter-intuitive part is that the relay's Kafka template must **not** be observation-enabled.
+Spring Kafka's producer instrumentation injects *the current* context into outgoing headers, and on a
+relay thread that is the relay's own scheduled tick — so enabling it silently overwrites the buyer's
+trace with the sweeper's and the consumer joins the wrong one. The instrumentation is not wrong; it
+has no way to know the interesting context finished minutes ago in another process. See
+[ADR 0020](adr/0020-a-trace-must-survive-the-outbox.md).
+
+### Boot 4 made this harder than it should have been
+
+Getting a single span to Zipkin took four separate artifacts, and every intermediate state looked
+correctly configured while doing nothing:
+
+- a Brave bridge resolved, compiled and packaged, and traced nothing, because Boot 4 ships
+  `spring-boot-micrometer-tracing-opentelemetry` and has no Brave equivalent;
+- the OpenTelemetry Boot module alone left `NoopTracerAutoConfiguration` in place, because the bridge
+  that implements Micrometer's `Tracer` is a separate dependency;
+- with the tracer working and trace ids in every log line, nothing reached Zipkin, because the
+  exporter needs `spring-boot-zipkin` on top;
+- and the endpoint property had been renamed from `management.zipkin.tracing.endpoint` to
+  `management.tracing.export.zipkin.endpoint` — the old key still binds without complaint.
+
+Four layers, each of which read as "configured" and produced no traces. This is the same failure this
+repository keeps meeting from a different direction: the thing that looks right and does nothing.

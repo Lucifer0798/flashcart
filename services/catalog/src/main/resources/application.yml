@@ -41,10 +41,26 @@ management:
       probes:
         enabled: true
       show-details: when-authorized
+  tracing:
+    propagation:
+      # W3C rather than Brave's default B3, because the outbox stores the trace context as a
+      # traceparent string and replays it when the relay finally sends. One format in the database,
+      # on the wire, and in every header, instead of a translation step nobody remembers.
+      type: ${TRACE_PROPAGATION:w3c}
+    sampling:
+      # Everything, because this is a demonstration stack where the interesting traces are the rare
+      # ones -- an injected failure, a compensation, a redelivery. Sampling at 10% would mostly
+      # discard exactly the traces Phase 11 exists to look at. A real deployment would not do this.
+      probability: ${TRACE_SAMPLING:1.0}
+    export:
+      zipkin:
+        # Boot 4 renamed this from management.zipkin.tracing.endpoint. The old key still appears in
+        # the configuration metadata, so it binds without complaint and exports nothing.
+        endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 logging:
   pattern:
-    level: "%5p [${spring.application.name},%X{correlationId:-}]"
+    level: "%5p [${spring.application.name},%X{correlationId:-},%X{traceId:-},%X{spanId:-}]"
 
 springdoc:
   swagger-ui:

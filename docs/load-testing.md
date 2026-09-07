@@ -119,3 +119,28 @@ The two tables are not equally safe to prune, and the difference is the whole po
 The default is seven days against Kafka's default seven — deliberately not a comfortable margin, and
 documented on `OutboxRetention` so the next person changing Kafka's retention has a chance of noticing
 that it is load-bearing.
+
+---
+
+## What Phase 11 added to this picture
+
+Phase 10 measured the platform under overload. Phase 11 killed its dependencies, and found two
+defects that load testing could not have surfaced, because both only appear when something is *gone*
+rather than merely busy.
+
+**The availability gate's failure path was correct but unbounded.** ADR 0016 promised that losing
+Redis costs throughput and nothing else, and the fallback to `UNKNOWN` did work exactly as written.
+What nobody had bounded was how *long* it took: Lettuce's default command timeout is sixty seconds,
+so with Redis unreachable every reservation waited on the optimisation before falling through to the
+database that was going to answer anyway. Injected failure produced twelve- to nineteen-second
+requests and then gateway timeouts — 40 of 40 requests failing on a platform whose design says it
+should have degraded quietly. `spring.data.redis.timeout` is now 250ms: a gate that cannot answer
+faster than PostgreSQL has nothing useful to say.
+
+**A silent upstream reported itself as a server fault.** Killing catalog mid-checkout produced
+textbook behaviour — no half-built order, no stranded stock — reported to the caller as `500`. ADR
+0010 insists a refusal and a silence are different failures; a `500` makes a silence indistinguishable
+from a bug in the order service. `UpstreamUnavailableException` now maps to `503`.
+
+Both were invisible to the load harness, which only ever asked the platform to do too much, never to
+do without.

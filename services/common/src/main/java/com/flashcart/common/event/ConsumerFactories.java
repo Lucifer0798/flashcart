@@ -91,6 +91,11 @@ public final class ConsumerFactories {
 		// Filtered records are acknowledged rather than left uncommitted; without this the offset
 		// never advances past a message this listener does not want, and it is redelivered forever.
 		factory.setAckDiscarded(true);
+		// Set here rather than left to spring.kafka.listener.observation-enabled, because that
+		// property configures Boot's own auto-configured factory and this one is hand-built. Without
+		// it every consumer starts a fresh rootless trace and the bus becomes the place traces go to
+		// die -- which is the one hop worth tracing.
+		factory.getContainerProperties().setObservationEnabled(true);
 		return factory;
 	}
 

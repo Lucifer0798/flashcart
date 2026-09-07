@@ -71,6 +71,14 @@
 			<artifactId>micrometer-core</artifactId>
 			<optional>true</optional>
 		</dependency>
+		<!-- Used only by the relay, to re-enter the trace that queued a message before sending it.
+		     Optional like everything else here: without it the outbox still works, the trace simply
+		     breaks at the relay. -->
+		<dependency>
+			<groupId>io.opentelemetry</groupId>
+			<artifactId>opentelemetry-api</artifactId>
+			<optional>true</optional>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-jdbc</artifactId>

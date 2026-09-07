@@ -7,6 +7,7 @@ import jakarta.validation.ConstraintViolationException;
 
 import com.flashcart.common.api.ApiError;
 import com.flashcart.common.error.BadRequestException;
+import com.flashcart.common.error.UpstreamUnavailableException;
 import com.flashcart.common.error.ConflictException;
 import com.flashcart.common.error.FlashCartException;
 import com.flashcart.common.error.ResourceNotFoundException;
@@ -164,6 +165,11 @@ public class GlobalExceptionHandler {
 		}
 		if (ex instanceof BadRequestException) {
 			return HttpStatus.BAD_REQUEST;
+		}
+		// A silent upstream is not this service being broken. See ADR 0010, and
+		// UpstreamUnavailableException for why 503 rather than 500 is the honest answer.
+		if (ex instanceof UpstreamUnavailableException) {
+			return HttpStatus.SERVICE_UNAVAILABLE;
 		}
 		return HttpStatus.INTERNAL_SERVER_ERROR;
 	}

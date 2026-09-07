@@ -57,7 +57,8 @@ threshold nobody can justify is a threshold that gets silenced.
 
 **Distributed tracing (Micrometer Tracing + Tempo/Zipkin).** The obvious fit for a saga crossing four
 services over Kafka, and genuinely the better tool for "where did this one checkout go". Deferred, not
-rejected: correlation IDs already stitch a checkout together in the logs, and tracing earns its
+rejected — and delivered in Phase 11, see [ADR 0020](0020-a-trace-must-survive-the-outbox.md), which
+also records why the outbox made it harder than adding a container: correlation IDs already stitch a checkout together in the logs, and tracing earns its
 containers once Phase 11 is injecting failures worth tracing. Two containers here, not four, because
 memory pressure on this machine has already turned one test run into a nine-hour one.
 
@@ -87,5 +88,6 @@ because nothing here is worth keeping overnight. The saga transition counter is 
 which is bounded by the state machine but is genuinely cardinality that would need watching if the
 status enum ever grew large.
 
-There is also no tracing, so "why was *this* order slow" remains a question the logs answer by hand,
-via the correlation id. That is a real gap and an accepted one until Phase 11.
+There was also no tracing when this was written, so "why was *this* order slow" was a question the
+logs answered by hand via the correlation id. Phase 11 closed that gap
+([ADR 0020](0020-a-trace-must-survive-the-outbox.md)).

@@ -25,3 +25,4 @@ when someone revisits it in six months.
 | [0017](0017-outbox-and-processed-events.md) | A transactional outbox out, a processed-events table in | Accepted |
 | [0018](0018-metrics-answer-questions-the-logs-cannot.md) | Instrument the silences, not the traffic | Accepted |
 | [0019](0019-measure-or-say-you-cannot.md) | Report what the measurement supports, and no more | Accepted |
+| [0020](0020-a-trace-must-survive-the-outbox.md) | A trace has to survive the outbox | Accepted |
