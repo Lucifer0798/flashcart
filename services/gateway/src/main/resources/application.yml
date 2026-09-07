@@ -56,6 +56,21 @@ management:
       # Lets `curl /actuator/gateway/routes` answer "what is this gateway actually routing" without
       # reading the config. Read-only; the mutating route endpoints stay off.
       access: read_only
+  tracing:
+    propagation:
+      # W3C rather than Brave's default B3, because the outbox stores the trace context as a
+      # traceparent string and replays it when the relay finally sends. One format in the database,
+      # on the wire, and in every header, instead of a translation step nobody remembers.
+      type: ${TRACE_PROPAGATION:w3c}
+    sampling:
+      # Everything: the gateway starts every trace, so sampling here decides what the rest of the
+      # platform can be seen doing at all.
+      probability: ${TRACE_SAMPLING:1.0}
+    export:
+      zipkin:
+        # Boot 4 renamed this from management.zipkin.tracing.endpoint. The old key still appears in
+        # the configuration metadata, so it binds without complaint and exports nothing.
+        endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 logging:
   level:

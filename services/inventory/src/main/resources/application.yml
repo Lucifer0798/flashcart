@@ -1,6 +1,21 @@
 spring:
   application:
     name: flashcart-inventory
+  data:
+    redis:
+      # Short, and the shortness is the whole point.
+      #
+      # The availability gate exists to save a database round trip measured in single milliseconds.
+      # Lettuce's default command timeout is sixty seconds, so with Redis unreachable every
+      # reservation waited on the optimisation before falling through to the database that was going
+      # to answer anyway. ADR 0016 promised that losing Redis costs throughput and nothing else; it
+      # said nothing about how long the falling-through takes, and Phase 11's failure injection found
+      # requests hanging for twelve seconds and more until the gateway gave up on them.
+      #
+      # A gate that cannot answer in a quarter of a second has nothing useful to say: PostgreSQL will
+      # answer faster than that. Timing out here is the fast path, not the sad path.
+      timeout: ${REDIS_TIMEOUT:250ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:250ms}
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:15432/flashcart_inventory}
     username: ${SPRING_DATASOURCE_USERNAME:flashcart}
@@ -30,6 +45,13 @@ spring:
     enabled: true
     locations: classpath:db/migration
   kafka:
+    template:
+      # Producer-side spans. Without this the send is invisible and a trace stops at the caller.
+      observation-enabled: true
+    listener:
+      # Consumer-side spans, and the half that matters: this is what continues the trace across the
+      # bus instead of starting a fresh rootless one on the consumer thread.
+      observation-enabled: true
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
 
 server:
@@ -47,11 +69,27 @@ management:
       probes:
         enabled: true
       show-details: when-authorized
+  tracing:
+    propagation:
+      # W3C rather than Brave's default B3, because the outbox stores the trace context as a
+      # traceparent string and replays it when the relay finally sends. One format in the database,
+      # on the wire, and in every header, instead of a translation step nobody remembers.
+      type: ${TRACE_PROPAGATION:w3c}
+    sampling:
+      # Everything, because this is a demonstration stack where the interesting traces are the rare
+      # ones -- an injected failure, a compensation, a redelivery. Sampling at 10% would mostly
+      # discard exactly the traces Phase 11 exists to look at. A real deployment would not do this.
+      probability: ${TRACE_SAMPLING:1.0}
+    export:
+      zipkin:
+        # Boot 4 renamed this from management.zipkin.tracing.endpoint. The old key still appears in
+        # the configuration metadata, so it binds without complaint and exports nothing.
+        endpoint: ${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 logging:
   pattern:
     # The correlation id is stamped into the MDC by CorrelationIdFilter in flashcart-common.
-    level: "%5p [${spring.application.name},%X{correlationId:-}]"
+    level: "%5p [${spring.application.name},%X{correlationId:-},%X{traceId:-},%X{spanId:-}]"
 
 springdoc:
   swagger-ui:

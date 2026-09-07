@@ -83,7 +83,22 @@ public class OutboxAutoConfiguration {
 		config.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 120_000);
 
 		ProducerFactory<String, String> factory = new DefaultKafkaProducerFactory<>(config);
-		return new KafkaTemplate<>(factory);
+		KafkaTemplate<String, String> template = new KafkaTemplate<>(factory);
+		// Same reason as the listener factories: this template is built by hand, so the Boot property
+		// does not reach it. The relay is the platform's real publisher now -- an untraced relay
+		// means no send is ever traced at all.
+		// Deliberately NOT observation-enabled.
+		//
+		// Producer instrumentation would inject whatever context the relay thread happens to be in --
+		// its own scheduled-task trace -- overwriting the traceparent the relay sets by hand from the
+		// outbox row. The header the consumer needs is the one belonging to the buyer's request,
+		// which happened minutes earlier and possibly in a previous process, and no amount of
+		// instrumenting the relay reconstructs that. So the relay writes the header itself and
+		// nothing is allowed to clobber it.
+		//
+		// The cost is one missing span for the send. The benefit is that a checkout is a single trace
+		// rather than two fragments, which is the entire reason tracing was added.
+		return template;
 	}
 
 	@Bean

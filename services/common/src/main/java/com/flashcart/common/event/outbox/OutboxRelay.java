@@ -7,6 +7,12 @@ import com.flashcart.common.web.CorrelationId;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import io.micrometer.core.instrument.Counter;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,7 +53,8 @@ public class OutboxRelay {
 	private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
 
 	private static final String CLAIM = """
-			select id, topic, message_key, event_id, event_type, correlation_id, payload::text, attempts
+			select id, topic, message_key, event_id, event_type, correlation_id, trace_parent,
+			       payload::text, attempts
 			  from outbox_messages
 			 where published_at is null
 			 order by created_at, id
@@ -118,6 +125,7 @@ public class OutboxRelay {
 						rs.getString("event_id"),
 						rs.getString("event_type"),
 						rs.getString("correlation_id"),
+						rs.getString("trace_parent"),
 						rs.getString("payload"),
 						rs.getInt("attempts")),
 				batchSize);
@@ -144,12 +152,26 @@ public class OutboxRelay {
 			record.headers().add(new RecordHeader(CorrelationId.HEADER,
 					message.correlationId().getBytes(StandardCharsets.UTF_8)));
 		}
-
+		if (message.traceParent() != null) {
+			// The buyer's trace, replayed onto the wire by hand.
+			//
+			// The relay's template is deliberately not observation-enabled, so nothing overwrites
+			// this. Producer instrumentation would inject whatever context the relay thread is in --
+			// its own scheduled-task trace -- and the context that matters belongs to a request that
+			// finished minutes ago, possibly in a previous process. Re-entering the stored context
+			// below covers the send itself; this header is what the consumer actually reads.
+			record.headers().add(new RecordHeader("traceparent",
+					message.traceParent().getBytes(StandardCharsets.UTF_8)));
+		}
 		try {
 			// Awaited deliberately, unlike the direct publisher: the row must only be marked
 			// published once the broker has actually acknowledged it. Marking optimistically would
 			// reintroduce exactly the loss the outbox exists to prevent.
-			kafka.send(record).get();
+			// Also re-entered as the current context, so anything the send itself records lands in
+			// the buyer's trace rather than the relay's tick.
+			try (Scope ignored = traceScope(message.traceParent())) {
+				kafka.send(record).get();
+			}
 			return true;
 		}
 		catch (InterruptedException ex) {
@@ -167,7 +189,38 @@ public class OutboxRelay {
 		}
 	}
 
+
+	/**
+	 * Re-enters the trace recorded when this message was queued.
+	 *
+	 * <p>Returns a no-op scope when there is no stored context, when the string is malformed, or when
+	 * OpenTelemetry is not on the classpath at all -- in each case the relay still sends, and only
+	 * the trace is poorer for it. Failing a message because its tracing metadata is unreadable would
+	 * be a spectacularly bad trade.
+	 */
+	private static Scope traceScope(String traceParent) {
+		if (traceParent == null) {
+			return Scope.noop();
+		}
+		String[] parts = traceParent.split("-");
+		if (parts.length != 4) {
+			return Scope.noop();
+		}
+		try {
+			SpanContext parent = SpanContext.createFromRemoteParent(parts[1], parts[2],
+					TraceFlags.fromHex(parts[3], 0), TraceState.getDefault());
+			if (!parent.isValid()) {
+				return Scope.noop();
+			}
+			return Context.current().with(Span.wrap(parent)).makeCurrent();
+		}
+		catch (RuntimeException ex) {
+			log.debug("Unreadable traceparent {}; sending untraced", traceParent);
+			return Scope.noop();
+		}
+	}
+
 	private record Pending(UUID id, String topic, String key, String eventId, String eventType,
-			String correlationId, String payload, int attempts) {
+			String correlationId, String traceParent, String payload, int attempts) {
 	}
 }

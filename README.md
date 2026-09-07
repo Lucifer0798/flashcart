@@ -114,6 +114,7 @@ Each service's `application.yml` already defaults to the published host ports.
 | Gateway's routing table | http://localhost:18080/actuator/gateway/routes |
 | Kafka UI                | http://localhost:18090                         |
 | Grafana                 | http://localhost:13000                         |
+| Zipkin                  | http://localhost:19411                         |
 | Prometheus              | http://localhost:19090                         |
 
 ---
@@ -480,6 +481,40 @@ now fails the run when its own tally disagrees with the database.
 Full detail, including the retention policy for the Phase 8 tables, is in
 [docs/load-testing.md](docs/load-testing.md).
 
+## Breaking it on purpose
+
+```bash
+./chaos/inject.sh [redis|kafka|inventory|catalog|all]
+```
+
+Each scenario kills something real and then asserts what an ADR claims must still be true. The
+assertions are the point — this is not a demonstration that things fall over, it is a check that the
+platform fails the way it says it does. The rule across all of them: **nothing may oversell, and
+nothing may be lost.** A scenario may refuse buyers, stall a saga, or return `503`. It may not sell a
+unit twice or swallow a committed message.
+
+| Scenario | The claim under test |
+|---|---|
+| Redis dies mid-sale | [ADR 0016](docs/adr/0016-the-gate-may-only-refuse.md) — the gate may only refuse, so losing it costs throughput and nothing else |
+| Kafka dies with messages queued | [ADR 0017](docs/adr/0017-outbox-and-processed-events.md) — nothing is lost, and the relay drains on recovery |
+| Inventory dies mid-saga | The command waits on the topic; `processed_events` decides whether it was already applied |
+| Catalog dies during checkout | [ADR 0010](docs/adr/0010-refusal-and-silence-are-different-failures.md) — a silence is not a refusal, so refuse cleanly and strand nothing |
+
+## Following one checkout
+
+Zipkin is on <http://localhost:19411>. A single checkout is **one trace across five services** —
+gateway → order → inventory → payment → shipping and back — including the Redis `evalsha` where the
+gate runs its Lua script.
+
+That is harder than it sounds, and the reason is the outbox. It deliberately separates deciding to
+publish from publishing, so the send happens later, on another thread, possibly after a restart —
+which is exactly what cuts a trace in half. The `traceparent` is therefore captured into the outbox
+row at queue time and replayed onto the record when the relay finally sends.
+
+The relay's Kafka template is deliberately **not** observation-enabled. Producer instrumentation
+injects whatever context the relay thread is in — its own scheduled tick — and would overwrite the
+buyer's trace with the sweeper's. See [ADR 0020](docs/adr/0020-a-trace-must-survive-the-outbox.md).
+
 ## Building and testing
 
 ```bash
@@ -515,6 +550,7 @@ it through the gateway — because a green unit suite proves nothing about the r
 | Kafka | 3.9 (KRaft, no ZooKeeper) |
 | Migrations | Flyway |
 | Metrics | Micrometer → Prometheus 3, Grafana 11 |
+| Tracing | Micrometer Tracing → OpenTelemetry → Zipkin 3 |
 | Tests | JUnit 5, AssertJ, Testcontainers 2 |
 
 Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies:2025.1.3` pins
@@ -537,7 +573,7 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 | 8     | Outbox + idempotency                        | ✅     |
 | 9     | Observability                               | ✅     |
 | 10    | Load testing                                | ✅     |
-| 11    | Failure injection                           | ⬜     |
+| 11    | Failure injection                           | ✅     |
 | 12    | Documentation + architecture diagrams       | ⬜     |
 
 Each phase deliberately leaves seams for what follows: the order state machine and the event

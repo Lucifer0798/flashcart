@@ -38,6 +38,39 @@
 			<artifactId>micrometer-registry-prometheus</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+		<!-- Tracing. Phase 9 deferred this deliberately: correlation ids already stitched a checkout
+		     together in the logs, and a backend was not worth its memory until there were injected
+		     failures worth following across the bus. Phase 11 is that. -->
+		<!-- OpenTelemetry, not Brave. Boot 4 ships spring-boot-micrometer-tracing-opentelemetry and
+		     has no Brave equivalent, so a brave bridge resolves, packages, and then silently traces
+		     nothing, because no autoconfiguration ever runs. The Boot module is a separate artifact from
+		     the bridge for the same reason flyway and the rest-client are: Boot 4 split its
+		     autoconfigurations out, and depending on the library alone wires up nothing. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-micrometer-tracing-opentelemetry</artifactId>
+		</dependency>
+		<!-- The bridge implements Micrometer's Tracer over OpenTelemetry. The Boot module above does
+		     not pull it, and without it Boot quietly installs NoopTracerAutoConfiguration: the SDK,
+		     the exporter and the autoconfiguration are all present and every span is discarded. -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-tracing-bridge-otel</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.opentelemetry</groupId>
+			<artifactId>opentelemetry-exporter-zipkin</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<!-- Supplies ZipkinAutoConfiguration and the endpoint property. The exporter above is only the
+		     encoder; without this module nothing ever reads management.zipkin.tracing.endpoint and
+		     the spans are built and dropped. Third separate artifact needed to make one feature work,
+		     which is the shape of Boot 4's autoconfiguration split. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-zipkin</artifactId>
+			<scope>runtime</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.springdoc</groupId>
 			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>

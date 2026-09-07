@@ -308,6 +308,33 @@ jobs:
           test "$AVAILABLE" = "0"
           test "$GRANTED" = "5"
 
+      - name: A checkout is one trace, across the outbox
+        run: |
+          set -e
+          # Not "is Zipkin up" -- that would pass with tracing switched off. This asserts the thing
+          # that was actually hard: that a single checkout is ONE trace spanning several services,
+          # including the hop where the outbox hands a message to the relay minutes later on another
+          # thread. That join is what breaks by default, and four separate misconfigurations during
+          # Phase 11 each left it looking configured while producing nothing.
+          TP=$(docker compose exec -T postgres psql -U flashcart -d flashcart_order -tAc             "select trace_parent from outbox_messages where trace_parent is not null order by created_at desc limit 1" | tr -d '[:space:]')
+          if [ -z "$TP" ]; then echo "no traceparent was stored on any outbox row"; exit 1; fi
+          echo "traceparent: $TP"
+          TRACE_ID=$(echo "$TP" | cut -d- -f2)
+
+          for i in $(seq 1 12); do
+            SPANS=$(docker compose exec -T zipkin wget -qO- "http://localhost:9411/api/v2/trace/$TRACE_ID" || echo '[]')
+            COUNT=$(echo "$SPANS" | grep -o '"serviceName"' | wc -l)
+            SERVICES=$(echo "$SPANS" | grep -oE '"serviceName":"[a-z-]+"' | sort -u | wc -l)
+            echo "  trace has $COUNT spans across $SERVICES service(s)"
+            if [ "$SERVICES" -ge 3 ]; then break; fi
+            sleep 5
+          done
+
+          # Three or more services in one trace means it crossed the bus at least twice: the buyer's
+          # request reached order, and the relay's send carried that same trace into a consumer.
+          test "$SERVICES" -ge 3
+          echo "$SPANS" | grep -oE '"serviceName":"[a-z-]+"' | sort -u
+
       - name: Nothing was dead-lettered
         run: |
           # A message on the DLQ means a consumer exhausted its retries. Everything above should
