@@ -11,38 +11,65 @@ Redis. Built in phases; see [Roadmap](#roadmap) for what is done and what is nex
 
 ## Architecture
 
+```mermaid
+flowchart TB
+    client([Shopper]):::ext --> gw["API Gateway :18080<br/><small>routing · correlation ids</small>"]:::svc
+
+    gw --> catalog["catalog :18081<br/><small>products, sales, prices</small>"]:::svc
+    gw --> order["order :18082<br/><small>the aggregate + state machine</small>"]:::svc
+    gw --> inventory["inventory :18085<br/><small>the contended number</small>"]:::svc
+    gw --> user["user :18083<br/><small>skeleton</small>"]:::skel
+
+    order -.->|"prices, synchronously<br/>(the only sync hop left)"| catalog
+
+    order e1@==>|outbox| bus
+    inventory e2@==>|outbox| bus
+    payment e3@==>|outbox| bus
+    shipping e4@==>|outbox| bus
+
+    bus{{"Kafka :19092<br/><small>commands · events · DLQ</small>"}}:::infra
+
+    bus ==> order
+    bus ==> inventory
+    bus ==> payment["payment :18084<br/><small>whether money moved</small>"]:::svc
+    bus ==> shipping["shipping :18086<br/><small>where the goods are</small>"]:::svc
+
+    inventory ==>|"admission gate<br/>may only ever refuse"| redis[("Redis :16379")]:::infra
+
+    catalog --> pg
+    order --> pg
+    user --> pg
+    payment --> pg
+    inventory --> pg
+    shipping --> pg
+    pg[("PostgreSQL :15432<br/><small>one database per service</small>")]:::infra
+
+    classDef svc fill:#e8f0fe,stroke:#4285f4,stroke-width:2px,color:#111
+    classDef skel fill:#f5f5f5,stroke:#bbb,stroke-dasharray:4 3,color:#666
+    classDef infra fill:#fff4e5,stroke:#f9a825,stroke-width:2px,color:#111
+    classDef ext fill:#fff,stroke:#999,color:#333
 ```
-                    ┌─────────────────┐
-                    │   API Gateway   │   :18080
-                    └────────┬────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ↓              ↓              ↓
-        ┌───────────┐  ┌────────────┐  ┌────────────┐
-        │  Catalog  │  │   Order    │  │   User     │
-        │  :18081   │  │   :18082   │  │   :18083   │
-        └─────┬─────┘  └──────┬─────┘  └────────────┘
-              │               │
-              ↓               ↓
-        ┌───────────┐   ┌──────────────┐
-        │   Redis   │   │ Kafka/Event  │
-        │  :16379   │   │ Bus  :19092  │
-        └───────────┘   └──────┬───────┘
-                               │
-                ┌──────────────┼──────────────┐
-                ↓              ↓              ↓
-          ┌──────────┐   ┌──────────┐   ┌──────────┐
-          │ Payment  │   │Inventory │   │ Shipping │
-          │  :18084  │   │  :18085  │   │  :18086  │
-          └──────────┘   └──────────┘   └──────────┘
-                │              │              │
-                └──────────────┼──────────────┘
-                               ↓
-                    PostgreSQL  :15432
-```
+
+**Two things in that picture are the whole design.**
+
+The **thick arrows are the outbox**: nothing writes to Kafka directly. A service commits its state
+change and the intent to publish in one transaction, and a relay sends it afterwards
+([ADR 0017](docs/adr/0017-outbox-and-processed-events.md)).
+
+**Redis hangs off inventory, not catalog** — it is an admission gate that may only ever refuse, never
+approve. PostgreSQL decides every reservation ([ADR 0016](docs/adr/0016-the-gate-may-only-refuse.md)).
+The original sketch for this project drew Redis behind catalog; building it moved the contention
+somewhere the sketch did not expect, which is the sort of thing a diagram drawn after the fact is
+for.
+
+Observability rides alongside: every service exposes `/actuator/prometheus`, scraped by **Prometheus**
+:19090 and drawn by **Grafana** :13000, with traces going to **Zipkin** :19411.
 
 Every host port sits in the 15000–19000 range so the whole stack coexists with anything already
 listening on 5432, 6379 or 8080.
+
+The full documentation set — the architecture reference, the load and chaos results, and twenty
+decision records — is mapped in [docs/README.md](docs/README.md).
 
 ### Service boundaries
 
@@ -574,7 +601,7 @@ Boot 4.0.8 rather than the newer 4.1.x is deliberate: `spring-cloud-dependencies
 | 9     | Observability                               | ✅     |
 | 10    | Load testing                                | ✅     |
 | 11    | Failure injection                           | ✅     |
-| 12    | Documentation + architecture diagrams       | ⬜     |
+| 12    | Documentation + architecture diagrams       | ✅     |
 
 Each phase deliberately leaves seams for what follows: the order state machine and the event
 contracts already live in `flashcart-common` and are unit-tested, every service already has its own
