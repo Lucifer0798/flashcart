@@ -1,7 +1,12 @@
 # FlashCart architecture
 
-The reference for how the pieces fit. Phase 12 expands this with proper rendered diagrams; this is
-the working version that stays accurate as phases land.
+The reference for how the pieces fit, and why each piece is shaped the way it is. Written alongside
+the build rather than after it, so where a decision turned out to be wrong the document says so
+instead of quietly describing the version that survived.
+
+Every diagram here is drawn from the system as built. The one in the README was redrawn in Phase 12
+because the original sketch put Redis behind catalog, and building it moved the contention somewhere
+the sketch had not expected.
 
 ---
 
@@ -74,21 +79,40 @@ Lives in `flashcart-common` (`OrderStatus`, `OrderStateMachine`) rather than ins
 service, because the state names travel on the event bus: inventory, payment and shipping all react
 to transitions they do not own.
 
-### Happy path
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> CREATED
 
-```
-CREATED ──▶ RESERVED ──▶ PAYMENT_PENDING ──▶ PAID ──▶ FULFILLING ──▶ SHIPPED ──▶ DELIVERED
+    CREATED --> RESERVED: stock held
+    RESERVED --> PAYMENT_PENDING: payment requested
+    PAYMENT_PENDING --> PAID: provider approved
+    PAID --> FULFILLING: shipment created
+    FULFILLING --> SHIPPED: carrier has it
+    SHIPPED --> DELIVERED
+    DELIVERED --> [*]
+
+    CREATED --> CANCELLED: sold out
+    RESERVED --> RESERVATION_EXPIRED: hold lapsed
+    PAYMENT_PENDING --> PAYMENT_FAILED: provider declined
+    PAYMENT_PENDING --> PAYMENT_TIMEOUT: provider silent
+
+    RESERVATION_EXPIRED --> CANCELLED: units returned
+    PAYMENT_FAILED --> CANCELLED: units returned
+
+    PAYMENT_TIMEOUT --> PAID: reconciliation finds the charge
+    PAYMENT_TIMEOUT --> CANCELLED: reconciliation finds none
+
+    CANCELLED --> [*]
+
+    note right of PAYMENT_TIMEOUT
+        The only state with two legal exits.
+        A decline is an answer; silence is not,
+        and the charge may still land.
+    end note
 ```
 
-### Failure paths
-
-```
-PAYMENT_PENDING ──▶ PAYMENT_FAILED      ──▶ CANCELLED     (release inventory)
-RESERVED        ──▶ RESERVATION_EXPIRED ──▶ CANCELLED     (release inventory)
-PAYMENT_PENDING ──▶ PAYMENT_TIMEOUT     ──▶ PAID | CANCELLED   (reconciliation decides)
-```
-
-Three properties are worth stating explicitly, because each one is a bug the table prevents:
+Three properties are worth stating explicitly, because each is a bug the table prevents:
 
 **Every write consults the table first.** At-least-once delivery is a certainty, not a risk. A
 payment callback arriving twice finds the order already `PAID`, and `PAID → PAID` is not a legal
@@ -106,6 +130,68 @@ never quietly cancelled with its reservation still held.
 
 `OrderStateMachine.releasesInventory(state)` is the single predicate the compensation logic asks.
 
+
+---
+
+## A checkout, end to end
+
+Drawn from a real trace: 27 spans across five services. The shaded band is the part that surprises
+people — the buyer's request ends at a database write, and everything after it happens later, on
+other threads, driven by a relay.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Buyer
+    participant GW as gateway
+    participant O as order
+    participant C as catalog
+    participant DB as order db
+    participant R as relay
+    participant K as Kafka
+    participant I as inventory
+    participant P as payment
+    participant S as shipping
+
+    Buyer->>GW: POST /api/v1/orders
+    GW->>O: route
+    O->>C: price the SKUs (sync)
+    C-->>O: prices
+    rect rgb(240, 245, 255)
+        note over O,DB: One transaction: the order and the intent to publish
+        O->>DB: INSERT order (CREATED)
+        O->>DB: INSERT outbox (ReserveInventory)
+    end
+    O-->>Buyer: 202 Accepted — CREATED
+
+    note over R,K: Everything below runs after the buyer has gone
+    R->>DB: claim unpublished (FOR UPDATE SKIP LOCKED)
+    R->>K: ReserveInventory + replayed traceparent
+    K->>I: consume
+    I->>I: gate may refuse · conditional UPDATE decides
+    I->>K: InventoryReserved
+    K->>O: consume → RESERVED → PAYMENT_PENDING
+    O->>K: RequestPayment
+    K->>P: consume
+    P->>K: PaymentCompleted
+    K->>O: consume → PAID
+    O->>K: CreateShipment
+    K->>S: consume
+    S->>K: ShipmentCreated
+    K->>O: consume → FULFILLING → SHIPPED
+```
+
+**Steps 5 and 6 are where the platform's guarantee lives.** The order and the message that will
+reserve its stock commit in one transaction, together or not at all, so no crash can leave an order
+that nothing was ever told about. Everything below step 7 can fail, retry, or arrive twice without
+losing anything, because none of it is where the message was created.
+
+**Every consumer claims the event before acting.** Redelivery is certain, so `processed_events`
+decides whether a message has already been applied rather than the state machine inferring it from
+"that transition is not legal right now" ([ADR 0017](adr/0017-outbox-and-processed-events.md)).
+
+The relay replays the buyer's `traceparent`, which is what makes all of this a single trace despite
+the gap in the middle ([ADR 0020](adr/0020-a-trace-must-survive-the-outbox.md)).
 ---
 
 ## Event flow
@@ -228,6 +314,42 @@ were both rejected for this path, in [ADR 0006](adr/0006-conditional-update-prev
 
 Behind it, `CHECK (reserved <= on_hand)` in the schema. If the application logic were ever wrong,
 PostgreSQL refuses rather than sells the unit twice.
+
+### The decision, drawn
+
+Every reservation in the platform takes this path. It is worth a picture because the asymmetry is the
+entire anti-oversell argument, and it is easy to misread as "Redis decides".
+
+```mermaid
+flowchart TD
+    req([reserve N units of SKU]) --> gate{"Redis gate<br/>tryAdmit"}
+
+    gate -->|REFUSED| no["409 sold out<br/><i>no connection taken</i>"]:::refuse
+    gate -->|"UNKNOWN<br/>(cold key, or Redis down)"| db
+    gate -->|ADMITTED| db
+
+    db["PostgreSQL<br/>UPDATE ... WHERE available >= N"]:::decide
+
+    db -->|"0 rows"| rollback["409 sold out<br/>+ hand units back to the gate"]:::refuse
+    db -->|"1 row"| ok["201 held"]:::grant
+
+    classDef refuse fill:#fdecea,stroke:#d93025,color:#111
+    classDef grant fill:#e6f4ea,stroke:#188038,color:#111
+    classDef decide fill:#fff4e5,stroke:#f9a825,stroke-width:3px,color:#111
+```
+
+**Two of the gate's three answers lead to the same place.** `ADMITTED` does not mean the units are
+yours — it means "not obviously impossible, go and ask the database". Only `REFUSED` short-circuits
+anything, and that is the only reason the gate exists.
+
+So the cache is allowed to be wrong. Drift low loses a sale until the TTL expires; drift high wastes
+one query. **Neither can oversell**, because the conditional `UPDATE` is the only thing that ever
+decides. Redis being unreachable collapses every path to `UNKNOWN`, which is Phase 6 behaviour with
+extra steps.
+
+That claim is tested rather than asserted: `InventoryConcurrencyIT` runs with the gate **enabled**,
+the Phase 10 load run sold exactly 100 units of 100 in all four configurations, and Phase 11 kills
+Redis mid-sale and still sells exactly 20 of 20.
 
 ### Three checks, not one
 
