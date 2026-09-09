@@ -81,7 +81,7 @@ decision records — is mapped in [docs/README.md](docs/README.md).
 | **order**     | The order aggregate and its state machine                       | ✅ Phase 4            |
 | **payment**   | Authorisation, capture, saga compensations                      | ✅ Phase 6            |
 | **shipping**  | Shipment creation and carrier tracking                          | ✅ Phase 6            |
-| **user**      | Accounts, addresses, authentication                             | ⬜ Phase 4            |
+| **user**      | Accounts, addresses, authentication                             | ✅ post-roadmap       |
 | **common**    | Order state machine, event contracts, error envelope, MDC       | ✅ Phase 1            |
 
 The boundaries are drawn so the number that matters most has exactly one owner. **Catalog holds no
@@ -507,6 +507,56 @@ now fails the run when its own tally disagrees with the database.
 
 Full detail, including the retention policy for the Phase 8 tables, is in
 [docs/load-testing.md](docs/load-testing.md).
+
+## Who is asking
+
+```bash
+# register, then sign in
+curl -X POST localhost:18080/api/v1/users -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.test","password":"a-sufficiently-long-password","displayName":"You"}'
+
+TOKEN=$(curl -s -X POST localhost:18080/api/v1/users/sessions -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.test","password":"a-sufficiently-long-password"}' | jq -r .accessToken)
+
+curl -H "Authorization: Bearer $TOKEN" localhost:18080/api/v1/orders
+```
+
+Until the user service was built, `customerId` was a string the **client** put in the request body.
+That is not an unfinished feature so much as an open door: anyone could place an order as anyone, read
+a stranger's order history by changing a query parameter, and cancel their order — during a flash
+sale, to their own benefit.
+
+It is the same mistake [ADR 0011](docs/adr/0011-order-owns-no-prices.md) rejected for prices in Phase
+4: **the caller does not get to declare facts the platform is responsible for.** Prices were caught at
+the time. The customer was not.
+
+Now the user service issues a signed token whose subject is the customer id, and `customerId` is gone
+from `PlaceOrderRequest` entirely.
+
+| | |
+|---|---|
+| Checkout with no token | `401` |
+| Reading someone else's order | `404` — not `403`, which would confirm it exists |
+| Cancelling someone else's order | `404` |
+| Wrong password vs unknown email | identical `401 INVALID_CREDENTIALS`, and identical timing |
+
+**Both the gateway and the order service verify the token**, which looks redundant and is not. Compose
+publishes every service on its own host port — the Swagger UI link above is `:18081` — so anything
+that can reach the gateway can reach the order service on `:18082` directly. A gateway-only check
+would be authentication with an opt-out. The gateway refuses early, which is the same instinct as
+shedding load before it costs a connection; the service that must not be wrong about who is buying
+checks for itself:
+
+```
+$ curl -X POST localhost:18082/api/v1/orders -H 'X-Customer-Id: someone-else' ...
+401
+```
+
+**What is not secured, said plainly:** inventory, payment and shipping expose operational APIs with no
+authentication at all. Nothing reaches them from outside in this deployment, but that is a claim about
+a compose file rather than a property of the system, and their ports are published too. Closing it
+means an internal-only network or a service token, and it is the obvious next piece of work —
+[ADR 0021](docs/adr/0021-the-client-does-not-say-who-it-is.md).
 
 ## Breaking it on purpose
 

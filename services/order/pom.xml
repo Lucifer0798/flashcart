@@ -14,6 +14,12 @@
 	<description>The order aggregate and the state machine that governs it</description>
 
 	<dependencies>
+		<!-- Declared explicitly because flashcart-common marks it optional: this service verifies
+		     access tokens, so it pays for the library that does it. -->
+		<dependency>
+			<groupId>com.nimbusds</groupId>
+			<artifactId>nimbus-jose-jwt</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>com.flashcart</groupId>
 			<artifactId>flashcart-common</artifactId>

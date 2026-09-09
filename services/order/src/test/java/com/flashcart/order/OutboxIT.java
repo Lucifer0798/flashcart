@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.event.message.ReserveInventory;
 import com.flashcart.common.event.outbox.OutboxMetrics;
+import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.event.outbox.ProcessedEvents;
 import com.flashcart.common.order.OrderStatus;
 import com.flashcart.order.api.dto.OrderResponse;
@@ -91,6 +92,9 @@ class OutboxIT {
 	private TestRestTemplate rest;
 
 	@Autowired
+	private AccessTokens tokens;
+
+	@Autowired
 	private JdbcTemplate jdbc;
 
 	@Autowired
@@ -110,13 +114,20 @@ class OutboxIT {
 
 	@BeforeEach
 	void clearOutbox() {
+		String token = tokens.issue("cust-1", "cust-1@example.test");
+		rest.getRestTemplate().getInterceptors().clear();
+		rest.getRestTemplate().getInterceptors().add((request, body, execution) -> {
+			request.getHeaders().set(org.springframework.http.HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			return execution.execute(request, body);
+		});
+
 		jdbc.update("delete from outbox_messages");
 		jdbc.update("delete from processed_events");
 	}
 
 	private OrderResponse place() {
 		return rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest("idem-" + UUID.randomUUID(), "cust-1", null,
+				new PlaceOrderRequest("idem-" + UUID.randomUUID(), null,
 						List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))),
 				OrderResponse.class).getBody();
 	}
@@ -172,7 +183,7 @@ class OutboxIT {
 		// An unknown SKU fails before anything is persisted. The point is that no half-state exists:
 		// no order, and no command telling inventory to reserve stock for one.
 		rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest("idem-" + UUID.randomUUID(), "cust-1", null,
+				new PlaceOrderRequest("idem-" + UUID.randomUUID(), null,
 						List.of(new PlaceOrderRequest.Line("GHOST-1", 1))),
 				Map.class);
 

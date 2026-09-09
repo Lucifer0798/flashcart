@@ -9,6 +9,7 @@ import io.swagger.v3.oas.models.info.Info;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;
+import com.flashcart.common.security.AccessTokens;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -58,5 +59,17 @@ public class OrderConfig {
 				.version("v1")
 				.description("The order aggregate and its state machine. Prices come from catalog and "
 						+ "stock from inventory; this service orchestrates and duplicates neither."));
+	}
+
+	/**
+	 * The order service verifies tokens itself rather than trusting a header the gateway injected.
+	 * The gateway is not a boundary here: this service is published on its own host port, so a
+	 * header-only design would be authentication with an opt-out. See ADR 0021.
+	 */
+	@Bean
+	public AccessTokens accessTokens(
+			@org.springframework.beans.factory.annotation.Value("${flashcart.security.jwt.secret}") String secret,
+			@org.springframework.beans.factory.annotation.Value("${flashcart.security.jwt.ttl:PT12H}") java.time.Duration ttl) {
+		return new AccessTokens(secret, ttl);
 	}
 }

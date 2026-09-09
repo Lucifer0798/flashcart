@@ -149,6 +149,7 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8080
+      JWT_SECRET: ${JWT_SECRET:-flashcart-development-secret-do-not-use-anywhere-real}
       ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
       FLASHCART_CATALOG_URI: http://catalog:8081
       FLASHCART_ORDER_URI: http://order:8082
@@ -197,6 +198,7 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8082
+      JWT_SECRET: ${JWT_SECRET:-flashcart-development-secret-do-not-use-anywhere-real}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_order
       SPRING_DATASOURCE_USERNAME: flashcart
       SPRING_DATASOURCE_PASSWORD: flashcart
@@ -232,8 +234,17 @@ services:
       <<: *service-env
       SERVER_PORT: 8083
       ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_user
+      SPRING_DATASOURCE_USERNAME: flashcart
+      SPRING_DATASOURCE_PASSWORD: flashcart
+      # The database has existed since Phase 1's init script; the service that owns it took until
+      # after the roadmap to arrive.
+      JWT_SECRET: ${JWT_SECRET:-flashcart-development-secret-do-not-use-anywhere-real}
     ports:
       - "18083:8083"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   payment:
     <<: *service-base

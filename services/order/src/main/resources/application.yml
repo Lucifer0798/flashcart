@@ -76,6 +76,12 @@ springdoc:
     path: /swagger-ui.html
 
 flashcart:
+  security:
+    jwt:
+      # The gateway verifies with the same secret the user service signs with. See ADR 0021 for why
+      # symmetric is acceptable here and what would change it.
+      secret: ${JWT_SECRET:flashcart-development-secret-do-not-use-anywhere-real}
+      ttl: ${JWT_TTL:PT12H}
   version: ${FLASHCART_VERSION:0.1.0-SNAPSHOT}
   order:
     # Synchronous calls for now. Phase 5 replaces the inventory call with an event; the client

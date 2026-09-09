@@ -7,6 +7,7 @@ import jakarta.validation.ConstraintViolationException;
 
 import com.flashcart.common.api.ApiError;
 import com.flashcart.common.error.BadRequestException;
+import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.error.UpstreamUnavailableException;
 import com.flashcart.common.error.ConflictException;
 import com.flashcart.common.error.FlashCartException;
@@ -179,6 +180,9 @@ public class GlobalExceptionHandler {
 		// UpstreamUnavailableException for why 503 rather than 500 is the honest answer.
 		if (ex instanceof UpstreamUnavailableException) {
 			return HttpStatus.SERVICE_UNAVAILABLE;
+		}
+		if (ex instanceof UnauthenticatedException) {
+			return HttpStatus.UNAUTHORIZED;
 		}
 		return HttpStatus.INTERNAL_SERVER_ERROR;
 	}
