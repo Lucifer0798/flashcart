@@ -153,8 +153,8 @@ jobs:
 
           # 202: the order exists, but whether it got the stock is settled on the bus.
           curl -s -o /tmp/o.json -w '%{http_code}' -X POST $G/api/v1/orders \
-            -H 'Content-Type: application/json' \
-            -d "{\"idempotencyKey\":\"ci-$(date +%s)\",\"customerId\":\"ci-buyer\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+            -d "{\"idempotencyKey\":\"ci-$(date +%s)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
             | grep -q '^202$'
           grep -q '"status":"CREATED"' /tmp/o.json
           ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/o.json)
@@ -191,7 +191,7 @@ jobs:
             -d "{\"sku\":\"$SKU\",\"name\":\"CI Decline Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.13,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
           curl -s -o /tmp/d.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
-            -d "{\"idempotencyKey\":\"ci-decline-$(date +%s)\",\"customerId\":\"ci-decline\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"
+            -d "{\"idempotencyKey\":\"ci-decline-$(date +%s)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"
           ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/d.json)
           echo "placed $ORDER at 10.13, which the simulated provider declines"
 
