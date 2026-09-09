@@ -59,6 +59,9 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0020 — A trace has to survive the outbox](adr/0020-a-trace-must-survive-the-outbox.md)
 - [0019 — Report what the measurement supports, and no more](adr/0019-measure-or-say-you-cannot.md)
 
+**Who is asking**
+- [0021](adr/0021-the-client-does-not-say-who-it-is.md) — The client does not get to say who it is
+
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)
 - [0002 — Spring Boot 4.0.8, not 4.1.x](adr/0002-spring-boot-and-cloud-versions.md)

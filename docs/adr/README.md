@@ -26,3 +26,4 @@ when someone revisits it in six months.
 | [0018](0018-metrics-answer-questions-the-logs-cannot.md) | Instrument the silences, not the traffic | Accepted |
 | [0019](0019-measure-or-say-you-cannot.md) | Report what the measurement supports, and no more | Accepted |
 | [0020](0020-a-trace-must-survive-the-outbox.md) | A trace has to survive the outbox | Accepted |
+| [0021](0021-the-client-does-not-say-who-it-is.md) | The client does not get to say who it is | Accepted |

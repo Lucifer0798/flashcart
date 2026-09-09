@@ -1,6 +1,21 @@
 spring:
   application:
     name: flashcart-user
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:15432/flashcart_user}
+    username: ${SPRING_DATASOURCE_USERNAME:flashcart}
+    password: ${SPRING_DATASOURCE_PASSWORD:flashcart}
+    hikari:
+      # Small: this service is read-light and write-rare. Registration and sign-in are not the
+      # contended path, and BCrypt makes sign-in slow on purpose in the CPU, not in the database.
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      connection-timeout: 2000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
 
 server:
   port: ${SERVER_PORT:8083}
@@ -45,3 +60,13 @@ springdoc:
 
 flashcart:
   version: ${FLASHCART_VERSION:0.1.0-SNAPSHOT}
+  security:
+    jwt:
+      # HS256, so this value both signs and verifies. Every service that checks a token holds the
+      # same string, which is why it must come from the environment in anything real -- the default
+      # below exists so `mvn test` and a bare `docker compose up` work, and for no other reason.
+      #
+      # The day a third party needs to verify one of these, this becomes RS256 and only this service
+      # keeps the private half. See ADR 0021.
+      secret: ${JWT_SECRET:flashcart-development-secret-do-not-use-anywhere-real}
+      ttl: ${JWT_TTL:PT12H}

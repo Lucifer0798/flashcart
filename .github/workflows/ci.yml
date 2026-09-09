@@ -128,6 +128,21 @@ jobs:
           done
           curl -sf $G/api/v1/user/_info | grep -q '"status":"skeleton"'
 
+      - name: Sign in, because a checkout now needs a shopper
+        run: |
+          set -e
+          G=http://localhost:18080
+          EMAIL="ci-$(date +%s)@example.test"
+          PASS="a-sufficiently-long-password"
+
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"displayName\":\"CI Shopper\"}")
+          test "$CODE" = "201"
+
+          TOKEN=$(curl -s -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+          test -n "$TOKEN"
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+          echo "signed in as $EMAIL"
+
       - name: A checkout settles asynchronously across four services
         run: |
           set -e
@@ -138,8 +153,8 @@ jobs:
 
           # 202: the order exists, but whether it got the stock is settled on the bus.
           curl -s -o /tmp/o.json -w '%{http_code}' -X POST $G/api/v1/orders \
-            -H 'Content-Type: application/json' \
-            -d "{\"idempotencyKey\":\"ci-$(date +%s)\",\"customerId\":\"ci-buyer\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+            -d "{\"idempotencyKey\":\"ci-$(date +%s)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
             | grep -q '^202$'
           grep -q '"status":"CREATED"' /tmp/o.json
           ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/o.json)
@@ -149,16 +164,16 @@ jobs:
           # Kafka -> payment -> Kafka -> order -> Kafka -> shipping. If any topic name, serializer
           # or consumer group is wrong, the order simply never leaves CREATED.
           for i in $(seq 1 60); do
-            STATUS=$(curl -sf "$G/api/v1/orders/$ORDER" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')
+            STATUS=$(curl -sf -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')
             echo "  $ORDER is $STATUS"
             case "$STATUS" in
               FULFILLING|SHIPPED) echo "saga completed"; exit 0 ;;
-              CANCELLED) echo "order was cancelled unexpectedly"; curl -s "$G/api/v1/orders/$ORDER/history"; exit 1 ;;
+              CANCELLED) echo "order was cancelled unexpectedly"; curl -s -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER/history"; exit 1 ;;
             esac
             sleep 2
           done
           echo "order never progressed past $STATUS"
-          curl -s "$G/api/v1/orders/$ORDER/history"
+          curl -s -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER/history"
           docker compose logs --tail=100 order inventory payment shipping
           exit 1
 
@@ -175,17 +190,17 @@ jobs:
           curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' \
             -d "{\"sku\":\"$SKU\",\"name\":\"CI Decline Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.13,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
-          curl -s -o /tmp/d.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' \
-            -d "{\"idempotencyKey\":\"ci-decline-$(date +%s)\",\"customerId\":\"ci-decline\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"
+          curl -s -o /tmp/d.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+            -d "{\"idempotencyKey\":\"ci-decline-$(date +%s)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"
           ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/d.json)
           echo "placed $ORDER at 10.13, which the simulated provider declines"
 
           for i in $(seq 1 60); do
-            STATUS=$(curl -sf "$G/api/v1/orders/$ORDER" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')
+            STATUS=$(curl -sf -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')
             if [ "$STATUS" = "CANCELLED" ]; then
               echo "compensated"
               # PAYMENT_FAILED must appear on the way through: compensation is a recorded state.
-              curl -sf "$G/api/v1/orders/$ORDER/history" | grep -q '"toStatus":"PAYMENT_FAILED"'
+              curl -sf -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER/history" | grep -q '"toStatus":"PAYMENT_FAILED"'
 
               # The units come back on a further hop, so this is polled rather than read once.
               # CANCELLED means the order service has recorded the outcome; it does not mean
@@ -207,7 +222,7 @@ jobs:
             sleep 2
           done
           echo "declined order never reached CANCELLED (stuck at $STATUS)"
-          curl -s "$G/api/v1/orders/$ORDER/history"
+          curl -s -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER/history"
           docker compose logs --tail=100 order payment
           exit 1
 
@@ -217,7 +232,47 @@ jobs:
           G=http://localhost:18080
           curl -s $G/api/v1/products/00000000-0000-4000-8000-0000000000ff | grep -q '"code":"NOT_FOUND"'
           # A wrong verb is a 405, not a 500 — the whole platform shares one handler for this.
-          curl -s -o /dev/null -w '%{http_code}' -X DELETE $G/api/v1/orders | grep -qE '^40[45]$'
+          curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $TOKEN" $G/api/v1/orders | grep -qE '^40[45]$'
+
+      - name: A client cannot say who it is
+        run: |
+          set -e
+          G=http://localhost:18080
+          SKU=CI-AUTH-$(date +%s)
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json'             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI auth\"}" > /dev/null
+          CAT=$(curl -sf $G/api/v1/categories | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json'             -d "{\"sku\":\"$SKU\",\"name\":\"CI auth probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":19.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
+
+          # 1. No token, no checkout.
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/orders             -H 'Content-Type: application/json'             -d "{\"idempotencyKey\":\"ci-anon-$(date +%s%N)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}")
+          echo "anonymous checkout: $CODE"
+          test "$CODE" = "401"
+
+          # 2. A second shopper cannot read or cancel the first one's order. 404 rather than 403,
+          #    because 403 would confirm the order number is real.
+          EMAIL2="ci-other-$(date +%s)@example.test"; PASS="a-sufficiently-long-password"
+          curl -sf -X POST $G/api/v1/users -H 'Content-Type: application/json'             -d "{\"email\":\"$EMAIL2\",\"password\":\"$PASS\",\"displayName\":\"Other\"}" > /dev/null
+          OTHER=$(curl -s -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL2\",\"password\":\"$PASS\"}" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+
+          MINE=$(curl -s -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN"             -d "{\"idempotencyKey\":\"ci-mine-$(date +%s%N)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" | grep -o '"orderNumber":"[^"]*"' | cut -d'"' -f4)
+          test -n "$MINE"
+
+          READ=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OTHER" "$G/api/v1/orders/$MINE")
+          KILL=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $OTHER" "$G/api/v1/orders/$MINE/cancel")
+          echo "stranger read: $READ, stranger cancel: $KILL"
+          test "$READ" = "404"
+          test "$KILL" = "404"
+
+          # 3. The gateway is not the boundary. Straight to the order service's own published port
+          #    with a forged header -- which is exactly what a header-trusting design would accept.
+          # A VALID body on purpose. An invalid one returns 400 from bean validation, which runs
+          # before the controller method and therefore before the token is checked -- so the test
+          # would pass while proving nothing about authentication. Worth knowing in its own right:
+          # the service parses and validates unauthenticated input before turning it away, which is
+          # work done for a caller that has not identified itself.
+          BYPASS=$(docker compose exec -T order wget -qO-             --post-data="{\"idempotencyKey\":\"ci-bypass-$(date +%s%N)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"             --header='Content-Type: application/json' --header='X-Customer-Id: someone-else'             --server-response http://localhost:8082/api/v1/orders 2>&1 | grep -o 'HTTP/1.1 [0-9]*' | head -1 | grep -o '[0-9]*$' || true)
+          echo "forged header, valid body, straight to the service: ${BYPASS:-none}"
+          test "${BYPASS:-none}" = "401"
 
       - name: The outbox drained
         run: |

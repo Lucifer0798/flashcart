@@ -39,6 +39,11 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import com.flashcart.common.security.AccessTokens;
+import org.springframework.http.HttpRequest;
+import org.springframework.http.client.ClientHttpRequestExecution;
+import org.springframework.http.client.ClientHttpRequestInterceptor;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -112,6 +117,31 @@ class OrderIT {
 	private TestRestTemplate rest;
 
 	@Autowired
+	private AccessTokens tokens;
+
+	/**
+	 * Who these requests are from.
+	 *
+	 * <p>Set as a default header on the template rather than threaded through every call, because the
+	 * point of these tests is the order lifecycle and not the ceremony of signing in. Tests that care
+	 * about identity call {@link #signedInAs} to change it.
+	 */
+	private void signedInAs(String customerId) {
+		rest.getRestTemplate().getInterceptors().removeIf(i -> i instanceof BearerToken);
+		rest.getRestTemplate().getInterceptors().add(new BearerToken(tokens.issue(customerId, customerId + "@example.test")));
+	}
+
+	/** A default header interceptor, tagged so signedInAs can replace rather than accumulate. */
+	private record BearerToken(String token) implements ClientHttpRequestInterceptor {
+		@Override
+		public ClientHttpResponse intercept(HttpRequest request, byte[] body,
+				ClientHttpRequestExecution execution) throws java.io.IOException {
+			request.getHeaders().set(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			return execution.execute(request, body);
+		}
+	}
+
+	@Autowired
 	private RecordingEventPublisher.Recorder events;
 
 	@Autowired
@@ -125,6 +155,7 @@ class OrderIT {
 
 	@BeforeEach
 	void reset() {
+		signedInAs("cust-1");
 		events.clear();
 		catalog.clear();
 		catalog.stock("AUD-HP-001", "Aurora Over-Ear Headphones", "179.00", "USD");
@@ -139,7 +170,7 @@ class OrderIT {
 
 	private OrderResponse place(String customerId, String sku, int quantity) {
 		ResponseEntity<OrderResponse> response = rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(uniqueKey(), customerId, null,
+				new PlaceOrderRequest(uniqueKey(), null,
 						List.of(new PlaceOrderRequest.Line(sku, quantity))),
 				OrderResponse.class);
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
@@ -195,7 +226,7 @@ class OrderIT {
 	@DisplayName("a retried checkout returns the original order and re-sends the reservation command")
 	void placeIsIdempotentAndResends() {
 		String key = uniqueKey();
-		PlaceOrderRequest request = new PlaceOrderRequest(key, "cust-1", null,
+		PlaceOrderRequest request = new PlaceOrderRequest(key, null,
 				List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1)));
 
 		OrderResponse first = rest.postForEntity("/api/v1/orders", request, OrderResponse.class).getBody();
@@ -212,7 +243,7 @@ class OrderIT {
 	@DisplayName("an unknown SKU is a 404 and nothing is published")
 	void unknownSkuPublishesNothing() {
 		ResponseEntity<Map> response = rest.postForEntity("/api/v1/orders",
-				new PlaceOrderRequest(uniqueKey(), "cust-1", null,
+				new PlaceOrderRequest(uniqueKey(), null,
 						List.of(new PlaceOrderRequest.Line("GHOST-1", 1))), Map.class);
 
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
@@ -434,7 +465,7 @@ class OrderIT {
 		headers.set(CorrelationId.HEADER, correlationId);
 
 		rest.exchange("/api/v1/orders", HttpMethod.POST,
-				new HttpEntity<>(new PlaceOrderRequest(uniqueKey(), "cust-1", null,
+				new HttpEntity<>(new PlaceOrderRequest(uniqueKey(), null,
 						List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))), headers),
 				OrderResponse.class);
 

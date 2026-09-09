@@ -71,6 +71,15 @@
 			<artifactId>micrometer-core</artifactId>
 			<optional>true</optional>
 		</dependency>
+		<!-- Token signing and verification, used by the user service to issue and by the gateway and
+		     order service to verify. Optional like everything else here: a service that does not deal
+		     in tokens does not pay for it. Nimbus rather than a Spring Security starter because both
+		     a reactive gateway and a servlet service need this, and neither needs a filter chain. -->
+		<dependency>
+			<groupId>com.nimbusds</groupId>
+			<artifactId>nimbus-jose-jwt</artifactId>
+			<optional>true</optional>
+		</dependency>
 		<!-- Used only by the relay, to re-enter the trace that queued a message before sending it.
 		     Optional like everything else here: without it the outbox still works, the trace simply
 		     breaks at the relay. -->
