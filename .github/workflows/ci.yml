@@ -200,7 +200,7 @@ jobs:
             if [ "$STATUS" = "CANCELLED" ]; then
               echo "compensated"
               # PAYMENT_FAILED must appear on the way through: compensation is a recorded state.
-              curl -sf "$G/api/v1/orders/$ORDER/history" | grep -q '"toStatus":"PAYMENT_FAILED"'
+              curl -sf -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER/history" | grep -q '"toStatus":"PAYMENT_FAILED"'
 
               # The units come back on a further hop, so this is polled rather than read once.
               # CANCELLED means the order service has recorded the outcome; it does not mean
@@ -232,7 +232,7 @@ jobs:
           G=http://localhost:18080
           curl -s $G/api/v1/products/00000000-0000-4000-8000-0000000000ff | grep -q '"code":"NOT_FOUND"'
           # A wrong verb is a 405, not a 500 — the whole platform shares one handler for this.
-          curl -s -o /dev/null -w '%{http_code}' -X DELETE $G/api/v1/orders | grep -qE '^40[45]$'
+          curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $TOKEN" $G/api/v1/orders | grep -qE '^40[45]$'
 
       - name: A client cannot say who it is
         run: |
