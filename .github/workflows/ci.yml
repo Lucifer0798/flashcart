@@ -265,9 +265,14 @@ jobs:
 
           # 3. The gateway is not the boundary. Straight to the order service's own published port
           #    with a forged header -- which is exactly what a header-trusting design would accept.
-          BYPASS=$(docker compose exec -T order wget -qO- --post-data='{"idempotencyKey":"x","lines":[]}'             --header='Content-Type: application/json' --header='X-Customer-Id: someone-else'             --server-response http://localhost:8082/api/v1/orders 2>&1 | grep -o 'HTTP/1.1 [0-9]*' | head -1 | grep -o '[0-9]*$' || true)
-          echo "forged header straight to the service: ${BYPASS:-401}"
-          test "${BYPASS:-401}" = "401"
+          # A VALID body on purpose. An invalid one returns 400 from bean validation, which runs
+          # before the controller method and therefore before the token is checked -- so the test
+          # would pass while proving nothing about authentication. Worth knowing in its own right:
+          # the service parses and validates unauthenticated input before turning it away, which is
+          # work done for a caller that has not identified itself.
+          BYPASS=$(docker compose exec -T order wget -qO-             --post-data="{\"idempotencyKey\":\"ci-bypass-$(date +%s%N)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"             --header='Content-Type: application/json' --header='X-Customer-Id: someone-else'             --server-response http://localhost:8082/api/v1/orders 2>&1 | grep -o 'HTTP/1.1 [0-9]*' | head -1 | grep -o '[0-9]*$' || true)
+          echo "forged header, valid body, straight to the service: ${BYPASS:-none}"
+          test "${BYPASS:-none}" = "401"
 
       - name: The outbox drained
         run: |

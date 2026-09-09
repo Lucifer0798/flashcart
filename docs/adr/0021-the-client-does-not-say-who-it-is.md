@@ -82,6 +82,13 @@ every order test had to learn to sign in.
 acceptable while all of them are this platform and stops being acceptable the day a third party needs
 to verify a token — which is when this becomes RS256 with the user service keeping the private half.
 
+Bean validation also runs *before* the controller method, and therefore before the token is checked:
+an unauthenticated request with a malformed body is told its body is malformed rather than that it is
+unauthenticated. The security property holds — no order is created — but the service parses and
+validates input for a caller that has not identified itself, and a client can learn a little about
+the schema without an account. Moving the check into a filter would fix it and is not worth the
+indirection today; it is recorded here so that judgement is visible rather than accidental.
+
 The inventory, payment and shipping APIs are still open. Nothing reaches them from the internet in this
 deployment, but "nothing reaches them" is a claim about a compose file, not a property of the system,
 and per-service ports are published. Closing that means either an internal-only network or the same
