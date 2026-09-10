@@ -19,8 +19,13 @@ G=http://localhost:18080
 SCENARIO="${1:-all}"
 FAILURES=0
 
-# Seeding stock and reserving need an operator since ADR 0022. Fetched once, up front, so a failure
-# here stops the run rather than surfacing as 401s three scenarios later that read as a platform fault.
+# Everything this harness does now needs a token. Seeding stock and reserving need an operator
+# (ADR 0022); placing and reading an order need any signed-in user (ADR 0021), and the operator is
+# one. Fetched once, up front, so a failure here stops the run rather than surfacing as 401s three
+# scenarios later that read as a platform fault.
+#
+# The order calls were missed when ADR 0021 landed, so every scenario that places one has been
+# getting 401 since then -- the harness was reporting a broken platform and nobody was running it.
 TOKEN=$("$ROOT/scripts/operator-token.sh")
 AUTH="Authorization: Bearer $TOKEN"
 
@@ -65,12 +70,12 @@ seed() { # sku, qty -> stock plus a priced product so orders can be placed
 }
 
 place() { # sku, qty -> order number
-	curl -s --max-time 15 -X POST $G/api/v1/orders -H 'Content-Type: application/json' \
-		-d "{\"idempotencyKey\":\"chaos-$(date +%s%N)\",\"customerId\":\"chaos\",\"lines\":[{\"sku\":\"$1\",\"quantity\":$2}]}" \
+	curl -s --max-time 15 -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "$AUTH" \
+		-d "{\"idempotencyKey\":\"chaos-$(date +%s%N)\",\"lines\":[{\"sku\":\"$1\",\"quantity\":$2}]}" \
 		| sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p'
 }
 
-status_of() { curl -sf --max-time 10 "$G/api/v1/orders/$1" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
+status_of() { curl -sf --max-time 10 -H "$AUTH" "$G/api/v1/orders/$1" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
 
 settle() { # order, seconds -> final status, or the last one seen
 	local order="$1" limit="${2:-60}" i s
@@ -249,8 +254,8 @@ catalog_dies() {
 	local before; before=$(psql_o "select count(*) from orders")
 	local body code
 	body=$(curl -s --max-time 15 -o /tmp/chaos-cat.json -w '%{http_code}' -X POST $G/api/v1/orders \
-		-H 'Content-Type: application/json' \
-		-d "{\"idempotencyKey\":\"chaos-cat-$(date +%s%N)\",\"customerId\":\"chaos\",\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}")
+		-H 'Content-Type: application/json' -H "$AUTH" \
+		-d "{\"idempotencyKey\":\"chaos-cat-$(date +%s%N)\",\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}")
 	code="$body"
 	echo "     checkout returned $code: $(head -c 120 /tmp/chaos-cat.json)"
 

@@ -430,7 +430,7 @@ jobs:
           SKU=CI-RUSH-$(date +%s)
           curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI rush\"}" > /dev/null
 
-          docker run --rm --network flashcart_default             -v "$PWD/load/scripts:/scripts:ro"             -e GATEWAY=http://gateway:8080 -e SKU="$SKU" -e VUS=100 -e ITERATIONS=300             grafana/k6:0.56.0 run /scripts/flash-sale.js > /tmp/k6.txt 2>&1 || true
+          docker run --rm --network flashcart_default             -v "$PWD/load/scripts:/scripts:ro"             -e GATEWAY=http://gateway:8080 -e SKU="$SKU" -e VUS=100 -e ITERATIONS=300 -e TOKEN="$OPERATOR"             grafana/k6:0.56.0 run /scripts/flash-sale.js > /tmp/k6.txt 2>&1 || true
           grep -E 'reservations_(granted|refused|shed|errored)' /tmp/k6.txt || true
 
           GRANTED=$(grep -oE 'reservations_granted[. ]*: *[0-9]+' /tmp/k6.txt | grep -oE '[0-9]+$')
