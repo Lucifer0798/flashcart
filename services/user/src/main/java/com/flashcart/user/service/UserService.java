@@ -71,7 +71,7 @@ public class UserService {
 			throw new UnauthenticatedException();
 		}
 
-		return tokens.issue(user.getId().toString(), user.getEmail());
+		return tokens.issue(user.getId().toString(), user.getEmail(), user.getRoles());
 	}
 
 	@Transactional(readOnly = true)

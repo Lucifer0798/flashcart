@@ -50,11 +50,10 @@ public class AuthenticationWebFilter implements WebFilter, Ordered {
 	 * catalog useless for the thing it exists to do. Registration and sign-in obviously cannot require
 	 * a token either.
 	 *
-	 * <p>The last three are <strong>operational APIs that are open because nothing has secured them
-	 * yet</strong> — receiving stock, inspecting a payment, looking up a shipment. That is a real gap,
-	 * named as such in ADR 0021 rather than left for someone to find. They are listed here explicitly
-	 * so the gap is visible in code review instead of being an accident of what the filter forgot to
-	 * mention.
+	 * <p>The last is <strong>stock availability</strong>, which stays public because a shopper needs
+	 * to know how many are left and a count carries nobody personal data. The rest of inventory, and
+	 * all of payment and shipping, required an operator as of ADR 0022 — and each of those services
+	 * enforces that itself, because this filter is an optimisation rather than a boundary.
 	 */
 	private static final List<String> PUBLIC_PREFIXES = List.of(
 			"/api/v1/products",
@@ -64,12 +63,10 @@ public class AuthenticationWebFilter implements WebFilter, Ordered {
 			"/api/v1/users",
 			"/actuator",
 
-			// Not yet secured. See ADR 0021 -- these need either an internal-only network or a
-			// service token, and until then saying so out loud beats a silent 401 that turns up as
-			// "the platform lost my order" three layers away.
-			"/api/v1/inventory",
-			"/api/v1/payments",
-			"/api/v1/shipments");
+			// Stock availability only. The rest of inventory, and all of payment and shipping, now
+			// require an operator and are checked by those services themselves -- the gateway simply
+			// stops carrying unauthenticated traffic to them. See ADR 0022.
+			"/api/v1/inventory/stock/");
 
 	/** The `_info` endpoints and Swagger UI stay reachable; they are how the stack is inspected. */
 	private static final List<String> PUBLIC_SUFFIXES = List.of("/_info", "/swagger-ui.html", "/v3/api-docs");

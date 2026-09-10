@@ -15,6 +15,8 @@ import com.flashcart.common.event.message.ReserveInventory;
 import com.flashcart.inventory.api.dto.CreateStockRequest;
 import com.flashcart.inventory.api.dto.StockResponse;
 import org.junit.jupiter.api.DisplayName;
+import com.flashcart.common.security.AccessTokens;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -83,6 +85,23 @@ class InventoryKafkaIT {
 
 	@Autowired
 	private TestRestTemplate rest;
+
+	@Autowired
+	private AccessTokens tokens;
+
+	/**
+	 * Signs as an operator. This class does not extend AbstractInventoryIT -- it runs its own Kafka
+	 * container -- so it needs its own copy of the one thing that base class now does.
+	 */
+	@BeforeEach
+	void signInAsOperator() {
+		String token = tokens.issue("ops-test", "ops@example.test", List.of(AccessTokens.OPERATOR));
+		rest.getRestTemplate().getInterceptors().clear();
+		rest.getRestTemplate().getInterceptors().add((request, body, execution) -> {
+			request.getHeaders().set(org.springframework.http.HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			return execution.execute(request, body);
+		});
+	}
 
 	private String stock(int quantity) {
 		String sku = ("KAFKA-" + UUID.randomUUID().toString().substring(0, 6)).toUpperCase();

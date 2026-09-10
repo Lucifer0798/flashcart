@@ -19,6 +19,16 @@ G=http://localhost:18080
 SCENARIO="${1:-all}"
 FAILURES=0
 
+# Everything this harness does now needs a token. Seeding stock and reserving need an operator
+# (ADR 0022); placing and reading an order need any signed-in user (ADR 0021), and the operator is
+# one. Fetched once, up front, so a failure here stops the run rather than surfacing as 401s three
+# scenarios later that read as a platform fault.
+#
+# The order calls were missed when ADR 0021 landed, so every scenario that places one has been
+# getting 401 since then -- the harness was reporting a broken platform and nobody was running it.
+TOKEN=$("$ROOT/scripts/operator-token.sh")
+AUTH="Authorization: Bearer $TOKEN"
+
 say()  { echo ""; echo "=== $* ==="; }
 step() { echo "  -> $*"; }
 pass() { echo "  PASS: $*"; }
@@ -31,8 +41,17 @@ seed() { # sku, qty -> stock plus a priced product so orders can be placed
 	local sku="$1" qty="$2"
 	local cat code
 	cat=$(curl -sf --max-time 10 $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
-	curl -sf --max-time 10 -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' \
-		-d "{\"sku\":\"$sku\",\"initialQuantity\":$qty,\"reason\":\"chaos\"}" > /dev/null
+	# Checked, not assumed. This script does not run under `set -e`, and stock now needs an operator
+	# -- so a token that expired or a role that was revoked would leave every scenario below fighting
+	# over a sku that does not exist, and the refusals that followed would read as the platform
+	# breaking under chaos. Telling those two apart is the entire point of this harness.
+	code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock \
+		-H 'Content-Type: application/json' -H "$AUTH" \
+		-d "{\"sku\":\"$sku\",\"initialQuantity\":$qty,\"reason\":\"chaos\"}")
+	if [ "$code" != "201" ]; then
+		echo "  FAIL: could not seed $sku (http $code) -- every scenario below would be meaningless" >&2
+		exit 1
+	fi
 
 	# The product name carries the sku, and the status is checked rather than assumed.
 	#
@@ -51,12 +70,12 @@ seed() { # sku, qty -> stock plus a priced product so orders can be placed
 }
 
 place() { # sku, qty -> order number
-	curl -s --max-time 15 -X POST $G/api/v1/orders -H 'Content-Type: application/json' \
-		-d "{\"idempotencyKey\":\"chaos-$(date +%s%N)\",\"customerId\":\"chaos\",\"lines\":[{\"sku\":\"$1\",\"quantity\":$2}]}" \
+	curl -s --max-time 15 -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "$AUTH" \
+		-d "{\"idempotencyKey\":\"chaos-$(date +%s%N)\",\"lines\":[{\"sku\":\"$1\",\"quantity\":$2}]}" \
 		| sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p'
 }
 
-status_of() { curl -sf --max-time 10 "$G/api/v1/orders/$1" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
+status_of() { curl -sf --max-time 10 -H "$AUTH" "$G/api/v1/orders/$1" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
 
 settle() { # order, seconds -> final status, or the last one seen
 	local order="$1" limit="${2:-60}" i s
@@ -94,7 +113,7 @@ redis_dies() {
 	seed "$sku" 20
 
 	step "warming the gate with one reservation"
-	curl -sf --max-time 10 -X POST $G/api/v1/inventory/reservations -H 'Content-Type: application/json' \
+	curl -sf --max-time 10 -X POST $G/api/v1/inventory/reservations -H 'Content-Type: application/json' -H "$AUTH" \
 		-d "{\"reservationKey\":\"warm-$sku\",\"customerId\":\"c\",\"ttlSeconds\":900,\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}" > /dev/null
 
 	step "killing redis"
@@ -104,7 +123,7 @@ redis_dies() {
 	local granted=0 refused=0 other=0 code
 	for i in $(seq 1 40); do
 		code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/reservations \
-			-H 'Content-Type: application/json' \
+			-H 'Content-Type: application/json' -H "$AUTH" \
 			-d "{\"reservationKey\":\"nored-$sku-$i\",\"customerId\":\"c$i\",\"ttlSeconds\":900,\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}")
 		case "$code" in 201) granted=$((granted+1));; 409) refused=$((refused+1));; *) other=$((other+1));; esac
 	done
@@ -235,8 +254,8 @@ catalog_dies() {
 	local before; before=$(psql_o "select count(*) from orders")
 	local body code
 	body=$(curl -s --max-time 15 -o /tmp/chaos-cat.json -w '%{http_code}' -X POST $G/api/v1/orders \
-		-H 'Content-Type: application/json' \
-		-d "{\"idempotencyKey\":\"chaos-cat-$(date +%s%N)\",\"customerId\":\"chaos\",\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}")
+		-H 'Content-Type: application/json' -H "$AUTH" \
+		-d "{\"idempotencyKey\":\"chaos-cat-$(date +%s%N)\",\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}")
 	code="$body"
 	echo "     checkout returned $code: $(head -c 120 /tmp/chaos-cat.json)"
 

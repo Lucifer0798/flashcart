@@ -128,6 +128,14 @@ jobs:
           done
           curl -sf $G/api/v1/user/_info | grep -q '"status":"skeleton"'
 
+      - name: Sign in as the operator, because stock is no longer anyone's to receive
+        run: |
+          set -e
+          OPERATOR=$(./scripts/operator-token.sh)
+          test -n "$OPERATOR"
+          echo "OPERATOR=$OPERATOR" >> $GITHUB_ENV
+          echo "got an operator token"
+
       - name: Sign in, because a checkout now needs a shopper
         run: |
           set -e
@@ -148,7 +156,7 @@ jobs:
           set -e
           G=http://localhost:18080
           SKU=AUD-HP-001
-          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' \
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR" \
             -d "{\"sku\":\"$SKU\",\"initialQuantity\":10,\"reason\":\"CI\"}" > /dev/null
 
           # 202: the order exists, but whether it got the stock is settled on the bus.
@@ -184,7 +192,7 @@ jobs:
           # The simulated provider declines any amount ending in .13, and the catalog seed has a
           # product priced at 24.99 -> so use one whose total lands on .13 via quantity.
           SKU=CI-DECLINE-$(date +%s)
-          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' \
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR" \
             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI decline\"}" > /dev/null
           CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
           curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' \
@@ -239,7 +247,7 @@ jobs:
           set -e
           G=http://localhost:18080
           SKU=CI-AUTH-$(date +%s)
-          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json'             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI auth\"}" > /dev/null
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI auth\"}" > /dev/null
           CAT=$(curl -sf $G/api/v1/categories | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
           curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json'             -d "{\"sku\":\"$SKU\",\"name\":\"CI auth probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":19.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
@@ -273,6 +281,78 @@ jobs:
           BYPASS=$(docker compose exec -T order wget -qO-             --post-data="{\"idempotencyKey\":\"ci-bypass-$(date +%s%N)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"             --header='Content-Type: application/json' --header='X-Customer-Id: someone-else'             --server-response http://localhost:8082/api/v1/orders 2>&1 | grep -o 'HTTP/1.1 [0-9]*' | head -1 | grep -o '[0-9]*$' || true)
           echo "forged header, valid body, straight to the service: ${BYPASS:-none}"
           test "${BYPASS:-none}" = "401"
+
+      - name: A shopper is not a warehouse
+        run: |
+          set -e
+          G=http://localhost:18080
+          SKU=CI-OPS-$(date +%s)
+
+          # A shopper's token is a perfectly valid token. It is not an operator, and receiving stock
+          # is not something being signed in should authorise.
+          SHOPPER=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock             -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"should be refused\"}")
+          echo "shopper receiving stock: $SHOPPER"
+          test "$SHOPPER" = "403"
+
+          # No token at all is 401 rather than 403: nothing to check the role of.
+          ANON=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock             -H 'Content-Type: application/json'             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"should be refused\"}")
+          echo "anonymous receiving stock: $ANON"
+          test "$ANON" = "401"
+
+          # The operator can.
+          OPS=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock             -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI ops\"}")
+          echo "operator receiving stock: $OPS"
+          test "$OPS" = "201"
+
+          # Availability stays public: a shopper needs to know how many are left.
+          AVAIL=$(curl -s -o /dev/null -w '%{http_code}' "$G/api/v1/inventory/stock/$SKU")
+          echo "anonymous availability read: $AVAIL"
+          test "$AVAIL" = "200"
+
+          # Availability is public for ONE more segment, and no further. The endpoints one step
+          # deeper -- the movement ledger, the receive and adjust paths -- sit under the same
+          # prefix, so a `/stock/**` rule would have exposed the lot while this check still
+          # passed. That is the whole reason the rule is a single star.
+          LEDGER=$(curl -s -o /dev/null -w '%{http_code}' "$G/api/v1/inventory/stock/$SKU/movements")
+          echo "anonymous movement ledger: $LEDGER"
+          test "$LEDGER" = "401"
+
+          # Nor does it expose the list of every SKU in the system.
+          LIST=$(curl -s -o /dev/null -w '%{http_code}' "$G/api/v1/inventory/stock")
+          echo "anonymous stock list: $LIST"
+          test "$LIST" = "401"
+
+          # And the services enforce it themselves, not just the gateway -- straight to the port
+          # compose publishes, which is exactly what bypassing the edge looks like. If this ever
+          # comes back 201, the gateway was the only thing standing between the internet and the
+          # stock ledger.
+          DIRECT=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:18085/api/v1/inventory/stock             -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN"             -d "{\"sku\":\"$SKU-direct\",\"initialQuantity\":5,\"reason\":\"bypass\"}")
+          echo "shopper token straight to inventory:18085: $DIRECT"
+          test "$DIRECT" = "403"
+
+          # The published port is genuinely reachable, so the 403 above is a refusal and not a
+          # connection failure quietly rendering as one.
+          DIRECTOK=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:18085/api/v1/inventory/stock/$SKU")
+          echo "direct availability read: $DIRECTOK"
+          test "$DIRECTOK" = "200"
+
+          # Payment and shipping got the same filter, so the same two questions get asked of them.
+          # Not because the filter might behave differently -- it is one class -- but because each
+          # service has to actually register it, and a service that forgot would look exactly like
+          # a service that did until somebody sent it a request. ADR 0022 claims three services are
+          # closed; this is the part that makes that a check rather than a claim.
+          # Both list endpoints take a customerId; any value does, since what is under test is who
+          # may ask rather than what comes back.
+          for RES in payments shipments; do
+            Q="$G/api/v1/$RES?customerId=ci-does-not-matter"
+            SHOP=$(curl -s -o /dev/null -w '%{http_code}' "$Q" -H "Authorization: Bearer $TOKEN")
+            NONE=$(curl -s -o /dev/null -w '%{http_code}' "$Q")
+            OK=$(curl -s -o /dev/null -w '%{http_code}' "$Q" -H "Authorization: Bearer $OPERATOR")
+            echo "$RES -- shopper: $SHOP  anonymous: $NONE  operator: $OK"
+            test "$SHOP" = "403"
+            test "$NONE" = "401"
+            test "$OK" = "200"
+          done
 
       - name: The outbox drained
         run: |
@@ -348,9 +428,9 @@ jobs:
           # neither.
           G=http://localhost:18080
           SKU=CI-RUSH-$(date +%s)
-          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json'             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI rush\"}" > /dev/null
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI rush\"}" > /dev/null
 
-          docker run --rm --network flashcart_default             -v "$PWD/load/scripts:/scripts:ro"             -e GATEWAY=http://gateway:8080 -e SKU="$SKU" -e VUS=100 -e ITERATIONS=300             grafana/k6:0.56.0 run /scripts/flash-sale.js > /tmp/k6.txt 2>&1 || true
+          docker run --rm --network flashcart_default             -v "$PWD/load/scripts:/scripts:ro"             -e GATEWAY=http://gateway:8080 -e SKU="$SKU" -e VUS=100 -e ITERATIONS=300 -e TOKEN="$OPERATOR"             grafana/k6:0.56.0 run /scripts/flash-sale.js > /tmp/k6.txt 2>&1 || true
           grep -E 'reservations_(granted|refused|shed|errored)' /tmp/k6.txt || true
 
           GRANTED=$(grep -oE 'reservations_granted[. ]*: *[0-9]+' /tmp/k6.txt | grep -oE '[0-9]+$')

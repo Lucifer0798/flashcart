@@ -2,6 +2,7 @@ package com.flashcart.user.domain;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -44,6 +45,16 @@ public class User {
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
 	private Status status = Status.ACTIVE;
+
+	/**
+	 * Comma-separated, and empty for everybody who registers through the API.
+	 *
+	 * <p>There is no endpoint that grants a role. Becoming an operator is an UPDATE somebody runs
+	 * deliberately, which is the correct amount of friction for the difference between reading your
+	 * own orders and adjusting a stock ledger.
+	 */
+	@Column(nullable = false)
+	private String roles = "";
 
 	@OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
 	private List<Address> addresses = new ArrayList<>();
@@ -131,6 +142,32 @@ public class User {
 
 	public Status getStatus() {
 		return status;
+	}
+
+	/**
+	 * Never null; empty for an ordinary shopper.
+	 *
+	 * <p>Trimmed, because this column is populated by a hand-written UPDATE by design, and
+	 * {@code 'OPERATOR, ADMIN'} typed with the space a human would naturally leave there would
+	 * otherwise produce a role called {@code " ADMIN"} that silently matches nothing.
+	 */
+	public List<String> getRoles() {
+		return parseRoles(roles);
+	}
+
+	/**
+	 * Separated from the getter only so it can be tested: the field is set by Hibernate and by
+	 * hand-written SQL, never through a setter, so there is otherwise no way to reach this from a
+	 * unit test without reflection.
+	 */
+	static List<String> parseRoles(String raw) {
+		if (raw == null || raw.isBlank()) {
+			return List.of();
+		}
+		return Arrays.stream(raw.split(","))
+				.map(String::trim)
+				.filter(role -> !role.isEmpty())
+				.toList();
 	}
 
 	public List<Address> getAddresses() {

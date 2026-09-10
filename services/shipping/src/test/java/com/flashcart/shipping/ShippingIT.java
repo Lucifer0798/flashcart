@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import com.flashcart.common.security.AccessTokens;
+import org.springframework.http.HttpHeaders;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -58,6 +60,23 @@ class ShippingIT {
 
 	@Autowired
 	private TestRestTemplate rest;
+
+	@Autowired
+	private AccessTokens tokens;
+
+	/**
+	 * Signs every request as an operator: dispatching and delivering a parcel are warehouse actions,
+	 * not shopper ones (ADR 0022).
+	 */
+	@BeforeEach
+	void signInAsOperator() {
+		String token = tokens.issue("ops-test", "ops@example.test", List.of(AccessTokens.OPERATOR));
+		rest.getRestTemplate().getInterceptors().clear();
+		rest.getRestTemplate().getInterceptors().add((request, body, execution) -> {
+			request.getHeaders().set(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			return execution.execute(request, body);
+		});
+	}
 
 	@BeforeEach
 	void reset() {

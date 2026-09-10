@@ -23,6 +23,19 @@ const SKU = __ENV.SKU;
 const VUS = Number(__ENV.VUS || 200);
 const ITERATIONS = Number(__ENV.ITERATIONS || 2000);
 
+// Reserving stock requires an operator since ADR 0022. The harness signs in once and passes the token
+// in, rather than each VU minting its own -- a run where every iteration also ran BCrypt would be
+// measuring the password encoder as much as the reserve path.
+//
+// Absent, this refuses to start. Defaulting to an empty string sends `Bearer ` to every request and
+// turns the whole run into 401s counted as reservations_errored -- which is indistinguishable, in the
+// summary, from the platform falling over under load. That is exactly the confusion this harness
+// exists to prevent, and it is the failure it produced the first time CI ran it without a token.
+const TOKEN = __ENV.TOKEN;
+if (!TOKEN) {
+	throw new Error('TOKEN is required: reserving stock needs an operator. Pass -e TOKEN=$(./scripts/operator-token.sh)');
+}
+
 // Counted separately rather than read off the status codes afterwards, because "refused" and
 // "failed" are different outcomes and conflating them is how a broken run looks like a busy one.
 // A 409 is the platform working correctly. A 500 is not.
@@ -89,7 +102,13 @@ export default function () {
 			ttlSeconds: 900,
 			lines: [{ sku: SKU, quantity: 1 }],
 		}),
-		{ headers: { 'Content-Type': 'application/json' }, tags: { name: 'reserve' } },
+		{
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${TOKEN}`,
+			},
+			tags: { name: 'reserve' },
+		},
 	);
 
 	if (response.status === 201) {

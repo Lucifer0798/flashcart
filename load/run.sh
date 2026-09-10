@@ -67,10 +67,18 @@ if [ -z "$ACTUAL_GATE" ] || [ "$ACTUAL_GATE" != "$GATE" ]; then
 fi
 
 # --- 2. seed exactly the stock we intend to fight over -------------------------------------------
+#
+# Seeding stock and reserving both need an operator now: being signed in makes somebody a customer,
+# not a warehouse. See ADR 0022.
+echo "--> signing in as the operator"
+TOKEN=$("$ROOT/scripts/operator-token.sh")
+
 echo "--> seeding $SKU with $STOCK units"
-curl -sf -X POST http://localhost:18080/api/v1/inventory/stock \
-	-H 'Content-Type: application/json' \
-	-d "{\"sku\":\"$SKU\",\"initialQuantity\":$STOCK,\"reason\":\"load test $LABEL\"}" > /dev/null
+SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:18080/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" -d "{\"sku\":\"$SKU\",\"initialQuantity\":$STOCK,\"reason\":\"load test $LABEL\"}")
+if [ "$SEED_CODE" != "201" ]; then
+	echo "!!! could not seed stock (http $SEED_CODE); the run below would measure an empty SKU"
+	exit 1
+fi
 
 # --- 3. the stampede ------------------------------------------------------------------------------
 echo "--> running k6"
@@ -83,6 +91,7 @@ MSYS_NO_PATHCONV=1 docker run --rm -i \
 	-e SKU="$SKU" \
 	-e VUS="$VUS" \
 	-e ITERATIONS="$ITERATIONS" \
+	-e TOKEN="$TOKEN" \
 	grafana/k6:0.56.0 run /scripts/flash-sale.js \
 	2>&1 | tee "$RESULTS/${LABEL}.txt" || true
 

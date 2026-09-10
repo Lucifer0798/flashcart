@@ -61,6 +61,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 
 **Who is asking**
 - [0021](adr/0021-the-client-does-not-say-who-it-is.md) — The client does not get to say who it is
+- [0022](adr/0022-being-signed-in-is-not-being-a-warehouse.md) — Being signed in is not being a warehouse
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)

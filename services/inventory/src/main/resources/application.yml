@@ -96,6 +96,11 @@ springdoc:
     path: /swagger-ui.html
 
 flashcart:
+  security:
+    jwt:
+      # Verifies operator tokens; this service never issues one. See ADR 0022.
+      secret: ${JWT_SECRET:flashcart-development-secret-do-not-use-anywhere-real}
+      ttl: ${JWT_TTL:PT12H}
   version: ${FLASHCART_VERSION:0.1.0-SNAPSHOT}
   inventory:
     # How long a hold lasts by default: long enough to enter card details, short enough that an

@@ -14,6 +14,9 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import com.flashcart.common.security.AccessTokens;
+import org.springframework.http.HttpHeaders;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -93,6 +96,27 @@ abstract class AbstractInventoryIT {
 
 	@Autowired
 	protected TestRestTemplate rest;
+
+	@Autowired
+	protected AccessTokens tokens;
+
+	/**
+	 * Signs every request in this hierarchy as an operator.
+	 *
+	 * <p>Inventory's write surface needs one since ADR 0022 -- receiving stock and adjusting a ledger
+	 * are not things being signed in should authorise. Done once here rather than in five subclasses,
+	 * because five copies is five chances for one of them to quietly stop exercising the service and
+	 * start exercising the filter instead.
+	 */
+	@BeforeEach
+	void signInAsOperator() {
+		String token = tokens.issue("ops-test", "ops@example.test", List.of(AccessTokens.OPERATOR));
+		rest.getRestTemplate().getInterceptors().clear();
+		rest.getRestTemplate().getInterceptors().add((request, body, execution) -> {
+			request.getHeaders().set(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			return execution.execute(request, body);
+		});
+	}
 
 	// --- fixtures --------------------------------------------------------------------------------
 
