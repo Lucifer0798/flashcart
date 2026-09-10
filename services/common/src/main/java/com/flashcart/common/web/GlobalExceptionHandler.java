@@ -25,6 +25,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
@@ -97,6 +98,32 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler({ HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class })
 	public ResponseEntity<ApiError> handleMalformed(Exception ex, HttpServletRequest request) {
 		return build(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "Request could not be read", request);
+	}
+
+	/**
+	 * A required query parameter that was not sent.
+	 *
+	 * <p>Without this, {@code GET /api/v1/payments} with no {@code customerId} fell through to the
+	 * catch-all and answered 500, logging "Unhandled exception" as though the service had broken.
+	 * Nothing had: the caller omitted something the endpoint requires, which is the definition of a
+	 * 400. The same mistake as the wrong-verb case above, wearing different clothes.
+	 *
+	 * <p>Rendered as a validation failure rather than {@code MALFORMED_REQUEST}, because unlike an
+	 * unparseable body this one knows exactly which parameter is missing and can say so. That is the
+	 * difference between a caller reading the message and a caller guessing.
+	 *
+	 * <p>Caught specifically, and not as its parent {@code MissingRequestValueException}:
+	 * {@code MissingPathVariableException} extends the same parent, and it means a handler declared
+	 * a {@code @PathVariable} the mapping does not supply. That is our bug, not the caller's, and it
+	 * should keep returning 500 rather than blaming whoever happened to send the request.
+	 */
+	@ExceptionHandler(MissingServletRequestParameterException.class)
+	public ResponseEntity<ApiError> handleMissingParameter(MissingServletRequestParameterException ex,
+			HttpServletRequest request) {
+		return ResponseEntity.badRequest()
+				.body(ApiError.validation("Request validation failed", request.getRequestURI(),
+						CorrelationId.current(),
+						List.of(new ApiError.FieldError(ex.getParameterName(), "is required"))));
 	}
 
 	@ExceptionHandler(NoResourceFoundException.class)
