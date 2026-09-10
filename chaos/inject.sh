@@ -19,6 +19,11 @@ G=http://localhost:18080
 SCENARIO="${1:-all}"
 FAILURES=0
 
+# Seeding stock and reserving need an operator since ADR 0022. Fetched once, up front, so a failure
+# here stops the run rather than surfacing as 401s three scenarios later that read as a platform fault.
+TOKEN=$("$ROOT/scripts/operator-token.sh")
+AUTH="Authorization: Bearer $TOKEN"
+
 say()  { echo ""; echo "=== $* ==="; }
 step() { echo "  -> $*"; }
 pass() { echo "  PASS: $*"; }
@@ -31,8 +36,17 @@ seed() { # sku, qty -> stock plus a priced product so orders can be placed
 	local sku="$1" qty="$2"
 	local cat code
 	cat=$(curl -sf --max-time 10 $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
-	curl -sf --max-time 10 -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' \
-		-d "{\"sku\":\"$sku\",\"initialQuantity\":$qty,\"reason\":\"chaos\"}" > /dev/null
+	# Checked, not assumed. This script does not run under `set -e`, and stock now needs an operator
+	# -- so a token that expired or a role that was revoked would leave every scenario below fighting
+	# over a sku that does not exist, and the refusals that followed would read as the platform
+	# breaking under chaos. Telling those two apart is the entire point of this harness.
+	code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock \
+		-H 'Content-Type: application/json' -H "$AUTH" \
+		-d "{\"sku\":\"$sku\",\"initialQuantity\":$qty,\"reason\":\"chaos\"}")
+	if [ "$code" != "201" ]; then
+		echo "  FAIL: could not seed $sku (http $code) -- every scenario below would be meaningless" >&2
+		exit 1
+	fi
 
 	# The product name carries the sku, and the status is checked rather than assumed.
 	#
@@ -94,7 +108,7 @@ redis_dies() {
 	seed "$sku" 20
 
 	step "warming the gate with one reservation"
-	curl -sf --max-time 10 -X POST $G/api/v1/inventory/reservations -H 'Content-Type: application/json' \
+	curl -sf --max-time 10 -X POST $G/api/v1/inventory/reservations -H 'Content-Type: application/json' -H "$AUTH" \
 		-d "{\"reservationKey\":\"warm-$sku\",\"customerId\":\"c\",\"ttlSeconds\":900,\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}" > /dev/null
 
 	step "killing redis"
@@ -104,7 +118,7 @@ redis_dies() {
 	local granted=0 refused=0 other=0 code
 	for i in $(seq 1 40); do
 		code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/reservations \
-			-H 'Content-Type: application/json' \
+			-H 'Content-Type: application/json' -H "$AUTH" \
 			-d "{\"reservationKey\":\"nored-$sku-$i\",\"customerId\":\"c$i\",\"ttlSeconds\":900,\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}")
 		case "$code" in 201) granted=$((granted+1));; 409) refused=$((refused+1));; *) other=$((other+1));; esac
 	done

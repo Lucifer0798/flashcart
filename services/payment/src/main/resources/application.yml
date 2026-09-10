@@ -66,6 +66,11 @@ springdoc:
     path: /swagger-ui.html
 
 flashcart:
+  security:
+    jwt:
+      # Verifies operator tokens; this service never issues one. See ADR 0022.
+      secret: ${JWT_SECRET:flashcart-development-secret-do-not-use-anywhere-real}
+      ttl: ${JWT_TTL:PT12H}
   version: ${FLASHCART_VERSION:0.1.0-SNAPSHOT}
   payment:
     # The simulated provider picks its outcome from the amount's cents, so a declined or timed-out

@@ -27,3 +27,4 @@ when someone revisits it in six months.
 | [0019](0019-measure-or-say-you-cannot.md) | Report what the measurement supports, and no more | Accepted |
 | [0020](0020-a-trace-must-survive-the-outbox.md) | A trace has to survive the outbox | Accepted |
 | [0021](0021-the-client-does-not-say-who-it-is.md) | The client does not get to say who it is | Accepted |
+| [0022](0022-being-signed-in-is-not-being-a-warehouse.md) | Being signed in is not being a warehouse | Accepted |

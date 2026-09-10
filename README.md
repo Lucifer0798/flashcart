@@ -552,11 +552,37 @@ $ curl -X POST localhost:18082/api/v1/orders -H 'X-Customer-Id: someone-else' ..
 401
 ```
 
-**What is not secured, said plainly:** inventory, payment and shipping expose operational APIs with no
-authentication at all. Nothing reaches them from outside in this deployment, but that is a claim about
-a compose file rather than a property of the system, and their ports are published too. Closing it
-means an internal-only network or a service token, and it is the obvious next piece of work —
-[ADR 0021](docs/adr/0021-the-client-does-not-say-who-it-is.md).
+### Operators
+
+Receiving stock, adjusting a ledger, creating an allocation and dispatching a parcel need more than an
+account. **Being signed in makes somebody a customer, not a warehouse** — those need the `OPERATOR`
+role ([ADR 0022](docs/adr/0022-being-signed-in-is-not-being-a-warehouse.md)).
+
+```bash
+TOKEN=$(./scripts/operator-token.sh)   # seeded development operator
+curl -X POST localhost:18080/api/v1/inventory/stock -H "Authorization: Bearer $TOKEN" ...
+```
+
+| | |
+|---|---|
+| Anonymous receiving stock | `401` |
+| A **shopper** receiving stock | `403` — a valid token, the wrong power |
+| Operator receiving stock | `201` |
+| Anonymous reading `GET /stock/{sku}` | `200` — availability stays public |
+| Anonymous reading `GET /stock/{sku}/movements` | `401` — and public stops exactly one segment deep |
+| Shopper's token straight to `inventory:18085` | `403` — the services check for themselves |
+| A **shopper** listing payments or shipments | `403` — all three services, not just inventory |
+
+Inventory, payment and shipping are **default-deny**: the filter protects everything not explicitly
+declared public, so an endpoint added tomorrow is closed until somebody decides otherwise. A service
+that lists what to protect forgets one and ships it open; only one direction of that mistake is
+survivable.
+
+**Two things are still open, said plainly.** The seeded operator's credentials are in a migration in
+this repository — a development convenience, and any deployment that keeps that row has no operator
+security at all. And a shopper still cannot read their own payment or shipment: those require an
+operator, which is safe but wrong, and doing it properly needs the same ownership checks ADR 0021 did
+for orders.
 
 ## Breaking it on purpose
 

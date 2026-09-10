@@ -4,6 +4,7 @@ import java.text.ParseException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
+import java.util.List;
 import java.util.Optional;
 
 import com.nimbusds.jose.JOSEException;
@@ -53,6 +54,18 @@ public final class AccessTokens {
 	/** Who the token is about: the user id, which is the {@code customerId} everything else uses. */
 	public static final String SUBJECT = "sub";
 
+	/**
+	 * The one role that means anything beyond "signed in".
+	 *
+	 * <p>Deliberately a single role rather than a permission model. Every shopper is a shopper, and
+	 * the only other thing this platform has is somebody allowed to receive stock, adjust a ledger or
+	 * mark a parcel delivered. Inventing SHOPPER, VIEWER, SUPPORT and ADMIN before anything needs them
+	 * produces a matrix nobody maintains and checks nobody reads.
+	 */
+	public static final String OPERATOR = "OPERATOR";
+
+	private static final String ROLES_CLAIM = "roles";
+
 	private static final String ISSUER = "flashcart-user";
 	private static final String EMAIL_CLAIM = "email";
 
@@ -70,13 +83,19 @@ public final class AccessTokens {
 		this.ttl = ttl;
 	}
 
-	/** Mints a token for a user. Only the user service should be calling this. */
+	/** Mints a token for an ordinary shopper. */
 	public String issue(String userId, String email) {
+		return issue(userId, email, List.of());
+	}
+
+	/** Mints a token carrying roles. Only the user service should be calling this. */
+	public String issue(String userId, String email, List<String> roles) {
 		Instant now = Instant.now();
 		JWTClaimsSet claims = new JWTClaimsSet.Builder()
 				.subject(userId)
 				.issuer(ISSUER)
 				.claim(EMAIL_CLAIM, email)
+				.claim(ROLES_CLAIM, roles)
 				.issueTime(Date.from(now))
 				.expirationTime(Date.from(now.plus(ttl)))
 				.build();
@@ -126,6 +145,25 @@ public final class AccessTokens {
 		catch (ParseException | JOSEException ex) {
 			log.debug("Rejected an unparseable token");
 			return Optional.empty();
+		}
+	}
+
+	/**
+	 * True when the token is valid <em>and</em> carries {@link #OPERATOR}.
+	 *
+	 * <p>One method rather than "is it valid" plus "does it have the role", because those are two
+	 * questions a caller can accidentally ask only half of. A single answer cannot be half-checked.
+	 */
+	public boolean isOperator(String token) {
+		try {
+			if (subject(token).isEmpty()) {
+				return false;
+			}
+			Object roles = SignedJWT.parse(token).getJWTClaimsSet().getClaim(ROLES_CLAIM);
+			return roles instanceof List<?> list && list.contains(OPERATOR);
+		}
+		catch (ParseException ex) {
+			return false;
 		}
 	}
 

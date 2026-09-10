@@ -23,6 +23,11 @@ const SKU = __ENV.SKU;
 const VUS = Number(__ENV.VUS || 200);
 const ITERATIONS = Number(__ENV.ITERATIONS || 2000);
 
+// Reserving stock requires an operator since ADR 0022. The harness signs in once and passes the token
+// in, rather than each VU minting its own -- a run where every iteration also ran BCrypt would be
+// measuring the password encoder as much as the reserve path.
+const TOKEN = __ENV.TOKEN || '';
+
 // Counted separately rather than read off the status codes afterwards, because "refused" and
 // "failed" are different outcomes and conflating them is how a broken run looks like a busy one.
 // A 409 is the platform working correctly. A 500 is not.
@@ -89,7 +94,13 @@ export default function () {
 			ttlSeconds: 900,
 			lines: [{ sku: SKU, quantity: 1 }],
 		}),
-		{ headers: { 'Content-Type': 'application/json' }, tags: { name: 'reserve' } },
+		{
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${TOKEN}`,
+			},
+			tags: { name: 'reserve' },
+		},
 	);
 
 	if (response.status === 201) {

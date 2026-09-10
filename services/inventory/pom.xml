@@ -14,6 +14,12 @@
 	<description>Stock levels, reservations and reservation expiry — the service that must not oversell</description>
 
 	<dependencies>
+		<!-- Declared explicitly because flashcart-common marks it optional: this service verifies
+		     operator tokens, so it pays for the library that does it. -->
+		<dependency>
+			<groupId>com.nimbusds</groupId>
+			<artifactId>nimbus-jose-jwt</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>com.flashcart</groupId>
 			<artifactId>flashcart-common</artifactId>

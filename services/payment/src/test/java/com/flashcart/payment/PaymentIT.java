@@ -22,6 +22,9 @@ import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRe
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Import;
+import com.flashcart.common.security.AccessTokens;
+import org.springframework.http.HttpHeaders;
+import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.TestPropertySource;
@@ -68,6 +71,26 @@ class PaymentIT {
 
 	@Autowired
 	private TestRestTemplate rest;
+
+	@Autowired
+	private AccessTokens tokens;
+
+	/**
+	 * Signs every request as an operator.
+	 *
+	 * <p>Payment's HTTP surface is entirely back-office since ADR 0022 -- these are records a
+	 * shopper never reads directly. Without this the suite would exercise the filter rather than the
+	 * service, and "404 for an unknown payment" would quietly become "403 for everyone".
+	 */
+	@BeforeEach
+	void signInAsOperator() {
+		String token = tokens.issue("ops-test", "ops@example.test", List.of(AccessTokens.OPERATOR));
+		rest.getRestTemplate().getInterceptors().clear();
+		rest.getRestTemplate().getInterceptors().add((request, body, execution) -> {
+			request.getHeaders().set(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			return execution.execute(request, body);
+		});
+	}
 
 	@BeforeEach
 	void reset() {
