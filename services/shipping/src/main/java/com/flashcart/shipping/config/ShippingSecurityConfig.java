@@ -38,7 +38,15 @@ public class ShippingSecurityConfig {
 		FilterRegistrationBean<OperatorFilter> registration = new FilterRegistrationBean<>(
 				new OperatorFilter(tokens, List.of(
 						"/api/v1/shipping/_info",
-						"/actuator/**")));
+						"/actuator/**"),
+						// Reads only, and GET only. Dispatch and deliver are POSTs to paths under
+						// /shipments/*, so they fall through to the operator default -- a customer
+						// may watch their parcel move, not move it. ShipmentController checks whose
+						// parcel each of these is. See ADR 0023.
+						List.of(
+								"GET /api/v1/shipments",
+								"GET /api/v1/shipments/*",
+								"GET /api/v1/shipments/order/*")));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);

@@ -11,6 +11,7 @@ import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.error.UpstreamUnavailableException;
 import com.flashcart.common.error.ConflictException;
 import com.flashcart.common.error.FlashCartException;
+import com.flashcart.common.error.OperatorRequiredException;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.order.IllegalOrderTransitionException;
 import org.slf4j.Logger;
@@ -210,6 +211,11 @@ public class GlobalExceptionHandler {
 		}
 		if (ex instanceof UnauthenticatedException) {
 			return HttpStatus.UNAUTHORIZED;
+		}
+		// Signed in, but not allowed. 403 rather than 401, because asking a caller whose credentials
+		// are fine to authenticate again sends them round a loop that cannot succeed.
+		if (ex instanceof OperatorRequiredException) {
+			return HttpStatus.FORBIDDEN;
 		}
 		return HttpStatus.INTERNAL_SERVER_ERROR;
 	}

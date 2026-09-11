@@ -293,7 +293,7 @@ duplicates neither.
 |--------|------|-------|
 | `POST` | `/api/v1/orders` | Place an order. **202 Accepted**, `CREATED` — the reservation settles on the bus |
 | `GET`  | `/api/v1/orders/{orderNumber}` | |
-| `GET`  | `/api/v1/orders?customerId=` | Newest first |
+| `GET`  | `/api/v1/orders` | Yours, newest first — whose is decided by the token |
 | `GET`  | `/api/v1/orders/{orderNumber}/history` | Every transition, with reasons |
 | `POST` | `/api/v1/orders/{orderNumber}/cancel` | Cancels and asks inventory to release |
 
@@ -303,7 +303,7 @@ lifecycle two drivers, and the one thing worse than a saga is a saga something e
 halfway through.
 
 ```bash
-curl -X POST http://localhost:18080/api/v1/orders -H 'Content-Type: application/json' -d '{"idempotencyKey":"checkout-1001","customerId":"cust-42","flashSaleId":null,"lines":[{"sku":"AUD-HP-001","quantity":1}]}'
+curl -X POST http://localhost:18080/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" -d '{"idempotencyKey":"checkout-1001","flashSaleId":null,"lines":[{"sku":"AUD-HP-001","quantity":1}]}'
 ```
 
 **There is no price field in the request, deliberately.** A checkout that trusts a client-supplied
@@ -365,9 +365,17 @@ initiated by a `RequestPayment` command on the bus, and a shipment only by `Crea
 one operation that moves money and the one that sends real goods each have exactly one entry point.
 Both expose reads.
 
-`GET /api/v1/payments/order/{orderNumber}`, `GET /api/v1/payments/{id}`,
-`GET /api/v1/shipments/order/{orderNumber}`, `GET /api/v1/shipments/{trackingNumber}`, plus manual
-`dispatch` and `deliver` transitions a warehouse operator drives.
+| Method | Path | Who |
+|--------|------|-----|
+| `GET` | `/api/v1/payments` | Yours, newest first — no parameter names you |
+| `GET` | `/api/v1/payments/{id}`, `/api/v1/payments/order/{orderNumber}` | Yours; somebody else's is `404` |
+| `GET` | `/api/v1/shipments` | Yours, newest first |
+| `GET` | `/api/v1/shipments/{trackingNumber}`, `/api/v1/shipments/order/{orderNumber}` | Yours; somebody else's is `404` |
+| `POST` | `/api/v1/shipments/{trackingNumber}/dispatch`, `.../deliver` | **Operator** — a warehouse action |
+
+An operator may add `?customerId=` to either listing to read somebody else's. Anyone else doing that
+is refused with `403` rather than quietly handed their own rows, because an answer that looks like
+success is worse than an error. See [ADR 0023](docs/adr/0023-a-customer-may-see-their-own.md).
 
 ### Making a payment fail on purpose
 
@@ -571,18 +579,32 @@ curl -X POST localhost:18080/api/v1/inventory/stock -H "Authorization: Bearer $T
 | Anonymous reading `GET /stock/{sku}` | `200` — availability stays public |
 | Anonymous reading `GET /stock/{sku}/movements` | `401` — and public stops exactly one segment deep |
 | Shopper's token straight to `inventory:18085` | `403` — the services check for themselves |
-| A **shopper** listing payments or shipments | `403` — all three services, not just inventory |
+| A **shopper** reading their own payment or parcel | `200` — it is theirs |
+| A **shopper** reading somebody else's | `404` — not `403`, which would confirm the id is real |
+| A **shopper** naming another customer with `?customerId=` | `403` — refused, not quietly given their own |
+| A **shopper** dispatching their own parcel | `403` — watch it move, do not move it |
 
 Inventory, payment and shipping are **default-deny**: the filter protects everything not explicitly
 declared public, so an endpoint added tomorrow is closed until somebody decides otherwise. A service
 that lists what to protect forgets one and ships it open; only one direction of that mistake is
 survivable.
 
-**Two things are still open, said plainly.** The seeded operator's credentials are in a migration in
+There are **three** categories, not two, and the middle one is the one to be careful with:
+
+| | |
+|---|---|
+| public | no token — availability, `_info`, actuator |
+| signed in | any valid token, **and the handler checks whose row it is** — your own payment or parcel |
+| operator | everything else, still the default |
+
+Passing the filter is the whole check for the first and third. It is not for the middle one: a path
+listed there without an ownership check in its handler is wide open and looks perfectly configured.
+That is why the tests for it are mostly about what a *second* customer cannot see. See ADR 0023.
+
+**One thing is still open, said plainly.** The seeded operator's credentials are in a migration in
 this repository — a development convenience, and any deployment that keeps that row has no operator
-security at all. And a shopper still cannot read their own payment or shipment: those require an
-operator, which is safe but wrong, and doing it properly needs the same ownership checks ADR 0021 did
-for orders.
+security at all. It matters a little more now that an operator can read every customer's payment
+history.
 
 ## Breaking it on purpose
 

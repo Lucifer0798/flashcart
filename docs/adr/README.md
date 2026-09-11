@@ -28,3 +28,4 @@ when someone revisits it in six months.
 | [0020](0020-a-trace-must-survive-the-outbox.md) | A trace has to survive the outbox | Accepted |
 | [0021](0021-the-client-does-not-say-who-it-is.md) | The client does not get to say who it is | Accepted |
 | [0022](0022-being-signed-in-is-not-being-a-warehouse.md) | Being signed in is not being a warehouse | Accepted |
+| [0023](0023-a-customer-may-see-their-own.md) | A customer may see their own | Accepted |

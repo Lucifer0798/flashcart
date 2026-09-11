@@ -38,7 +38,15 @@ public class PaymentSecurityConfig {
 		FilterRegistrationBean<OperatorFilter> registration = new FilterRegistrationBean<>(
 				new OperatorFilter(tokens, List.of(
 						"/api/v1/payment/_info",
-						"/actuator/**")));
+						"/actuator/**"),
+						// Reads a customer may make of their own. PaymentController checks whose row
+						// each one is; this list only says a token is required. Adding a path here
+						// without that check hands every customer everybody else's charges, and looks
+						// exactly like a correct configuration from here. See ADR 0023.
+						List.of(
+								"GET /api/v1/payments",
+								"GET /api/v1/payments/*",
+								"GET /api/v1/payments/order/*")));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);

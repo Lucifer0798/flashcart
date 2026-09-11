@@ -101,6 +101,43 @@ class OperatorFilterTest {
 		}
 	}
 
+	@Nested
+	@DisplayName("the signed-in category")
+	class SignedIn {
+
+		@Test
+		@DisplayName("reads are listed, and the collection and one identifier both match")
+		void coversTheReadPaths() {
+			assertThat(OperatorFilter.matches("GET /api/v1/shipments", "GET", "/api/v1/shipments"))
+					.isTrue();
+			assertThat(OperatorFilter.matches("GET /api/v1/shipments/*", "GET", "/api/v1/shipments/TRK1"))
+					.isTrue();
+			assertThat(OperatorFilter.matches("GET /api/v1/shipments/order/*", "GET",
+					"/api/v1/shipments/order/FC-1")).isTrue();
+		}
+
+		@Test
+		@DisplayName("dispatch and deliver are POSTs, so no GET rule reaches them")
+		void doesNotCoverTheWarehouseActions() {
+			for (String rule : new String[] { "GET /api/v1/shipments", "GET /api/v1/shipments/*",
+					"GET /api/v1/shipments/order/*" }) {
+				assertThat(OperatorFilter.matches(rule, "POST", "/api/v1/shipments/TRK1/dispatch"))
+						.as(rule + " must not match dispatch")
+						.isFalse();
+				assertThat(OperatorFilter.matches(rule, "POST", "/api/v1/shipments/TRK1/deliver"))
+						.as(rule + " must not match deliver")
+						.isFalse();
+			}
+		}
+
+		@Test
+		@DisplayName("nor does the single star reach them even as a GET, being a segment too deep")
+		void singleStarStopsAboveTheActions() {
+			assertThat(OperatorFilter.matches("GET /api/v1/shipments/*", "GET",
+					"/api/v1/shipments/TRK1/dispatch")).isFalse();
+		}
+	}
+
 	@Test
 	@DisplayName("a rule with no star is an exact path")
 	void exactPath() {
