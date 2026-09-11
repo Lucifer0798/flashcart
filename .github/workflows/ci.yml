@@ -341,8 +341,10 @@ jobs:
           # service has to actually register it, and a service that forgot would look exactly like
           # a service that did until somebody sent it a request. ADR 0022 claims three services are
           # closed; this is the part that makes that a check rather than a claim.
-          # Both list endpoints take a customerId; any value does, since what is under test is who
-          # may ask rather than what comes back.
+          # These two are no longer operator-only: since ADR 0023 a customer reads their own. What
+          # stays refused is naming somebody else, which is what customerId here does -- so a
+          # shopper gets 403 not because the endpoint is closed but because the row is not theirs.
+          # The customer's own view is asserted in its own step below, against a real order.
           for RES in payments shipments; do
             Q="$G/api/v1/$RES?customerId=ci-does-not-matter"
             SHOP=$(curl -s -o /dev/null -w '%{http_code}' "$Q" -H "Authorization: Bearer $TOKEN")
@@ -353,6 +355,89 @@ jobs:
             test "$NONE" = "401"
             test "$OK" = "200"
           done
+
+      - name: A customer can see their own payment and parcel, and nobody else's
+        run: |
+          set -e
+          G=http://localhost:18080
+
+          # A second shopper, so "not yours" is a real other account rather than a missing token.
+          OTHER_EMAIL="other-$(date +%s)@example.test"
+          PASS="a-sufficiently-long-password"
+          curl -s -o /dev/null -X POST $G/api/v1/users -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$OTHER_EMAIL\",\"password\":\"$PASS\",\"displayName\":\"CI Other\"}"
+          OTHER=$(curl -s -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$OTHER_EMAIL\",\"password\":\"$PASS\"}" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+          test -n "$OTHER"
+
+          # An order of our own to look at, on the SKU the saga step already stocked and priced.
+          curl -s -o /tmp/own.json -X POST $G/api/v1/orders \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+            -d "{\"idempotencyKey\":\"ci-own-$(date +%s)\",\"lines\":[{\"sku\":\"AUD-HP-001\",\"quantity\":1}]}"
+          ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/own.json)
+          test -n "$ORDER"
+          echo "placed $ORDER as the shopper"
+
+          # Payment and shipment are created on the bus, so they arrive when they arrive.
+          for i in $(seq 1 60); do
+            PAY=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$G/api/v1/payments/order/$ORDER")
+            if [ "$PAY" = "200" ]; then break; fi
+            sleep 2
+          done
+          echo "shopper reading their own payment:  $PAY"
+          test "$PAY" = "200"
+
+          for i in $(seq 1 60); do
+            SHIP=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$G/api/v1/shipments/order/$ORDER")
+            if [ "$SHIP" = "200" ]; then break; fi
+            sleep 2
+          done
+          echo "shopper reading their own shipment: $SHIP"
+          test "$SHIP" = "200"
+
+          # The assertion this whole change lives or dies on. 404 rather than 403, because a 403
+          # confirms the order number is real, and order numbers are short and guessable.
+          NOTYOURS_PAY=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OTHER" "$G/api/v1/payments/order/$ORDER")
+          NOTYOURS_SHIP=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OTHER" "$G/api/v1/shipments/order/$ORDER")
+          echo "another customer reading it:       payment $NOTYOURS_PAY  shipment $NOTYOURS_SHIP"
+          test "$NOTYOURS_PAY" = "404"
+          test "$NOTYOURS_SHIP" = "404"
+
+          # A tracking number is printed on a label and read aloud to carriers, so it gets the same
+          # treatment as the order number.
+          TRACKING=$(curl -s -H "Authorization: Bearer $TOKEN" "$G/api/v1/shipments/order/$ORDER" | grep -o '"trackingNumber":"[^"]*"' | cut -d'"' -f4)
+          test -n "$TRACKING"
+          BYTRACK=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OTHER" "$G/api/v1/shipments/$TRACKING")
+          echo "another customer by tracking:      $BYTRACK"
+          test "$BYTRACK" = "404"
+
+          # Your own listing needs no parameter naming you.
+          MINE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$G/api/v1/payments")
+          echo "shopper listing their own:         $MINE"
+          test "$MINE" = "200"
+
+          # And the listing is scoped: the other shopper's is empty while ours is not.
+          COUNT_OTHER=$(curl -s -H "Authorization: Bearer $OTHER" "$G/api/v1/payments" | grep -o '"id"' | wc -l)
+          COUNT_MINE=$(curl -s -H "Authorization: Bearer $TOKEN" "$G/api/v1/payments" | grep -o '"id"' | wc -l)
+          echo "listing sizes: ours=$COUNT_MINE theirs=$COUNT_OTHER"
+          test "$COUNT_OTHER" = "0"
+          test "$COUNT_MINE" != "0"
+
+          # Naming somebody else is refused outright rather than silently answered with your own,
+          # which would read as success to whoever wrote the call.
+          ASKING=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$G/api/v1/payments?customerId=somebody-else")
+          echo "shopper naming another customer:   $ASKING"
+          test "$ASKING" = "403"
+
+          # A customer may watch a parcel move, not move it.
+          DISPATCH=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" "$G/api/v1/shipments/$TRACKING/dispatch")
+          echo "shopper dispatching their parcel:  $DISPATCH"
+          test "$DISPATCH" = "403"
+
+          # The operator is unaffected by any of this.
+          OPS=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OPERATOR" "$G/api/v1/payments/order/$ORDER")
+          echo "operator reading it:               $OPS"
+          test "$OPS" = "200"
 
       - name: The outbox drained
         run: |

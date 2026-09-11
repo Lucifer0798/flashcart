@@ -40,6 +40,20 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * parcel delivered, without an account.
  *
  * <p>A shopper's token is not enough. Being signed in makes somebody a customer, not a warehouse.
+ *
+ * <h2>Three categories, in descending order of trust</h2>
+ *
+ * <ol>
+ * <li><strong>public</strong> — no token. Stock availability, {@code _info}, actuator.</li>
+ * <li><strong>signed in</strong> — any valid token, <em>and the handler checks whose row it is</em>.
+ * A customer reading their own payment or shipment. The filter cannot make this decision, because a
+ * path alone does not say who owns what is behind it.</li>
+ * <li><strong>operator</strong> — everything else, by default.</li>
+ * </ol>
+ *
+ * <p>The middle category is the dangerous one: it is the only one where passing this filter is not
+ * the whole check, so a path listed there without an ownership check in the handler is wide open and
+ * looks perfectly configured. See {@link #OperatorFilter(AccessTokens, List, List)}.
  */
 public class OperatorFilter extends OncePerRequestFilter {
 
@@ -47,19 +61,38 @@ public class OperatorFilter extends OncePerRequestFilter {
 
 	private final AccessTokens tokens;
 	private final List<String> publicPaths;
+	private final List<String> signedInPaths;
 
 	/**
 	 * @param publicPaths what needs no token at all. Each entry is optionally prefixed with an HTTP
 	 *                    method ({@code "GET /api/v1/x/*"}), and ends either literally, with
 	 *                    {@code *} for exactly one more path segment, or {@code **} for any number.
-	 *                    Everything else on this service requires {@link AccessTokens#OPERATOR}.
+	 *                    Everything else requires {@link AccessTokens#OPERATOR}, unless it is listed
+	 *                    in {@code signedInPaths}.
 	 *                    <p>The single-star form is the one that matters: {@code /stock/*} exposes
 	 *                    availability for one SKU without also exposing {@code /stock/{sku}/movements}
 	 *                    or {@code /stock/{sku}/receive}, which a {@code **} would have done silently.
 	 */
 	public OperatorFilter(AccessTokens tokens, List<String> publicPaths) {
+		this(tokens, publicPaths, List.of());
+	}
+
+	/**
+	 * @param signedInPaths what any signed-in user may reach, <strong>because the handler behind it
+	 *                      enforces ownership itself</strong>. Same pattern syntax as
+	 *                      {@code publicPaths}.
+	 *                      <p>This is the weakest of the three categories and the easiest to get
+	 *                      wrong, because the filter can only check that somebody is signed in --
+	 *                      it has no idea whose row is behind the path. Listing a path here without
+	 *                      an ownership check in the handler hands every customer's data to every
+	 *                      other customer, and it looks exactly like a correct configuration. Add a
+	 *                      path here only together with the check, and with a test that another
+	 *                      user's row is not returned.
+	 */
+	public OperatorFilter(AccessTokens tokens, List<String> publicPaths, List<String> signedInPaths) {
 		this.tokens = tokens;
 		this.publicPaths = List.copyOf(publicPaths);
+		this.signedInPaths = List.copyOf(signedInPaths);
 	}
 
 	@Override
@@ -78,20 +111,31 @@ public class OperatorFilter extends OncePerRequestFilter {
 			return;
 		}
 
+		// Signed in is enough here, and only here. The handler decides whose row it is; this filter
+		// cannot, because it does not know what the path resolves to.
+		boolean signedIn = token != null && tokens.subject(token).isPresent();
+		if (signedIn && isSignedInPath(request.getMethod(), path)) {
+			chain.doFilter(request, response);
+			return;
+		}
+
 		// 403 when a valid token simply lacks the role, 401 when there is no usable token at all.
 		// This is the opposite of the order service's deliberate 404 for somebody else's order: there,
 		// distinguishing "not yours" from "does not exist" hands an attacker an oracle over guessable
 		// order numbers. Here the paths are fixed and published in the OpenAPI document, so there is
 		// nothing to conceal and a signed-in operator debugging a permissions problem deserves to be
 		// told which of the two things is wrong.
-		boolean authenticated = token != null && tokens.subject(token).isPresent();
-		HttpStatus status = authenticated ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED;
+		HttpStatus status = signedIn ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED;
 		log.info("Refused {} {} with {}", request.getMethod(), path, status.value());
 		write(request, response, status);
 	}
 
 	private boolean isPublic(String method, String path) {
 		return publicPaths.stream().anyMatch(rule -> matches(rule, method, path));
+	}
+
+	private boolean isSignedInPath(String method, String path) {
+		return signedInPaths.stream().anyMatch(rule -> matches(rule, method, path));
 	}
 
 	// Package-private so the rule syntax can be tested directly. It is small, it is subtle, and
