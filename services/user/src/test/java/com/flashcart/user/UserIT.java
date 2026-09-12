@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.common.security.AccessTokens;
+import com.flashcart.user.repository.UserRepository;
 import com.flashcart.user.api.dto.UserDtos.AddressRequest;
 import com.flashcart.user.api.dto.UserDtos.RegisterRequest;
 import com.flashcart.user.api.dto.UserDtos.SignInRequest;
@@ -48,6 +49,9 @@ class UserIT {
 
 	@Autowired
 	private AccessTokens tokens;
+
+	@Autowired
+	private UserRepository users;
 
 	private static String uniqueEmail() {
 		return "shopper-" + UUID.randomUUID() + "@example.test";
@@ -234,5 +238,24 @@ class UserIT {
 	void serviceInfo() {
 		assertThat(rest.getForEntity("/api/v1/user/_info", Map.class).getStatusCode())
 				.isEqualTo(HttpStatus.OK);
+	}
+
+	@Test
+	@DisplayName("without the demo profile there is no operator account at all")
+	void noSeededOperatorByDefault() {
+		// The other half of DevelopmentOperatorSeedIT. That one proves the seed works; this one
+		// proves it is not everywhere -- which is the property that actually matters, and the one a
+		// passing seed test would happily hide.
+		assertThat(users.existsById(UUID.fromString("00000000-0000-4000-8000-00000000000f"))).isFalse();
+	}
+
+	@Test
+	@DisplayName("and the published development password opens nothing")
+	void theDevelopmentOperatorCannotSignIn() {
+		ResponseEntity<Map> response = rest.postForEntity("/api/v1/users/sessions",
+				new SignInRequest("operator@flashcart.local", "operator-development-password"),
+				Map.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 	}
 }

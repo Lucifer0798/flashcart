@@ -234,6 +234,10 @@ services:
       <<: *service-env
       SERVER_PORT: 8083
       ZIPKIN_ENDPOINT: http://zipkin:9411/api/v2/spans
+      # `demo` adds classpath:db/seed to the Flyway locations, which is the only thing that creates
+      # the development operator the harnesses sign in as. Drop the profile and there is no operator
+      # account at all -- which is the correct state for anything that is not this stack.
+      SPRING_PROFILES_ACTIVE: demo
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_user
       SPRING_DATASOURCE_USERNAME: flashcart
       SPRING_DATASOURCE_PASSWORD: flashcart

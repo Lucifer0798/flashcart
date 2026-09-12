@@ -29,3 +29,4 @@ when someone revisits it in six months.
 | [0021](0021-the-client-does-not-say-who-it-is.md) | The client does not get to say who it is | Accepted |
 | [0022](0022-being-signed-in-is-not-being-a-warehouse.md) | Being signed in is not being a warehouse | Accepted |
 | [0023](0023-a-customer-may-see-their-own.md) | A customer may see their own | Accepted |
+| [0024](0024-the-development-operator-is-not-schema.md) | The development operator is not schema | Accepted |

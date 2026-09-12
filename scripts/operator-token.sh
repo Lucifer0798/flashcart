@@ -6,8 +6,9 @@
 #
 # Shared by the load harness, the chaos harness and anything else that needs to seed stock, because
 # three copies of a sign-in is three places to forget the same fix. The credentials are the seeded
-# development operator from the user service's V2 migration -- see that file for why a checked-in
-# credential is acceptable here and where it stops being acceptable.
+# development operator from the user service's db/seed/V900 migration, which exists only under the
+# `demo` profile -- see that file, and ADR 0024, for why a checked-in credential is acceptable in
+# this stack and nowhere else.
 set -euo pipefail
 
 G="${GATEWAY_URL:-http://localhost:18080}"
@@ -26,6 +27,13 @@ BODY=$(echo "$RESPONSE" | sed '$d')
 # platform fault -- which has already happened here more than once.
 if [ "$CODE" != "200" ]; then
 	echo "could not sign in as $EMAIL (http $CODE): $BODY" >&2
+	if [ "$CODE" = "401" ]; then
+		# The likeliest cause by far, since ADR 0024 moved the account into db/seed: the user
+		# service is running without the `demo` profile, so the operator was never created. Saying
+		# so here saves working backwards from a 401 through three layers of harness.
+		echo "the operator account is seeded only under the 'demo' profile -- check" >&2
+		echo "SPRING_PROFILES_ACTIVE for the user service (compose sets it)" >&2
+	fi
 	exit 1
 fi
 

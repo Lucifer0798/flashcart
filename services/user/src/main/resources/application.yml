@@ -16,6 +16,9 @@ spring:
       ddl-auto: validate
   flyway:
     enabled: true
+    # Explicit, and deliberately not including db/seed: that location holds the development operator
+    # account, whose password is readable in this repository. See ADR 0024.
+    locations: classpath:db/migration
 
 server:
   port: ${SERVER_PORT:8083}
@@ -70,3 +73,14 @@ flashcart:
       # keeps the private half. See ADR 0021.
       secret: ${JWT_SECRET:flashcart-development-secret-do-not-use-anywhere-real}
       ttl: ${JWT_TTL:PT12H}
+
+---
+# The development operator, and nothing else. `demo` adds classpath:db/seed to the Flyway locations,
+# so the seeded account can never reach an environment that did not ask for it by name -- the same
+# convention the catalog uses for its demo rows.
+spring:
+  config:
+    activate:
+      on-profile: demo
+  flyway:
+    locations: classpath:db/migration,classpath:db/seed
