@@ -601,10 +601,18 @@ Passing the filter is the whole check for the first and third. It is not for the
 listed there without an ownership check in its handler is wide open and looks perfectly configured.
 That is why the tests for it are mostly about what a *second* customer cannot see. See ADR 0023.
 
-**One thing is still open, said plainly.** The seeded operator's credentials are in a migration in
-this repository — a development convenience, and any deployment that keeps that row has no operator
-security at all. It matters a little more now that an operator can read every customer's payment
-history.
+**Where the operator comes from.** The account is seeded by `db/seed/V900__development_operator.sql`,
+a location only the `demo` profile puts on the Flyway path — the same convention the catalog uses for
+its demo rows. Compose sets that profile, so `docker compose up` gives you an operator the harnesses
+can sign in as. **Anything that does not ask for the profile by name has no operator account at
+all**, and the user service logs an error at startup if it finds that row while the profile is off.
+Its password is in the repository and is meant to be: it is a development credential, and the point
+of the profile is that it cannot arrive anywhere it was not requested. See
+[ADR 0024](docs/adr/0024-the-development-operator-is-not-schema.md).
+
+**What is still open, said plainly.** Per-service ports are still published, so each service checks
+for itself rather than trusting the gateway. And an operator's reads are unaudited: there is no
+record of which operator looked at whose payments.
 
 ## Breaking it on purpose
 

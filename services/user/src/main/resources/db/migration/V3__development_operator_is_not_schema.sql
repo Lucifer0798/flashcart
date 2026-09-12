@@ -1,0 +1,19 @@
+-- Take the development operator out of the schema.
+--
+-- V2 added the roles column and, in the same file, inserted an operator account whose BCrypt hash is
+-- readable in this repository. The column is schema. The account is a row -- and a row carrying a
+-- publicly known credential, which is the one kind of row that must never appear in a deployment
+-- that did not ask for it by name.
+--
+-- The catalog service already had the answer: demo rows live in classpath:db/seed, which only the
+-- `demo` profile adds to the Flyway locations. The operator is seeded the same way from here on, in
+-- db/seed/V900__development_operator.sql.
+--
+-- Why a delete rather than editing V2: V2 has already run against real databases, and rewriting an
+-- applied migration replaces a security problem with a checksum failure on every existing volume.
+-- The insert therefore stays where it is and this migration removes what it created. Under the demo
+-- profile V900 puts it back, after this; without the profile it stays gone. The row never serves a
+-- request in between, because migrations finish before the service accepts traffic.
+--
+-- See ADR 0024.
+delete from users where id = '00000000-0000-4000-8000-00000000000f';
