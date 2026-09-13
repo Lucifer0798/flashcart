@@ -6,6 +6,7 @@ import com.flashcart.common.error.OperatorRequiredException;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.security.AccessTokens;
+import com.flashcart.common.security.OperatorAccessLog;
 import com.flashcart.shipping.api.dto.ShipmentResponse;
 import com.flashcart.shipping.domain.Shipment;
 import com.flashcart.shipping.service.ShipmentService;
@@ -49,10 +50,12 @@ public class ShipmentController {
 
 	private final ShipmentService shipments;
 	private final AccessTokens tokens;
+	private final OperatorAccessLog accessLog;
 
-	public ShipmentController(ShipmentService shipments, AccessTokens tokens) {
+	public ShipmentController(ShipmentService shipments, AccessTokens tokens, OperatorAccessLog accessLog) {
 		this.shipments = shipments;
 		this.tokens = tokens;
+		this.accessLog = accessLog;
 	}
 
 	@GetMapping("/order/{orderNumber}")
@@ -79,9 +82,13 @@ public class ShipmentController {
 		String caller = caller(authorization);
 		String subject = customerId == null ? caller : customerId;
 
-		if (!subject.equals(caller) && !isOperator(authorization)) {
-			log.info("Refused a shipment listing for a different customer");
-			throw new OperatorRequiredException("Only an operator may read another customer's shipments");
+		if (!subject.equals(caller)) {
+			if (!isOperator(authorization)) {
+				log.info("Refused a shipment listing for a different customer");
+				throw new OperatorRequiredException("Only an operator may read another customer's shipments");
+			}
+			// Recorded before the rows are read, not after. See ADR 0025.
+			accessLog.record(caller, "READ_SHIPMENT_LIST", null, subject);
 		}
 		return shipments.forCustomer(subject).stream().map(ShipmentResponse::from).toList();
 	}
@@ -110,7 +117,12 @@ public class ShipmentController {
 	 * — it is the most widely handled identifier this system issues.
 	 */
 	private Shipment mine(String authorization, Shipment shipment, String identifier) {
-		if (shipment.getCustomerId().equals(caller(authorization)) || isOperator(authorization)) {
+		String caller = caller(authorization);
+		if (shipment.getCustomerId().equals(caller)) {
+			return shipment;
+		}
+		if (isOperator(authorization)) {
+			accessLog.record(caller, "READ_SHIPMENT", identifier, shipment.getCustomerId());
 			return shipment;
 		}
 		log.info("Refused access to a shipment belonging to a different customer");
