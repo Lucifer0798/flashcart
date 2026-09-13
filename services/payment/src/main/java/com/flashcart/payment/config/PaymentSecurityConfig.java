@@ -4,10 +4,12 @@ import java.time.Duration;
 import java.util.List;
 
 import com.flashcart.common.security.AccessTokens;
+import com.flashcart.common.security.OperatorAccessLog;
 import com.flashcart.common.security.OperatorFilter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 
@@ -31,6 +33,15 @@ public class PaymentSecurityConfig {
 			@Value("${flashcart.security.jwt.secret}") String secret,
 			@Value("${flashcart.security.jwt.ttl:PT12H}") Duration ttl) {
 		return new AccessTokens(secret, ttl);
+	}
+
+	/**
+	 * Writes to this service's own database, on the same connection the read came from -- so
+	 * recording an operator's access adds no dependency the read did not already have. See ADR 0025.
+	 */
+	@Bean
+	public OperatorAccessLog operatorAccessLog(JdbcTemplate jdbc) {
+		return new OperatorAccessLog(jdbc);
 	}
 
 	@Bean

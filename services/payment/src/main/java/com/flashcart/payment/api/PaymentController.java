@@ -7,6 +7,7 @@ import com.flashcart.common.error.OperatorRequiredException;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.security.AccessTokens;
+import com.flashcart.common.security.OperatorAccessLog;
 import com.flashcart.payment.api.dto.PaymentResponse;
 import com.flashcart.payment.domain.Payment;
 import com.flashcart.payment.service.PaymentService;
@@ -49,10 +50,12 @@ public class PaymentController {
 
 	private final PaymentService payments;
 	private final AccessTokens tokens;
+	private final OperatorAccessLog accessLog;
 
-	public PaymentController(PaymentService payments, AccessTokens tokens) {
+	public PaymentController(PaymentService payments, AccessTokens tokens, OperatorAccessLog accessLog) {
 		this.payments = payments;
 		this.tokens = tokens;
+		this.accessLog = accessLog;
 	}
 
 	@GetMapping("/{paymentId}")
@@ -82,9 +85,14 @@ public class PaymentController {
 		// Refused, not quietly narrowed to the caller's own rows. Answering a request for somebody
 		// else's data with your own reads as success: whoever wrote the call believes it worked, and
 		// discovers what it actually returned much later, somewhere less convenient.
-		if (!subject.equals(caller) && !isOperator(authorization)) {
-			log.info("Refused a payment listing for a different customer");
-			throw new OperatorRequiredException("Only an operator may read another customer's payments");
+		if (!subject.equals(caller)) {
+			if (!isOperator(authorization)) {
+				log.info("Refused a payment listing for a different customer");
+				throw new OperatorRequiredException("Only an operator may read another customer's payments");
+			}
+			// Recorded before the rows are read, not after: an exception on the way out would
+			// otherwise leave the data fetched and the access unrecorded. See ADR 0025.
+			accessLog.record(caller, "READ_PAYMENT_LIST", null, subject);
 		}
 		return payments.forCustomer(subject).stream().map(PaymentResponse::from).toList();
 	}
@@ -97,7 +105,14 @@ public class PaymentController {
 	 * them. Order numbers are short and guessable, and one of them is the key to this row.
 	 */
 	private Payment mine(String authorization, Payment payment, String identifier) {
-		if (payment.getCustomerId().equals(caller(authorization)) || isOperator(authorization)) {
+		String caller = caller(authorization);
+		if (payment.getCustomerId().equals(caller)) {
+			return payment;
+		}
+		if (isOperator(authorization)) {
+			// Somebody else's, read on the strength of the role. That is the access worth a record;
+			// a customer reading their own is the ordinary path and would bury it.
+			accessLog.record(caller, "READ_PAYMENT", identifier, payment.getCustomerId());
 			return payment;
 		}
 		log.info("Refused access to a payment belonging to a different customer");

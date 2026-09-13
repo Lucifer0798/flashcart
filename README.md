@@ -610,9 +610,25 @@ Its password is in the repository and is meant to be: it is a development creden
 of the profile is that it cannot arrive anywhere it was not requested. See
 [ADR 0024](docs/adr/0024-the-development-operator-is-not-schema.md).
 
+**Every operator read of somebody else's data is recorded.** Payment and shipping each keep an
+`operator_access_log` in their own database: who looked, whose data it was, what they looked at, and
+the correlation id that ties it to the logs and the trace. A customer reading their own is not
+recorded — that is the ordinary path, and auditing it would bury the rows that matter.
+
+The insert goes to the same database the read came from, so recording adds no dependency the read did
+not already have — and if it cannot be written, the read fails rather than quietly serving unseen.
+See [ADR 0025](docs/adr/0025-record-what-an-operator-reads.md).
+
+```sql
+-- who has read this customer's data
+select operator_id, action, resource_id, read_at
+from operator_access_log where customer_id = ? order by read_at desc;
+```
+
 **What is still open, said plainly.** Per-service ports are still published, so each service checks
-for itself rather than trusting the gateway. And an operator's reads are unaudited: there is no
-record of which operator looked at whose payments.
+for itself rather than trusting the gateway. And nothing expires the audit rows: that table grows
+with operator activity until somebody decides how long the platform should be able to answer the
+question.
 
 ## Breaking it on purpose
 

@@ -23,6 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Import;
 import com.flashcart.common.security.AccessTokens;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpEntity;
@@ -76,6 +77,9 @@ class PaymentIT {
 
 	@Autowired
 	private AccessTokens tokens;
+
+	@Autowired
+	private JdbcTemplate jdbc;
 
 	/**
 	 * Signs every request as an operator.
@@ -367,5 +371,102 @@ class PaymentIT {
 		headers.set(HttpHeaders.AUTHORIZATION,
 				"Bearer " + tokens.issue(customerId, customerId + "@example.test"));
 		return headers;
+	}
+
+	// --- what an operator read is recorded (ADR 0025) -------------------------------------------------
+
+	private Long auditRows(String customerId) {
+		return jdbc.queryForObject(
+				"select count(*) from operator_access_log where customer_id = ?", Long.class, customerId);
+	}
+
+	@Test
+	@DisplayName("an operator reading somebody else's payment leaves a record of who looked")
+	void operatorReadIsRecorded() {
+		UUID orderId = UUID.randomUUID();
+		payments.charge(orderId, "FC-AUDIT01", "audit-owner-a", new BigDecimal("15.00"), "USD",
+				orderId.toString());
+
+		// No explicit header, so the suite's operator interceptor supplies one.
+		assertThat(rest.getForEntity("/api/v1/payments/order/FC-AUDIT01", Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.OK);
+
+		Map<String, Object> row = jdbc.queryForMap(
+				"select * from operator_access_log where customer_id = 'audit-owner-a'");
+		assertThat(row).containsEntry("operator_id", "ops-test");
+		assertThat(row).containsEntry("action", "READ_PAYMENT");
+		assertThat(row).containsEntry("resource_id", "FC-AUDIT01");
+	}
+
+	@Test
+	@DisplayName("a customer reading their own leaves nothing -- auditing that would bury the signal")
+	void ownReadIsNotRecorded() {
+		UUID orderId = UUID.randomUUID();
+		payments.charge(orderId, "FC-AUDIT02", "audit-owner-b", new BigDecimal("15.00"), "USD",
+				orderId.toString());
+
+		assertThat(as("audit-owner-b", "/api/v1/payments/order/FC-AUDIT02").getStatusCode())
+				.isEqualTo(HttpStatus.OK);
+
+		assertThat(auditRows("audit-owner-b")).isZero();
+	}
+
+	@Test
+	@DisplayName("nor does a refused read: nothing was disclosed, so there is nothing to record")
+	void refusedReadIsNotRecorded() {
+		UUID orderId = UUID.randomUUID();
+		payments.charge(orderId, "FC-AUDIT03", "audit-owner-c", new BigDecimal("15.00"), "USD",
+				orderId.toString());
+
+		assertThat(as("audit-stranger", "/api/v1/payments/order/FC-AUDIT03").getStatusCode())
+				.isEqualTo(HttpStatus.NOT_FOUND);
+
+		assertThat(auditRows("audit-owner-c")).isZero();
+	}
+
+	@Test
+	@DisplayName("an operator listing another customer is recorded, with no single resource")
+	void operatorListingIsRecorded() {
+		ResponseEntity<List> response = rest.exchange("/api/v1/payments?customerId=audit-owner-d",
+				HttpMethod.GET, new HttpEntity<>(new HttpHeaders()), List.class);
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		Map<String, Object> row = jdbc.queryForMap(
+				"select * from operator_access_log where customer_id = 'audit-owner-d'");
+		assertThat(row).containsEntry("action", "READ_PAYMENT_LIST");
+		assertThat(row.get("resource_id")).isNull();
+	}
+
+	@Test
+	@DisplayName("if the access cannot be recorded the data is not served")
+	void anUnrecordableReadIsRefused() {
+		UUID orderId = UUID.randomUUID();
+		payments.charge(orderId, "FC-AUDIT05", "audit-owner-e", new BigDecimal("15.00"), "USD",
+				orderId.toString());
+
+		// The property, tested the only way that actually demonstrates it: take the table away.
+		// Renamed rather than dropped so the suite continues afterwards.
+		jdbc.execute("alter table operator_access_log rename to operator_access_log_hidden");
+		try {
+			ResponseEntity<Map> response = rest.getForEntity("/api/v1/payments/order/FC-AUDIT05", Map.class);
+
+			// A 500 is the correct answer here and the honest one: the service cannot do what it
+			// promises, so it refuses rather than quietly serving an unrecorded read.
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+		}
+		finally {
+			jdbc.execute("alter table operator_access_log_hidden rename to operator_access_log");
+		}
+	}
+
+	@Test
+	@DisplayName("and the owner can still read it once recording works again")
+	void theReadWorksAgainAfterwards() {
+		UUID orderId = UUID.randomUUID();
+		payments.charge(orderId, "FC-AUDIT06", "audit-owner-f", new BigDecimal("15.00"), "USD",
+				orderId.toString());
+
+		assertThat(rest.getForEntity("/api/v1/payments/order/FC-AUDIT06", Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.OK);
 	}
 }
