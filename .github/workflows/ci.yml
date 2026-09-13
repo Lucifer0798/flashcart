@@ -446,8 +446,7 @@ jobs:
           echo "audit rows for $ORDER:             $AUDIT"
           test "$AUDIT" = "1"
 
-          WHO=$(docker compose exec -T postgres psql -U flashcart -d flashcart_payment -tAc             "select operator_id || ' ' || action from operator_access_log where resource_id = '$ORDER'" | tr -d '
-')
+          WHO=$(docker compose exec -T postgres psql -U flashcart -d flashcart_payment -tAc             "select operator_id || ' ' || action from operator_access_log where resource_id = '$ORDER'" | tr -d '[:space:]')
           echo "recorded as:                       $WHO"
           echo "$WHO" | grep -q 'READ_PAYMENT'
 
