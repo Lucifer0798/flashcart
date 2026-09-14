@@ -1,5 +1,7 @@
 package com.flashcart.payment;
 
+import java.time.Duration;
+import com.flashcart.common.security.OperatorAccessRetention;
 import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
@@ -468,5 +470,79 @@ class PaymentIT {
 
 		assertThat(rest.getForEntity("/api/v1/payments/order/FC-AUDIT06", Map.class).getStatusCode())
 				.isEqualTo(HttpStatus.OK);
+	}
+
+	// --- expiring those records, once somebody has said to (ADR 0026) -------------------------------
+
+	/**
+	 * The sweep is a table-wide DELETE, so these tests start from an empty table. Without this they
+	 * pass or fail depending on what the audit tests above happened to leave behind, which is a
+	 * result about test ordering wearing the costume of a result about retention.
+	 */
+	private void clearAuditLog() {
+		jdbc.update("delete from operator_access_log");
+	}
+
+	private void recordAgedAccess(String customerId, int daysAgo) {
+		jdbc.update("""
+				insert into operator_access_log
+				    (operator_id, action, resource_id, customer_id, correlation_id, read_at)
+				values (?, 'READ_PAYMENT', ?, ?, null, now() - make_interval(days => ?))""",
+				"ops-retention", "FC-AGED" + daysAgo, customerId, daysAgo);
+	}
+
+	@Test
+	@DisplayName("with no retention configured nothing is deleted, however old it is")
+	void keepsEverythingByDefault() {
+		clearAuditLog();
+		recordAgedAccess("retention-a", 4000);
+
+		// The bean the service actually builds when the property is unset.
+		OperatorAccessRetention keepForever = new OperatorAccessRetention(jdbc, null, 500);
+
+		assertThat(keepForever.sweep()).isZero();
+		assertThat(auditRows("retention-a")).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("a zero or negative window is treated as 'keep', not as 'delete everything'")
+	void zeroMeansKeep() {
+		clearAuditLog();
+		recordAgedAccess("retention-b", 4000);
+
+		assertThat(new OperatorAccessRetention(jdbc, Duration.ZERO, 500).sweep()).isZero();
+		assertThat(new OperatorAccessRetention(jdbc, Duration.ofDays(-1), 500).sweep()).isZero();
+		assertThat(auditRows("retention-b")).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("once configured, records older than the window go and newer ones stay")
+	void deletesOnlyBeyondTheWindow() {
+		clearAuditLog();
+		recordAgedAccess("retention-c", 100);
+		recordAgedAccess("retention-d", 10);
+
+		int deleted = new OperatorAccessRetention(jdbc, Duration.ofDays(30), 500).sweep();
+
+		assertThat(deleted).isEqualTo(1);
+		assertThat(auditRows("retention-c")).isZero();
+		assertThat(auditRows("retention-d")).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("the sweep is batched, so a first run against a neglected table cannot lock it all")
+	void deletesInBatches() {
+		clearAuditLog();
+		for (int i = 0; i < 5; i++) {
+			recordAgedAccess("retention-e", 100 + i);
+		}
+
+		OperatorAccessRetention sweeper = new OperatorAccessRetention(jdbc, Duration.ofDays(30), 2);
+
+		assertThat(sweeper.sweep()).isEqualTo(2);
+		assertThat(auditRows("retention-e")).isEqualTo(3);
+		assertThat(sweeper.sweep()).isEqualTo(2);
+		assertThat(sweeper.sweep()).isEqualTo(1);
+		assertThat(auditRows("retention-e")).isZero();
 	}
 }
