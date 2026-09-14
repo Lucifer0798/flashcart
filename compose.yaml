@@ -260,6 +260,10 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8084
+      # How long this stack can answer "who read my data". Unset in the application itself, on
+      # purpose -- a default that silently deleted audit history would be that decision made by
+      # nobody. Set here so the running stack shows what an actual choice looks like. See ADR 0026.
+      FLASHCART_AUDIT_RETENTION: ${AUDIT_RETENTION:-P365D}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_payment
       SPRING_DATASOURCE_USERNAME: flashcart
       SPRING_DATASOURCE_PASSWORD: flashcart
@@ -327,6 +331,10 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8086
+      # How long this stack can answer "who read my data". Unset in the application itself, on
+      # purpose -- a default that silently deleted audit history would be that decision made by
+      # nobody. Set here so the running stack shows what an actual choice looks like. See ADR 0026.
+      FLASHCART_AUDIT_RETENTION: ${AUDIT_RETENTION:-P365D}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_shipping
       SPRING_DATASOURCE_USERNAME: flashcart
       SPRING_DATASOURCE_PASSWORD: flashcart

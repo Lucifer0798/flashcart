@@ -31,3 +31,4 @@ when someone revisits it in six months.
 | [0023](0023-a-customer-may-see-their-own.md) | A customer may see their own | Accepted |
 | [0024](0024-the-development-operator-is-not-schema.md) | The development operator is not schema | Accepted |
 | [0025](0025-record-what-an-operator-reads.md) | Record what an operator reads | Accepted |
+| [0026](0026-deleting-an-audit-record-is-a-decision.md) | Deleting an audit record is a decision | Accepted |

@@ -625,10 +625,17 @@ select operator_id, action, resource_id, read_at
 from operator_access_log where customer_id = ? order by read_at desc;
 ```
 
+**How long those records are kept is a setting, and it is empty on purpose.**
+`flashcart.audit.retention` deletes nothing until somebody names a window — a default that quietly
+destroyed a year of audit history would be that decision made by nobody. Compose sets `P365D`, which
+is a worked example rather than a default. Leave it unset and the service says so once at startup,
+with the row count, so unbounded growth is something you chose rather than something you missed. See
+[ADR 0026](docs/adr/0026-deleting-an-audit-record-is-a-decision.md).
+
 **What is still open, said plainly.** Per-service ports are still published, so each service checks
-for itself rather than trusting the gateway. And nothing expires the audit rows: that table grows
-with operator activity until somebody decides how long the platform should be able to answer the
-question.
+for itself rather than trusting the gateway. An operator cannot read another customer's *order* at
+all, which is not obviously right. And the audit table has no reader — answering "who read my data"
+is a SQL query, not an endpoint.
 
 ## Breaking it on purpose
 

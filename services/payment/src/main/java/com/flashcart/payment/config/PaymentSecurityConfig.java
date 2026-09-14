@@ -5,6 +5,7 @@ import java.util.List;
 
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.OperatorAccessLog;
+import com.flashcart.common.security.OperatorAccessRetention;
 import com.flashcart.common.security.OperatorFilter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -42,6 +43,18 @@ public class PaymentSecurityConfig {
 	@Bean
 	public OperatorAccessLog operatorAccessLog(JdbcTemplate jdbc) {
 		return new OperatorAccessLog(jdbc);
+	}
+
+	/**
+	 * Off unless configured: an audit trail that silently deletes itself because nobody set a
+	 * property is the decision ADR 0025 said should not be made silently. Relies on the scheduling
+	 * the outbox auto-configuration already enables in this service.
+	 */
+	@Bean
+	public OperatorAccessRetention operatorAccessRetention(JdbcTemplate jdbc,
+			@Value("${flashcart.audit.retention:#{null}}") Duration retention,
+			@Value("${flashcart.audit.retention-batch-size:500}") int batchSize) {
+		return new OperatorAccessRetention(jdbc, retention, batchSize);
 	}
 
 	@Bean
