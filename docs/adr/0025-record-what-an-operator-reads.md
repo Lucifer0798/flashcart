@@ -1,6 +1,6 @@
 # 0025 — Record what an operator reads
 
-**Status:** Accepted · **Date:** 2026-09-13 · **Phase:** post-roadmap
+**Status:** Accepted · **Date:** 2026-09-13 · **Phase:** post-roadmap · *a gap recorded here was later closed by [ADR 0026](0026-deleting-an-audit-record-is-a-decision.md)*
 
 ## Context
 
@@ -107,6 +107,10 @@ it is the existing behaviour and opening it is a separate decision with its own 
 with operator activity forever. That is the correct default for an audit trail and the wrong one for
 a disk, and a retention policy is a decision about how long the platform wants to be able to answer
 the question — which is a real decision and not one to make silently here.
+
+*Since closed by [ADR 0026](0026-deleting-an-audit-record-is-a-decision.md), which added the sweeper
+and left the window unset by default — so the decision is now available and visible rather than made
+for everybody.*
 
 **Still open.** Per-service ports remain published, so each service keeps checking for itself rather
 than trusting the gateway; ADR 0022's reasoning is unchanged.
