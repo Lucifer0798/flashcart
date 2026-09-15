@@ -1,6 +1,6 @@
 # 0021 — The client does not get to say who it is
 
-**Status:** Accepted · **Date:** 2026-09-09 · **Phase:** post-roadmap
+**Status:** Accepted · **Date:** 2026-09-09 · **Phase:** post-roadmap · *a gap recorded here was later closed by [ADR 0022](0022-being-signed-in-is-not-being-a-warehouse.md)*
 
 ## Context
 
@@ -93,3 +93,7 @@ The inventory, payment and shipping APIs are still open. Nothing reaches them fr
 deployment, but "nothing reaches them" is a claim about a compose file, not a property of the system,
 and per-service ports are published. Closing that means either an internal-only network or the same
 token check on those services, and it is the obvious next piece of work.
+
+*Since closed by [ADR 0022](0022-being-signed-in-is-not-being-a-warehouse.md), which put the same
+token check on all three. Left as written, because it is the record of a gap being named rather than
+discovered.*

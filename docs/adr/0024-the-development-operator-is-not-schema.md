@@ -1,6 +1,6 @@
 # 0024 — The development operator is not schema
 
-**Status:** Accepted · **Date:** 2026-09-12 · **Phase:** post-roadmap
+**Status:** Accepted · **Date:** 2026-09-12 · **Phase:** post-roadmap · *a gap recorded here was later closed by [ADR 0025](0025-record-what-an-operator-reads.md)*
 
 ## Context
 
@@ -100,3 +100,7 @@ then nobody's seed and nothing will delete it.
 gateway remains an optimisation rather than a boundary — ADR 0022's reasoning is unchanged. And an
 operator's access to customer data is still unaudited: there is no record of which operator read
 whose payments.
+
+*The audit half was since closed by [ADR 0025](0025-record-what-an-operator-reads.md). Per-service
+ports are still published, so the rest of that paragraph stands — and it is still the largest
+remaining item.*

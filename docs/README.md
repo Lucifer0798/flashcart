@@ -84,6 +84,20 @@ which is the accurate state of knowledge rather than a tidy one.
 [ADR 0014](adr/0014-idempotency-by-state-machine.md) is kept although superseded, because the reason
 it was wrong is more useful than the fact that it was replaced.
 
+**Two different kinds of "out of date", marked differently.** ADR 0014 was *superseded*: its decision
+was replaced, so it says so in its status line and the index lists it that way. More often a record is
+still entirely correct about what it decided, and a gap it *named in its own consequences* was closed
+later — 0020, 0021, 0022, 0023, 0024 and 0025 are all like that. Those keep their `Accepted` status, note the
+closing record in the status line, and carry an italic line under the paragraph that has since been
+overtaken.
+
+The stale paragraphs are never edited. What a record says about why a gap existed is usually the part
+still worth reading, and a document quietly rewritten to stay true stops being a record of anything.
+The reason these needed marking at all is that a reader walking forward through the ADRs was told
+something false seven times, with nothing nearby to correct it. Two of those were only found by
+re-reading every consequences section rather than by searching for the phrasing the first few
+happened to use.
+
 The load and chaos pages both spend as much space on their own harnesses lying as on the platform,
 because in this project the recurring failure was rarely the code. It was checks that could not fail,
 measurements that counted the wrong thing, and configuration that read as correct while doing nothing

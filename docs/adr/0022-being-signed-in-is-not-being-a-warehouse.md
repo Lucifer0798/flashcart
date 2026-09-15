@@ -1,6 +1,6 @@
 # 0022 — Being signed in is not being a warehouse
 
-**Status:** Accepted · **Date:** 2026-09-09 · **Phase:** post-roadmap
+**Status:** Accepted · **Date:** 2026-09-09 · **Phase:** post-roadmap · *gaps recorded here were later closed by [ADR 0023](0023-a-customer-may-see-their-own.md) and [ADR 0024](0024-the-development-operator-is-not-schema.md)*
 
 ## Context
 
@@ -103,6 +103,11 @@ A shopper still cannot read their own payment or shipment. Those endpoints now r
 which is safe but wrong in the long run — a customer should be able to track their own parcel. Doing
 it properly needs ownership checks against the order service, which is the same work ADR 0021 did for
 orders and is the obvious next piece rather than something to bolt on quickly.
+
+*Since closed by [ADR 0023](0023-a-customer-may-see-their-own.md), which did exactly that. The
+seeded credential named just above was dealt with separately by
+[ADR 0024](0024-the-development-operator-is-not-schema.md): the sentence stays true of any deployment
+that keeps the row, but the row no longer arrives unless a profile asks for it.*
 
 Role changes only take effect on the next sign-in, since the role is a claim in a token that lives for
 twelve hours. Revoking an operator means waiting out the token or rotating the signing secret, which

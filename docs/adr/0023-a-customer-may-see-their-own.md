@@ -1,6 +1,6 @@
 # 0023 — A customer may see their own
 
-**Status:** Accepted · **Date:** 2026-09-11 · **Phase:** post-roadmap
+**Status:** Accepted · **Date:** 2026-09-11 · **Phase:** post-roadmap · *gaps recorded here were later closed by [ADR 0024](0024-the-development-operator-is-not-schema.md) and [ADR 0025](0025-record-what-an-operator-reads.md)*
 
 ## Context
 
@@ -98,7 +98,14 @@ this repository, and any deployment keeping that row still has no operator secur
 change makes that slightly more pointed: an operator can now read every customer's payment history,
 which was already true but mattered less when no customer could read anything.
 
+*Since closed by [ADR 0024](0024-the-development-operator-is-not-schema.md): the account moved to a
+seed location only the `demo` profile loads, so it no longer reaches a deployment that did not ask
+for it.*
+
 **Still open.** Per-service ports are still published, so each service continues to check for itself
 rather than trusting the gateway — the reasoning in ADR 0022 stands unchanged. And an operator's
 access to customer data is unaudited: there is no record of which operator read whose payments, which
 is the kind of thing that is obvious to add and awkward to add later.
+
+*The audit half was since closed by [ADR 0025](0025-record-what-an-operator-reads.md). Per-service
+ports are still published, so the first half of that paragraph stands.*

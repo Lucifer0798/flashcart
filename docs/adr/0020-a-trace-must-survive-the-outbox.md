@@ -1,6 +1,6 @@
 # 0020 — A trace has to survive the outbox, or it is not worth having
 
-**Status:** Accepted · **Date:** 2026-09-07 · **Phase:** 11
+**Status:** Accepted · **Date:** 2026-09-07 · **Phase:** 11 · *a gap recorded here was later closed by [ADR 0027](0027-the-outbox-hop-is-a-span.md)*
 
 ## Context
 
@@ -70,6 +70,9 @@ runs its Lua script. That is now the artefact for understanding any failure inje
 **Bad.** The relay's send has no span of its own, so the outbox hop shows as a gap between the queue
 write and the consumer. That gap is real — the message genuinely was not moving — but it is not
 *labelled*, and someone reading a trace for the first time will wonder what happened in it.
+
+*Since closed by [ADR 0027](0027-the-outbox-hop-is-a-span.md), which made the hop a span. Left as
+written, because what it records is why the gap was there.*
 
 The `traceparent` is also stored with the sampled flag hard-coded to `01`. That is honest for a
 platform sampling at 1.0, and would need to carry the real sampling decision anywhere that sampled
