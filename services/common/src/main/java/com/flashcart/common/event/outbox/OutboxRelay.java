@@ -1,14 +1,20 @@
 package com.flashcart.common.event.outbox;
 
 import java.util.List;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
 
 import com.flashcart.common.web.CorrelationId;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import io.micrometer.core.instrument.Counter;
+import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.context.Context;
@@ -54,7 +60,7 @@ public class OutboxRelay {
 
 	private static final String CLAIM = """
 			select id, topic, message_key, event_id, event_type, correlation_id, trace_parent,
-			       payload::text, attempts
+			       payload::text, attempts, created_at
 			  from outbox_messages
 			 where published_at is null
 			 order by created_at, id
@@ -74,9 +80,15 @@ public class OutboxRelay {
 	private final int batchSize;
 	private final Counter published;
 	private final Counter sendFailures;
+	private final Tracer tracer;
 
 	public OutboxRelay(JdbcTemplate jdbc, KafkaTemplate<String, String> kafka,
-			PlatformTransactionManager transactionManager, MeterRegistry registry, int batchSize) {
+			PlatformTransactionManager transactionManager, MeterRegistry registry, int batchSize,
+			OpenTelemetry openTelemetry) {
+		// Injected rather than taken from GlobalOpenTelemetry, which Spring Boot does not reliably
+		// register: the global would hand back a no-op tracer, every hop would be a non-recording
+		// span, and the whole thing would quietly do nothing while compiling perfectly.
+		this.tracer = openTelemetry.getTracer("flashcart-outbox");
 		this.jdbc = jdbc;
 		this.kafka = kafka;
 		this.published = OutboxMetrics.published(registry);
@@ -127,7 +139,8 @@ public class OutboxRelay {
 						rs.getString("correlation_id"),
 						rs.getString("trace_parent"),
 						rs.getString("payload"),
-						rs.getInt("attempts")),
+						rs.getInt("attempts"),
+						rs.getObject("created_at", java.time.OffsetDateTime.class).toInstant()),
 				batchSize);
 
 		int sent = 0;
@@ -152,41 +165,107 @@ public class OutboxRelay {
 			record.headers().add(new RecordHeader(CorrelationId.HEADER,
 					message.correlationId().getBytes(StandardCharsets.UTF_8)));
 		}
-		if (message.traceParent() != null) {
-			// The buyer's trace, replayed onto the wire by hand.
-			//
-			// The relay's template is deliberately not observation-enabled, so nothing overwrites
-			// this. Producer instrumentation would inject whatever context the relay thread is in --
-			// its own scheduled-task trace -- and the context that matters belongs to a request that
-			// finished minutes ago, possibly in a previous process. Re-entering the stored context
-			// below covers the send itself; this header is what the consumer actually reads.
-			record.headers().add(new RecordHeader("traceparent",
-					message.traceParent().getBytes(StandardCharsets.UTF_8)));
-		}
-		try {
-			// Awaited deliberately, unlike the direct publisher: the row must only be marked
-			// published once the broker has actually acknowledged it. Marking optimistically would
-			// reintroduce exactly the loss the outbox exists to prevent.
-			// Also re-entered as the current context, so anything the send itself records lands in
-			// the buyer's trace rather than the relay's tick.
-			try (Scope ignored = traceScope(message.traceParent())) {
+		// The relay's template is deliberately not observation-enabled, so nothing injects a
+		// traceparent behind our back. Producer instrumentation would use whatever context the relay
+		// thread is in -- its own scheduled-task trace -- and the trace that matters belongs to a
+		// request that finished minutes ago, possibly in a previous process.
+		try (Scope queuedScope = traceScope(message.traceParent())) {
+			Span hop = startHop(message);
+			try (Scope hopScope = hop.makeCurrent()) {
+				// Null when this service has no tracing configured and the row was queued without a
+				// context either. Adding the header anyway would have dereferenced null and failed
+				// the send -- retried for ever, over tracing metadata, which would be an absurd way
+				// to stall a saga.
+				String traceparent = outgoingTraceParent(hop, message.traceParent());
+				if (traceparent != null) {
+					record.headers().add(new RecordHeader("traceparent",
+							traceparent.getBytes(StandardCharsets.UTF_8)));
+				}
+
+				// Awaited deliberately, unlike the direct publisher: the row must only be marked
+				// published once the broker has actually acknowledged it. Marking optimistically
+				// would reintroduce exactly the loss the outbox exists to prevent.
 				kafka.send(record).get();
+				return true;
 			}
-			return true;
-		}
-		catch (InterruptedException ex) {
-			Thread.currentThread().interrupt();
-			return false;
-		}
-		catch (Exception ex) {
-			sendFailures.increment();
-			jdbc.update(RECORD_FAILURE, ex.getMessage(), message.id());
-			if (message.attempts() > 0 && message.attempts() % 10 == 0) {
-				log.error("Outbox message {} has failed {} times; a saga is stalled behind it",
-						message.eventId(), message.attempts(), ex);
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				hop.setStatus(StatusCode.ERROR, "interrupted");
+				return false;
 			}
-			return false;
+			catch (Exception ex) {
+				sendFailures.increment();
+				hop.setStatus(StatusCode.ERROR, String.valueOf(ex.getMessage()));
+				hop.recordException(ex);
+				jdbc.update(RECORD_FAILURE, ex.getMessage(), message.id());
+				if (message.attempts() > 0 && message.attempts() % 10 == 0) {
+					log.error("Outbox message {} has failed {} times; a saga is stalled behind it",
+							message.eventId(), message.attempts(), ex);
+				}
+				return false;
+			}
+			finally {
+				hop.end();
+			}
 		}
+	}
+
+	/**
+	 * The span that fills the hole in the trace.
+	 *
+	 * <p>ADR 0020 shipped with the outbox hop showing as an unexplained gap between the queue write
+	 * and the consumer: the message genuinely was not moving, but nothing said so, and a reader could
+	 * not tell a slow relay from a stalled one.
+	 *
+	 * <p><strong>It starts when the row was queued, not when the relay picked it up.</strong> That is
+	 * the decision worth arguing about, because most of that span is time the relay spent doing
+	 * nothing at all. It is right because the span represents <em>the hop</em> — the message's
+	 * journey from committed row to acknowledged broker write — and that is the interval the reader
+	 * is asking about. A span covering only the send would sit next to the gap rather than explaining
+	 * it, which is where this already was. {@code flashcart.outbox.queued_ms} separates the waiting
+	 * from the sending for anyone who needs the distinction.
+	 *
+	 * <p>The start timestamp comes from the database clock and the end from this JVM's, so a skewed
+	 * pair can render a hop slightly longer or shorter than it was. On one host that is noise; it
+	 * would be worth carrying a monotonic reference anywhere the two clocks are genuinely apart.
+	 */
+	private Span startHop(Pending message) {
+		return tracer.spanBuilder("outbox relay " + message.topic())
+				.setSpanKind(SpanKind.PRODUCER)
+				.setStartTimestamp(message.queuedAt())
+				.setAttribute("messaging.system", "kafka")
+				.setAttribute("messaging.destination.name", message.topic())
+				.setAttribute("messaging.message.id", message.eventId())
+				.setAttribute("flashcart.event.type", message.eventType())
+				.setAttribute("flashcart.outbox.attempts", message.attempts())
+				.setAttribute("flashcart.outbox.queued_ms",
+						Duration.between(message.queuedAt(), Instant.now()).toMillis())
+				.startSpan();
+	}
+
+	/**
+	 * What the consumer reads, and therefore what it parents itself on.
+	 *
+	 * <p>The hop's own context when there is one, so the chain is buyer to relay to consumer rather
+	 * than buyer to consumer with the relay off to one side. The trace id is unchanged either way —
+	 * the hop is a child of the stored context — so this moves the consumer under the span that
+	 * actually handed the message to the broker, which is where it belongs.
+	 *
+	 * <p>It also carries the real sampled flag rather than the {@code 01} the publisher stores, since
+	 * it is built from a live {@code SpanContext}. The stored value keeps its hard-coded flag; that
+	 * is the publisher's decision to revisit, recorded in ADR 0020 and unchanged here.
+	 *
+	 * <p>Falls back to the stored string when tracing is not configured, where the hop is a non
+	 * recording span with an invalid context and building a header from it would produce an all-zero
+	 * traceparent that breaks the very continuation this exists to protect.
+	 */
+	static String outgoingTraceParent(Span hop, String storedTraceParent) {
+		SpanContext context = hop.getSpanContext();
+		if (!context.isValid()) {
+			return storedTraceParent;
+		}
+		return "00-" + context.getTraceId() + "-" + context.getSpanId()
+				+ "-" + context.getTraceFlags().asHex();
 	}
 
 
@@ -221,6 +300,6 @@ public class OutboxRelay {
 	}
 
 	private record Pending(UUID id, String topic, String key, String eventId, String eventType,
-			String correlationId, String traceParent, String payload, int attempts) {
+			String correlationId, String traceParent, String payload, int attempts, Instant queuedAt) {
 	}
 }
