@@ -671,6 +671,22 @@ The relay's Kafka template is deliberately **not** observation-enabled. Producer
 injects whatever context the relay thread is in — its own scheduled tick — and would overwrite the
 buyer's trace with the sweeper's. See [ADR 0020](docs/adr/0020-a-trace-must-survive-the-outbox.md).
 
+**The hop itself is a span.** The relay opens `outbox relay <topic>` around the send, starting when
+the row was queued, so the wait between deciding to publish and publishing is labelled rather than
+being a hole in the waterfall. The consumer parents on it, so the chain reads
+buyer → relay → consumer. A real one from this stack:
+
+```
+outbox relay flashcart.inventory.commands   709 ms   PRODUCER
+  parent: http post /api/v1/orders
+  flashcart.outbox.queued_ms = 698          attempts = 0
+  child:  flashcart.inventory.commands process  [flashcart-inventory]
+```
+
+698 of those 709 milliseconds were queue time, which answers the question the gap used to raise: the
+relay was not slow, it was asleep, and the poll interval is the thing to change. See
+[ADR 0027](docs/adr/0027-the-outbox-hop-is-a-span.md).
+
 ## Building and testing
 
 ```bash

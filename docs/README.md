@@ -66,6 +66,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0024](adr/0024-the-development-operator-is-not-schema.md) — The development operator is not schema
 - [0025](adr/0025-record-what-an-operator-reads.md) — Record what an operator reads
 - [0026](adr/0026-deleting-an-audit-record-is-a-decision.md) — Deleting an audit record is a decision
+- [0027](adr/0027-the-outbox-hop-is-a-span.md) — The outbox hop is a span
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)
