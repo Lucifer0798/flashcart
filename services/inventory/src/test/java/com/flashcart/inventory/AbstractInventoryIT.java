@@ -113,7 +113,12 @@ abstract class AbstractInventoryIT {
 		String token = tokens.issue("ops-test", "ops@example.test", List.of(AccessTokens.OPERATOR));
 		rest.getRestTemplate().getInterceptors().clear();
 		rest.getRestTemplate().getInterceptors().add((request, body, execution) -> {
-			request.getHeaders().set(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			// Only when the caller has not said who it is, matching the payment and shipping bases.
+			// A test that deliberately acts as a shopper would otherwise be silently promoted to an
+			// operator and pass for the wrong reason.
+			if (!request.getHeaders().containsHeader(HttpHeaders.AUTHORIZATION)) {
+				request.getHeaders().set(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			}
 			return execution.execute(request, body);
 		});
 	}

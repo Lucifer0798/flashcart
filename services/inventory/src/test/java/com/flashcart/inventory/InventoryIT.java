@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
@@ -508,5 +509,67 @@ class InventoryIT extends AbstractInventoryIT {
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).containsEntry("status", "live");
 		assertThat(response.getBody()).containsEntry("reservationStrategy", "ATOMIC_UPDATE");
+	}
+
+	// --- the movement ledger for one reservation, which nothing was exercising -----------------------
+
+	@Test
+	@DisplayName("every movement a reservation caused can be read back by its id, oldest first")
+	void movementsForOneReservation() {
+		String sku = uniqueSku("LEDGER");
+		createStock(sku, 10);
+
+		ReservationResponse reservation = rest.postForObject("/api/v1/inventory/reservations",
+				new ReserveRequest(uniqueKey("ledger"), "cust-ledger", null, null,
+						List.of(new ReserveRequest.Line(sku, 3))),
+				ReservationResponse.class);
+		rest.postForObject("/api/v1/inventory/reservations/" + reservation.reservationKey() + "/commit",
+				null, ReservationResponse.class);
+
+		ResponseEntity<List> response = rest.getForEntity(
+				"/api/v1/inventory/stock/movements/reservation/" + reservation.id(), List.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		// Hold then commit: two movements, and the order is the story of what happened to the units.
+		assertThat(response.getBody()).hasSize(2);
+		assertThat(response.getBody().toString()).contains(sku);
+	}
+
+	@Test
+	@DisplayName("an unknown reservation is an empty ledger, not a 404 -- nothing happened to report")
+	void unknownReservationHasNoMovements() {
+		ResponseEntity<List> response = rest.getForEntity(
+				"/api/v1/inventory/stock/movements/reservation/" + UUID.randomUUID(), List.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(response.getBody()).isEmpty();
+	}
+
+	@Test
+	@DisplayName("the ledger is operator-only: it sits a segment below the public availability read")
+	void theLedgerIsNotPublic() {
+		String sku = uniqueSku("LEDGERSEC");
+		createStock(sku, 5);
+		ReservationResponse reservation = rest.postForObject("/api/v1/inventory/reservations",
+				new ReserveRequest(uniqueKey("ledgersec"), "cust-ledger", null, null,
+						List.of(new ReserveRequest.Line(sku, 1))),
+				ReservationResponse.class);
+
+		// GET /stock/* reaches availability and stops there. This path is deeper, so the operator
+		// default applies -- which nothing checked until now, and which #10 could have got wrong in
+		// either direction without anything saying so.
+		HttpHeaders shopper = new HttpHeaders();
+		shopper.set(HttpHeaders.AUTHORIZATION, "Bearer " + tokens.issue("shopper-1", "s@example.test"));
+		// Taken as a String rather than a Map on purpose. If the rule is ever widened to /stock/**
+		// this endpoint answers with the ledger array, and asking for a Map would fail with a JSON
+		// deserialisation error -- a red test whose message describes the wrong problem entirely.
+		ResponseEntity<String> response = rest.exchange(
+				"/api/v1/inventory/stock/movements/reservation/" + reservation.id(),
+				HttpMethod.GET, new HttpEntity<>(shopper), String.class);
+
+		assertThat(response.getStatusCode())
+				.as("the movement ledger must not be reachable by an ordinary customer")
+				.isEqualTo(HttpStatus.FORBIDDEN);
+		assertThat(response.getBody()).contains("OPERATOR_REQUIRED");
 	}
 }
