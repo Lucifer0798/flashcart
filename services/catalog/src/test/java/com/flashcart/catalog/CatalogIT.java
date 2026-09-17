@@ -383,4 +383,90 @@ class CatalogIT {
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).containsEntry("status", "UP");
 	}
+
+	// --- endpoints nothing was exercising ------------------------------------------------------------
+
+	@Test
+	@DisplayName("upcoming lists a scheduled sale whose window has not opened, and not a live one")
+	void upcomingIsScheduledButNotYetOpen() {
+		CategoryResponse category = createCategory(unique("Audio"));
+		ProductResponse product = createProduct(category.id(), unique("SOON").toUpperCase(),
+				unique("Forthcoming"), "299.00").getBody();
+		Instant now = Instant.now();
+
+		// Two sales that differ only in when their window opens. The phase is derived from the clock
+		// rather than stored (ADR 0004), so this is the distinction that endpoint exists to make.
+		FlashSaleResponse later = scheduledSale(product, now.plus(2, ChronoUnit.HOURS),
+				now.plus(6, ChronoUnit.HOURS));
+		FlashSaleResponse open = scheduledSale(product, now.minus(1, ChronoUnit.HOURS),
+				now.plus(6, ChronoUnit.HOURS));
+		// UPCOMING is the derived phase; SCHEDULED is the stored status. ADR 0004 keeps them
+		// separate on purpose, and conflating them is the mistake this endpoint would hide.
+		assertThat(later.phase()).isEqualTo(FlashSalePhase.UPCOMING);
+		assertThat(open.phase()).isEqualTo(FlashSalePhase.ACTIVE);
+
+		List<String> upcoming = idsOf("/api/v1/flash-sales/upcoming");
+
+		assertThat(upcoming).contains(later.id().toString());
+		assertThat(upcoming).doesNotContain(open.id().toString());
+	}
+
+	@Test
+	@DisplayName("and a cancelled sale never appears there, however far off its window is")
+	void upcomingExcludesCancelled() {
+		CategoryResponse category = createCategory(unique("Audio"));
+		ProductResponse product = createProduct(category.id(), unique("GONE").toUpperCase(),
+				unique("Cancelled"), "299.00").getBody();
+		Instant now = Instant.now();
+
+		FlashSaleResponse sale = scheduledSale(product, now.plus(2, ChronoUnit.HOURS),
+				now.plus(6, ChronoUnit.HOURS));
+		rest.postForObject("/api/v1/flash-sales/" + sale.id() + "/cancel", null, FlashSaleResponse.class);
+
+		// The query filters on status as well as time; a sale that was called off is not "upcoming"
+		// merely because its window is still ahead.
+		assertThat(idsOf("/api/v1/flash-sales/upcoming")).doesNotContain(sale.id().toString());
+	}
+
+	@Test
+	@DisplayName("a product can be fetched by the slug derived from its name")
+	void productIsReachableBySlug() {
+		CategoryResponse category = createCategory(unique("Audio"));
+		ProductResponse created = createProduct(category.id(), unique("SLUG").toUpperCase(),
+				unique("Aurora Reference Headphones"), "299.00").getBody();
+
+		ProductResponse bySlug = rest.getForObject("/api/v1/products/slug/" + created.slug(),
+				ProductResponse.class);
+
+		assertThat(bySlug.id()).isEqualTo(created.id());
+		assertThat(bySlug.sku()).isEqualTo(created.sku());
+	}
+
+	@Test
+	@DisplayName("an unknown slug is a 404 in the shared envelope, not an empty body")
+	void unknownSlugIsNotFound() {
+		ResponseEntity<Map> response = rest.getForEntity("/api/v1/products/slug/no-such-product-slug",
+				Map.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		assertThat(response.getBody()).containsEntry("code", "NOT_FOUND");
+	}
+
+	/** A sale over one product, scheduled so its phase is derived from the window alone. */
+	private FlashSaleResponse scheduledSale(ProductResponse product, Instant from, Instant to) {
+		FlashSaleResponse sale = rest.postForObject("/api/v1/flash-sales",
+				new FlashSaleRequest(unique("Window"), null, from, to, FlashSaleStatus.DRAFT),
+				FlashSaleResponse.class);
+		rest.postForObject("/api/v1/flash-sales/" + sale.id() + "/items",
+				new FlashSaleItemRequest(product.id(), new BigDecimal("179.00"), 500, 2),
+				FlashSaleItemResponse.class);
+		return rest.postForObject("/api/v1/flash-sales/" + sale.id() + "/schedule", null,
+				FlashSaleResponse.class);
+	}
+
+	@SuppressWarnings("unchecked")
+	private List<String> idsOf(String path) {
+		List<Map<String, Object>> rows = rest.getForObject(path, List.class);
+		return rows.stream().map(row -> String.valueOf(row.get("id"))).toList();
+	}
 }
