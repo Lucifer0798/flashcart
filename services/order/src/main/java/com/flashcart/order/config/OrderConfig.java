@@ -10,6 +10,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;
 import com.flashcart.common.security.AccessTokens;
+import com.flashcart.common.security.CallerIdentity;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -71,5 +72,13 @@ public class OrderConfig {
 			@org.springframework.beans.factory.annotation.Value("${flashcart.security.jwt.secret}") String secret,
 			@org.springframework.beans.factory.annotation.Value("${flashcart.security.jwt.ttl:PT12H}") java.time.Duration ttl) {
 		return new AccessTokens(secret, ttl);
+	}
+
+	/**
+	 * Only the identity half. See {@code CustomerDataAccess} for why the other half is not here.
+	 */
+	@Bean
+	public CallerIdentity callerIdentity(AccessTokens tokens) {
+		return new CallerIdentity(tokens);
 	}
 }
