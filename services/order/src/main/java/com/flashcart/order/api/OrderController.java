@@ -15,8 +15,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.order.domain.Order;
-import com.flashcart.common.error.UnauthenticatedException;
-import com.flashcart.common.security.AccessTokens;
+import com.flashcart.common.security.CallerIdentity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -27,7 +26,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -38,11 +36,17 @@ public class OrderController {
 	private static final Logger log = LoggerFactory.getLogger(OrderController.class);
 
 	private final OrderService orders;
-	private final AccessTokens tokens;
+	/**
+	 * The identity half only, deliberately. {@code CustomerDataAccess} can grant an operator a read of
+	 * somebody else's row; there is no such thing here, and ADR 0025 recorded that asymmetry as the
+	 * existing behaviour rather than an oversight. Opening it is a decision with its own record, not a
+	 * change of collaborator.
+	 */
+	private final CallerIdentity identity;
 
-	public OrderController(OrderService orders, AccessTokens tokens) {
+	public OrderController(OrderService orders, CallerIdentity identity) {
 		this.orders = orders;
-		this.tokens = tokens;
+		this.identity = identity;
 	}
 
 	@PostMapping
@@ -67,7 +71,7 @@ public class OrderController {
 				.toList();
 
 		OrderResponse placed = OrderResponse.from(orders.place(request.idempotencyKey(),
-				caller(authorization), request.flashSaleId(), lines));
+				identity.require(authorization), request.flashSaleId(), lines));
 
 		// 202, not 201. The order exists, but whether it got the stock is not known yet — inventory
 		// answers on the bus. Returning 201 would imply a completed outcome the caller has to poll for.
@@ -89,7 +93,7 @@ public class OrderController {
 					+ "parameter, because a parameter naming whose data to return is a parameter "
 					+ "somebody will change to somebody else's.")
 	public List<OrderResponse> mine(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
-		return orders.forCustomer(caller(authorization)).stream().map(OrderResponse::from).toList();
+		return orders.forCustomer(identity.require(authorization)).stream().map(OrderResponse::from).toList();
 	}
 
 	@GetMapping("/{orderNumber}/history")
@@ -119,17 +123,6 @@ public class OrderController {
 	// the one thing worse than a saga is a saga that something else can reach into halfway through.
 
 	/**
-	 * Who is asking, according to a token this service verified itself.
-	 *
-	 * <p>The gateway already refused anything without a valid token, so in the normal path this check
-	 * passes trivially. It is here because the gateway is not a boundary: compose publishes this
-	 * service on 18082 and the README tells people to use those ports, so a client can simply skip the
-	 * edge. Trusting an injected header would be an authentication system with an opt-out.
-	 *
-	 * <p>This is the one service where being wrong about the customer means selling a stranger's order
-	 * to somebody, so it verifies rather than inherits. See ADR 0021.
-	 */
-	/**
 	 * The order, if it belongs to the caller.
 	 *
 	 * <p>Somebody else's order is reported as <strong>404, not 403</strong>. A 403 confirms that the
@@ -143,18 +136,12 @@ public class OrderController {
 	 * fixing only the first would have been half a fix -- which this project has shipped before.
 	 */
 	private Order mine(String authorization, String orderNumber) {
-		String caller = caller(authorization);
+		String caller = identity.require(authorization);
 		Order order = orders.get(orderNumber);
 		if (!order.getCustomerId().equals(caller)) {
 			log.info("Refused access to order {} for a different customer", orderNumber);
 			throw ResourceNotFoundException.of("Order", orderNumber);
 		}
 		return order;
-	}
-
-	private String caller(String authorization) {
-		return AccessTokens.bearer(authorization)
-				.flatMap(tokens::subject)
-				.orElseThrow(() -> new UnauthenticatedException("A valid access token is required"));
 	}
 }

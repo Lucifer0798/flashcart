@@ -4,6 +4,8 @@ import java.time.Duration;
 import java.util.List;
 
 import com.flashcart.common.security.AccessTokens;
+import com.flashcart.common.security.CallerIdentity;
+import com.flashcart.common.security.CustomerDataAccess;
 import com.flashcart.common.security.OperatorAccessLog;
 import com.flashcart.common.security.OperatorAccessRetention;
 import com.flashcart.common.security.OperatorFilter;
@@ -43,6 +45,20 @@ public class ShippingSecurityConfig {
 	@Bean
 	public OperatorAccessLog operatorAccessLog(JdbcTemplate jdbc) {
 		return new OperatorAccessLog(jdbc);
+	}
+
+	@Bean
+	public CallerIdentity callerIdentity(AccessTokens tokens) {
+		return new CallerIdentity(tokens);
+	}
+
+	/**
+	 * The audited half, which exists here and not in the order service because this service has an
+	 * {@code operator_access_log} to write to. See {@code CustomerDataAccess}.
+	 */
+	@Bean
+	public CustomerDataAccess customerDataAccess(CallerIdentity caller, OperatorAccessLog accessLog) {
+		return new CustomerDataAccess(caller, accessLog);
 	}
 
 	/**

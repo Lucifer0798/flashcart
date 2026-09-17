@@ -2,11 +2,8 @@ package com.flashcart.shipping.api;
 
 import java.util.List;
 
-import com.flashcart.common.error.OperatorRequiredException;
 import com.flashcart.common.error.ResourceNotFoundException;
-import com.flashcart.common.error.UnauthenticatedException;
-import com.flashcart.common.security.AccessTokens;
-import com.flashcart.common.security.OperatorAccessLog;
+import com.flashcart.common.security.CustomerDataAccess;
 import com.flashcart.shipping.api.dto.ShipmentResponse;
 import com.flashcart.shipping.domain.Shipment;
 import com.flashcart.shipping.service.ShipmentService;
@@ -49,13 +46,11 @@ public class ShipmentController {
 	private static final Logger log = LoggerFactory.getLogger(ShipmentController.class);
 
 	private final ShipmentService shipments;
-	private final AccessTokens tokens;
-	private final OperatorAccessLog accessLog;
+	private final CustomerDataAccess access;
 
-	public ShipmentController(ShipmentService shipments, AccessTokens tokens, OperatorAccessLog accessLog) {
+	public ShipmentController(ShipmentService shipments, CustomerDataAccess access) {
 		this.shipments = shipments;
-		this.tokens = tokens;
-		this.accessLog = accessLog;
+		this.access = access;
 	}
 
 	@GetMapping("/order/{orderNumber}")
@@ -79,17 +74,7 @@ public class ShipmentController {
 					+ "customer's is refused rather than quietly handed their own.")
 	public List<ShipmentResponse> list(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
 			@RequestParam(required = false) String customerId) {
-		String caller = caller(authorization);
-		String subject = customerId == null ? caller : customerId;
-
-		if (!subject.equals(caller)) {
-			if (!isOperator(authorization)) {
-				log.info("Refused a shipment listing for a different customer");
-				throw new OperatorRequiredException("Only an operator may read another customer's shipments");
-			}
-			// Recorded before the rows are read, not after. See ADR 0025.
-			accessLog.record(caller, "READ_SHIPMENT_LIST", null, subject);
-		}
+		String subject = access.subjectOf(authorization, customerId, "READ_SHIPMENT_LIST", "shipments");
 		return shipments.forCustomer(subject).stream().map(ShipmentResponse::from).toList();
 	}
 
@@ -117,33 +102,11 @@ public class ShipmentController {
 	 * — it is the most widely handled identifier this system issues.
 	 */
 	private Shipment mine(String authorization, Shipment shipment, String identifier) {
-		String caller = caller(authorization);
-		if (shipment.getCustomerId().equals(caller)) {
-			return shipment;
-		}
-		if (isOperator(authorization)) {
-			accessLog.record(caller, "READ_SHIPMENT", identifier, shipment.getCustomerId());
+		if (access.mayRead(authorization, shipment.getCustomerId(), "READ_SHIPMENT", identifier)) {
 			return shipment;
 		}
 		log.info("Refused access to a shipment belonging to a different customer");
 		throw ResourceNotFoundException.of("Shipment", identifier);
 	}
 
-	/**
-	 * Who is asking, according to a token this service verified itself.
-	 *
-	 * <p>The filter in front of this has already rejected anything without a valid token. This is
-	 * here because a check performed only somewhere else is a check that vanishes the day the
-	 * somewhere else is reconfigured, and compose publishes this service on its own port. See
-	 * ADR 0021.
-	 */
-	private String caller(String authorization) {
-		return AccessTokens.bearer(authorization)
-				.flatMap(tokens::subject)
-				.orElseThrow(() -> new UnauthenticatedException("A valid access token is required"));
-	}
-
-	private boolean isOperator(String authorization) {
-		return AccessTokens.bearer(authorization).filter(tokens::isOperator).isPresent();
-	}
 }
