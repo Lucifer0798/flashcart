@@ -34,6 +34,13 @@ jobs:
       - name: Compile everything, run the fast tests
         run: ./mvnw -B verify -DskipITs
 
+      - name: Every endpoint is exercised by something
+        run: |
+          # An endpoint nothing calls is not necessarily broken, but nothing would say so if it
+          # were. This was audited by hand twice and got two different wrong answers, both of which
+          # looked right -- so it is a script that checks itself, and it runs here.
+          python3 scripts/endpoint-coverage.py
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5

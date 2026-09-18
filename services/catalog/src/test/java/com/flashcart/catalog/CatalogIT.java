@@ -469,4 +469,110 @@ class CatalogIT {
 		List<Map<String, Object>> rows = rest.getForObject(path, List.class);
 		return rows.stream().map(row -> String.valueOf(row.get("id"))).toList();
 	}
+
+	// --- taking a product back out of a sale ----------------------------------------------------------
+
+	@Test
+	@DisplayName("removing an item takes the product off the sale and back to list price")
+	void removingAnItemRestoresListPrice() {
+		CategoryResponse category = createCategory(unique("Audio"));
+		ProductResponse product = createProduct(category.id(), unique("PULL").toUpperCase(),
+				unique("Withdrawn"), "299.00").getBody();
+		Instant now = Instant.now();
+
+		FlashSaleResponse sale = rest.postForObject("/api/v1/flash-sales",
+				new FlashSaleRequest(unique("Pullable"), null, now.minus(1, ChronoUnit.HOURS),
+						now.plus(6, ChronoUnit.HOURS), FlashSaleStatus.DRAFT),
+				FlashSaleResponse.class);
+		FlashSaleItemResponse item = rest.postForObject("/api/v1/flash-sales/" + sale.id() + "/items",
+				new FlashSaleItemRequest(product.id(), new BigDecimal("179.00"), 500, 2),
+				FlashSaleItemResponse.class);
+
+		ResponseEntity<Void> response = rest.exchange(
+				"/api/v1/flash-sales/" + sale.id() + "/items/" + item.id(),
+				HttpMethod.DELETE, null, Void.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+		// The row is gone, not merely detached: the sale reads back without it, and the product is
+		// priced at list again. orphanRemoval is what makes that true, and nothing checked it.
+		assertThat(rest.getForObject("/api/v1/flash-sales/" + sale.id(), FlashSaleResponse.class).items())
+				.isEmpty();
+		assertThat(rest.getForObject("/api/v1/products/" + product.id(), ProductResponse.class)
+				.effectivePrice()).isEqualByComparingTo("299.00");
+	}
+
+	@Test
+	@DisplayName("an item that is not in the sale is a 404, not a silent success")
+	void removingAnUnknownItemIsNotFound() {
+		FlashSaleResponse sale = rest.postForObject("/api/v1/flash-sales",
+				new FlashSaleRequest(unique("Empty"), null, Instant.now(),
+						Instant.now().plus(6, ChronoUnit.HOURS), FlashSaleStatus.DRAFT),
+				FlashSaleResponse.class);
+
+		ResponseEntity<Map> response = rest.exchange(
+				"/api/v1/flash-sales/" + sale.id() + "/items/" + UUID.randomUUID(),
+				HttpMethod.DELETE, null, Map.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		assertThat(response.getBody()).containsEntry("code", "NOT_FOUND");
+	}
+
+	@Test
+	@DisplayName("a live sale's line-up is frozen, so its items cannot be removed either")
+	void aLiveSaleCannotHaveItemsRemoved() {
+		CategoryResponse category = createCategory(unique("Audio"));
+		ProductResponse product = createProduct(category.id(), unique("FROZEN").toUpperCase(),
+				unique("Frozen"), "299.00").getBody();
+		Instant now = Instant.now();
+
+		FlashSaleResponse sale = rest.postForObject("/api/v1/flash-sales",
+				new FlashSaleRequest(unique("Frozen"), null, now.minus(1, ChronoUnit.HOURS),
+						now.plus(6, ChronoUnit.HOURS), FlashSaleStatus.DRAFT),
+				FlashSaleResponse.class);
+		FlashSaleItemResponse item = rest.postForObject("/api/v1/flash-sales/" + sale.id() + "/items",
+				new FlashSaleItemRequest(product.id(), new BigDecimal("179.00"), 500, 2),
+				FlashSaleItemResponse.class);
+		rest.postForObject("/api/v1/flash-sales/" + sale.id() + "/schedule", null, FlashSaleResponse.class);
+
+		ResponseEntity<Map> response = rest.exchange(
+				"/api/v1/flash-sales/" + sale.id() + "/items/" + item.id(),
+				HttpMethod.DELETE, null, Map.class);
+
+		// Adding to a live sale is refused for the same reason: the price a shopper is looking at
+		// must not move under them mid-session.
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(response.getBody()).containsEntry("code", "FLASH_SALE_LIVE");
+	}
+
+	@Test
+	@DisplayName("a cancelled sale may be emptied, though it may not be added to")
+	void aCancelledSaleMayHaveItemsRemoved() {
+		CategoryResponse category = createCategory(unique("Audio"));
+		ProductResponse product = createProduct(category.id(), unique("CANC").toUpperCase(),
+				unique("Cancelled tidy-up"), "299.00").getBody();
+		Instant now = Instant.now();
+
+		FlashSaleResponse sale = rest.postForObject("/api/v1/flash-sales",
+				new FlashSaleRequest(unique("Tidy"), null, now.plus(1, ChronoUnit.HOURS),
+						now.plus(6, ChronoUnit.HOURS), FlashSaleStatus.DRAFT),
+				FlashSaleResponse.class);
+		FlashSaleItemResponse item = rest.postForObject("/api/v1/flash-sales/" + sale.id() + "/items",
+				new FlashSaleItemRequest(product.id(), new BigDecimal("179.00"), 500, 2),
+				FlashSaleItemResponse.class);
+		rest.postForObject("/api/v1/flash-sales/" + sale.id() + "/cancel", null, FlashSaleResponse.class);
+
+		// Pinning an asymmetry rather than discovering it later: addItem refuses a cancelled sale
+		// and removeItem does not. Removing from a sale that prices nothing cannot change what any
+		// shopper sees, whereas adding to one can only be a mistake, so the pair is defensible --
+		// but it is the kind of difference that reads as an oversight unless a test says otherwise.
+		ResponseEntity<Void> removed = rest.exchange(
+				"/api/v1/flash-sales/" + sale.id() + "/items/" + item.id(),
+				HttpMethod.DELETE, null, Void.class);
+		assertThat(removed.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+		ResponseEntity<Map> added = rest.postForEntity("/api/v1/flash-sales/" + sale.id() + "/items",
+				new FlashSaleItemRequest(product.id(), new BigDecimal("179.00"), 500, 2), Map.class);
+		assertThat(added.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(added.getBody()).containsEntry("code", "FLASH_SALE_CANCELLED");
+	}
 }
