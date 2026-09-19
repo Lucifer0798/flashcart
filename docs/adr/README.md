@@ -33,3 +33,4 @@ when someone revisits it in six months.
 | [0025](0025-record-what-an-operator-reads.md) | Record what an operator reads | Accepted |
 | [0026](0026-deleting-an-audit-record-is-a-decision.md) | Deleting an audit record is a decision | Accepted |
 | [0027](0027-the-outbox-hop-is-a-span.md) | The outbox hop is a span | Accepted |
+| [0028](0028-looking-is-not-acting.md) | Looking is not acting | Accepted |

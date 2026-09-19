@@ -1,6 +1,6 @@
 # 0027 — The outbox hop is a span
 
-**Status:** Accepted · **Date:** 2026-09-15 · **Phase:** post-roadmap
+**Status:** Accepted · **Date:** 2026-09-15 · **Phase:** post-roadmap · *a gap recorded here was later closed by [ADR 0028](0028-looking-is-not-acting.md)*
 
 ## Context
 
@@ -92,3 +92,6 @@ optional one. That is a trade worth making deliberately, and this is not the rec
 **Still open.** Per-service ports remain published, so the gateway is an optimisation rather than a
 boundary. An operator cannot read another customer's order. And the audit table added in
 [ADR 0025](0025-record-what-an-operator-reads.md) has no reader.
+
+*The order half was since closed by [ADR 0028](0028-looking-is-not-acting.md), which opened the reads
+and left cancel closed. The other two still stand.*

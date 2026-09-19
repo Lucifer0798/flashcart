@@ -632,10 +632,16 @@ is a worked example rather than a default. Leave it unset and the service says s
 with the row count, so unbounded growth is something you chose rather than something you missed. See
 [ADR 0026](docs/adr/0026-deleting-an-audit-record-is-a-decision.md).
 
+**An operator may read another customer's order, and not cancel it.** Reading discloses facts the
+payment and parcel already expose — the customer, the order number, the amount, the shipped lines —
+so refusing it withheld a flash-sale id while leaving support unable to answer "where is my order".
+Cancelling discloses nothing and destroys something, so it stays the customer's alone. Both reads are
+recorded. See [ADR 0028](docs/adr/0028-looking-is-not-acting.md).
+
 **What is still open, said plainly.** Per-service ports are still published, so each service checks
-for itself rather than trusting the gateway. An operator cannot read another customer's *order* at
-all, which is not obviously right. And the audit table has no reader — answering "who read my data"
-is a SQL query, not an endpoint.
+for itself rather than trusting the gateway. The publisher still stores a hard-coded sampled flag.
+And the audit table has no reader — answering "who read my data" is a SQL query, not an endpoint, and
+now against three databases rather than two.
 
 ## Breaking it on purpose
 

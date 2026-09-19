@@ -119,6 +119,9 @@ class OrderIT {
 	@Autowired
 	private AccessTokens tokens;
 
+	@Autowired
+	private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
 	/**
 	 * Who these requests are from.
 	 *
@@ -492,5 +495,116 @@ class OrderIT {
 
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).containsEntry("status", "live");
+	}
+
+	// --- an operator may read somebody else's order, per ADR 0028 -------------------------------------
+
+	/** Signs in with the operator role, which signedInAs deliberately does not grant. */
+	private void signedInAsOperator(String operatorId) {
+		rest.getRestTemplate().getInterceptors().removeIf(i -> i instanceof BearerToken);
+		rest.getRestTemplate().getInterceptors().add(new BearerToken(
+				tokens.issue(operatorId, operatorId + "@example.test", List.of(AccessTokens.OPERATOR))));
+	}
+
+	private Long auditRows(String customerId) {
+		return jdbc.queryForObject(
+				"select count(*) from operator_access_log where customer_id = ?", Long.class, customerId);
+	}
+
+	@Test
+	@DisplayName("an operator can read a customer's order, and the read is on the record")
+	void operatorReadsAnothersOrder() {
+		signedInAs("audit-owner-a");
+		String orderNumber = place(null, "AUD-HP-001", 1).orderNumber();
+
+		signedInAsOperator("ops-1");
+		ResponseEntity<OrderResponse> response = rest.getForEntity("/api/v1/orders/" + orderNumber,
+				OrderResponse.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(response.getBody().customerId()).isEqualTo("audit-owner-a");
+
+		Map<String, Object> row = jdbc.queryForMap(
+				"select * from operator_access_log where customer_id = 'audit-owner-a'");
+		assertThat(row).containsEntry("operator_id", "ops-1");
+		assertThat(row).containsEntry("action", "READ_ORDER");
+		assertThat(row).containsEntry("resource_id", orderNumber);
+	}
+
+	@Test
+	@DisplayName("reading the history is recorded as its own action, not as a plain read")
+	void operatorReadingHistoryIsRecordedSeparately() {
+		signedInAs("audit-owner-b");
+		String orderNumber = place(null, "AUD-HP-001", 1).orderNumber();
+
+		signedInAsOperator("ops-1");
+		assertThat(rest.getForEntity("/api/v1/orders/" + orderNumber + "/history", List.class)
+				.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		assertThat(jdbc.queryForObject(
+				"select action from operator_access_log where customer_id = 'audit-owner-b'", String.class))
+				.isEqualTo("READ_ORDER_HISTORY");
+	}
+
+	@Test
+	@DisplayName("a customer reading their own order is the ordinary path and records nothing")
+	void ownReadIsNotRecorded() {
+		signedInAs("audit-owner-c");
+		String orderNumber = place(null, "AUD-HP-001", 1).orderNumber();
+
+		assertThat(rest.getForEntity("/api/v1/orders/" + orderNumber, OrderResponse.class)
+				.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		assertThat(auditRows("audit-owner-c")).isZero();
+	}
+
+	@Test
+	@DisplayName("an ordinary customer still gets 404 for somebody else's, and nothing is recorded")
+	void strangerStillGetsNotFound() {
+		signedInAs("audit-owner-d");
+		String orderNumber = place(null, "AUD-HP-001", 1).orderNumber();
+
+		signedInAs("audit-stranger");
+		assertThat(rest.getForEntity("/api/v1/orders/" + orderNumber, Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.NOT_FOUND);
+
+		// Nothing was disclosed, so there is nothing to account for.
+		assertThat(auditRows("audit-owner-d")).isZero();
+	}
+
+	@Test
+	@DisplayName("an operator may NOT cancel somebody else's order: looking is not acting")
+	void operatorCannotCancelAnothersOrder() {
+		signedInAs("audit-owner-e");
+		String orderNumber = place(null, "AUD-HP-001", 1).orderNumber();
+
+		signedInAsOperator("ops-1");
+		ResponseEntity<Map> response = rest.postForEntity("/api/v1/orders/" + orderNumber + "/cancel",
+				null, Map.class);
+
+		// ADR 0028 opened reading, deliberately not writing. Cancelling releases stock and moves a
+		// state machine on a customer's behalf; it discloses nothing and destroys something, which is
+		// a different decision from being allowed to look.
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		assertThat(rest.getForEntity("/api/v1/orders/" + orderNumber, OrderResponse.class).getBody()
+				.status()).isNotEqualTo(OrderStatus.CANCELLED);
+	}
+
+	@Test
+	@DisplayName("an operator may list another customer's orders; anyone else naming one is refused")
+	void operatorMayListAnothersOrders() {
+		signedInAs("audit-owner-f");
+		place(null, "AUD-HP-001", 1);
+
+		signedInAsOperator("ops-1");
+		assertThat(rest.getForEntity("/api/v1/orders?customerId=audit-owner-f", List.class).getBody())
+				.hasSize(1);
+		assertThat(jdbc.queryForObject(
+				"select action from operator_access_log where customer_id = 'audit-owner-f'", String.class))
+				.isEqualTo("READ_ORDER_LIST");
+
+		signedInAs("audit-stranger");
+		assertThat(rest.getForEntity("/api/v1/orders?customerId=audit-owner-f", Map.class)
+				.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
 	}
 }
