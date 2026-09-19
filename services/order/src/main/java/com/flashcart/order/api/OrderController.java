@@ -15,7 +15,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.order.domain.Order;
-import com.flashcart.common.security.CallerIdentity;
+import com.flashcart.common.security.CustomerDataAccess;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -37,16 +38,23 @@ public class OrderController {
 
 	private final OrderService orders;
 	/**
-	 * The identity half only, deliberately. {@code CustomerDataAccess} can grant an operator a read of
-	 * somebody else's row; there is no such thing here, and ADR 0025 recorded that asymmetry as the
-	 * existing behaviour rather than an oversight. Opening it is a decision with its own record, not a
-	 * change of collaborator.
+	 * The audited half, since ADR 0028.
+	 *
+	 * <p>This was {@link CallerIdentity} until then, with a note saying an operator had no business
+	 * reading somebody else's order and that opening it would need its own record. That record exists
+	 * now, and the argument it makes is that the asymmetry protected almost nothing: the payment and
+	 * shipment an operator could already read disclose the customer, the order number, the amount and
+	 * the shipped lines.
+	 *
+	 * <p>Swapping the collaborator is the whole change, which is what the split in ADR 0023 was for —
+	 * and it was not free, because {@code CustomerDataAccess} needs an {@code operator_access_log}
+	 * and this service had none. Granting the power meant deciding to store the audit.
 	 */
-	private final CallerIdentity identity;
+	private final CustomerDataAccess access;
 
-	public OrderController(OrderService orders, CallerIdentity identity) {
+	public OrderController(OrderService orders, CustomerDataAccess access) {
 		this.orders = orders;
-		this.identity = identity;
+		this.access = access;
 	}
 
 	@PostMapping
@@ -71,7 +79,7 @@ public class OrderController {
 				.toList();
 
 		OrderResponse placed = OrderResponse.from(orders.place(request.idempotencyKey(),
-				identity.require(authorization), request.flashSaleId(), lines));
+				access.require(authorization), request.flashSaleId(), lines));
 
 		// 202, not 201. The order exists, but whether it got the stock is not known yet — inventory
 		// answers on the bus. Returning 201 would imply a completed outcome the caller has to poll for.
@@ -84,16 +92,24 @@ public class OrderController {
 	@Operation(summary = "Fetch one of your orders by its number")
 	public OrderResponse get(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
 			@PathVariable String orderNumber) {
-		return OrderResponse.from(mine(authorization, orderNumber));
+		return OrderResponse.from(readable(authorization, orderNumber, "READ_ORDER"));
 	}
 
 	@GetMapping
-	@Operation(summary = "List your orders, newest first",
-			description = "Whose orders is decided by the access token. There is no customerId "
-					+ "parameter, because a parameter naming whose data to return is a parameter "
-					+ "somebody will change to somebody else's.")
-	public List<OrderResponse> mine(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
-		return orders.forCustomer(identity.require(authorization)).stream().map(OrderResponse::from).toList();
+	@Operation(summary = "Your orders, newest first",
+			description = "Whose orders is decided by the access token. An operator may pass "
+					+ "customerId to read somebody else's; anyone else asking for another "
+					+ "customer's is refused rather than quietly handed their own.")
+	public List<OrderResponse> mine(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+			@RequestParam(required = false) String customerId) {
+		// ADR 0021 removed this parameter, on the grounds that "a parameter naming whose data to
+		// return is a parameter somebody will change to somebody else's". That reasoning holds for an
+		// endpoint where anybody may pass it; it is answered here the way ADR 0023 answered it for
+		// payments and shipments. Omitting it is still the only way a customer can ask, so there is
+		// nothing for them to mistype into somebody else's; supplying it requires the operator role
+		// and is refused outright otherwise, rather than quietly narrowed to the caller's own rows.
+		String subject = access.subjectOf(authorization, customerId, "READ_ORDER_LIST", "orders");
+		return orders.forCustomer(subject).stream().map(OrderResponse::from).toList();
 	}
 
 	@GetMapping("/{orderNumber}/history")
@@ -102,7 +118,7 @@ public class OrderController {
 					+ "'why is this order cancelled'.")
 	public List<OrderHistoryResponse> history(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
 			@PathVariable String orderNumber) {
-		mine(authorization, orderNumber);
+		readable(authorization, orderNumber, "READ_ORDER_HISTORY");
 		return orders.historyOf(orderNumber).stream().map(OrderHistoryResponse::from).toList();
 	}
 
@@ -113,7 +129,7 @@ public class OrderController {
 	public OrderResponse cancel(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
 			@PathVariable String orderNumber,
 			@Valid @RequestBody(required = false) CancelOrderRequest request) {
-		mine(authorization, orderNumber);
+		ownedByCaller(authorization, orderNumber);
 		return OrderResponse.from(orders.cancel(orderNumber, request == null ? null : request.reason()));
 	}
 
@@ -135,11 +151,32 @@ public class OrderController {
 	 * as somebody else and cancelling somebody else's order are the same hole seen from two ends, and
 	 * fixing only the first would have been half a fix -- which this project has shipped before.
 	 */
-	private Order mine(String authorization, String orderNumber) {
-		String caller = identity.require(authorization);
+	private Order readable(String authorization, String orderNumber, String action) {
+		Order order = orders.get(orderNumber);
+		if (access.mayRead(authorization, order.getCustomerId(), action, orderNumber)) {
+			return order;
+		}
+		log.info("Refused access to order {} for a different customer", orderNumber);
+		throw ResourceNotFoundException.of("Order", orderNumber);
+	}
+
+	/**
+	 * The order, only if it belongs to the caller — no operator bypass.
+	 *
+	 * <p>Used by cancel, and deliberately not by the reads. ADR 0028 opened *reading* somebody else's
+	 * order because the same facts were already visible through their payment and parcel. Cancelling
+	 * one discloses nothing and destroys something: it releases stock and moves a state machine on a
+	 * customer's behalf. An operator who should be able to do that is a different decision from an
+	 * operator who should be able to look, and this change is only the second one.
+	 *
+	 * <p>The same split shipping already draws: reading a parcel is the customer's business,
+	 * dispatching it is the warehouse's.
+	 */
+	private Order ownedByCaller(String authorization, String orderNumber) {
+		String caller = access.require(authorization);
 		Order order = orders.get(orderNumber);
 		if (!order.getCustomerId().equals(caller)) {
-			log.info("Refused access to order {} for a different customer", orderNumber);
+			log.info("Refused cancellation of order {} for a different customer", orderNumber);
 			throw ResourceNotFoundException.of("Order", orderNumber);
 		}
 		return order;

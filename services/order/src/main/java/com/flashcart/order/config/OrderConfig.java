@@ -11,7 +11,10 @@ import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.CallerIdentity;
+import com.flashcart.common.security.CustomerDataAccess;
+import com.flashcart.common.security.OperatorAccessLog;
 import org.springframework.context.annotation.Bean;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.client.RestClient;
@@ -74,11 +77,23 @@ public class OrderConfig {
 		return new AccessTokens(secret, ttl);
 	}
 
-	/**
-	 * Only the identity half. See {@code CustomerDataAccess} for why the other half is not here.
-	 */
 	@Bean
 	public CallerIdentity callerIdentity(AccessTokens tokens) {
 		return new CallerIdentity(tokens);
+	}
+
+	@Bean
+	public OperatorAccessLog operatorAccessLog(JdbcTemplate jdbc) {
+		return new OperatorAccessLog(jdbc);
+	}
+
+	/**
+	 * The audited half. It is here since ADR 0028, and it could only arrive with the
+	 * {@code operator_access_log} that V4 adds -- a service cannot gain audited operator reads
+	 * without first deciding to store the audit.
+	 */
+	@Bean
+	public CustomerDataAccess customerDataAccess(CallerIdentity caller, OperatorAccessLog accessLog) {
+		return new CustomerDataAccess(caller, accessLog);
 	}
 }

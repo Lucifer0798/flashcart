@@ -1,6 +1,6 @@
 # 0025 — Record what an operator reads
 
-**Status:** Accepted · **Date:** 2026-09-13 · **Phase:** post-roadmap · *a gap recorded here was later closed by [ADR 0026](0026-deleting-an-audit-record-is-a-decision.md)*
+**Status:** Accepted · **Date:** 2026-09-13 · **Phase:** post-roadmap · *gaps recorded here were later closed by [ADR 0028](0028-looking-is-not-acting.md) and [ADR 0026](0026-deleting-an-audit-record-is-a-decision.md)*
 
 ## Context
 
@@ -102,6 +102,9 @@ people's data, not customers reading their own.
 order at all — `OrderController` has no operator bypass, so there is nothing to audit there. That is
 not obviously the right end state, since support answering "where is my order" may well need it, but
 it is the existing behaviour and opening it is a separate decision with its own record.
+
+*That record is [ADR 0028](0028-looking-is-not-acting.md), which opened the reads and left cancel
+closed. The asymmetry turned out to be an accident of build order rather than a boundary.*
 
 **Nothing expires these rows.** The outbox has a retention sweeper; this table has none, so it grows
 with operator activity forever. That is the correct default for an audit trail and the wrong one for
