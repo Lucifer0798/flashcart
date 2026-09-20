@@ -1,6 +1,8 @@
 package com.flashcart.common.security;
 
 import com.flashcart.common.web.CorrelationId;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -48,9 +50,15 @@ public class OperatorAccessLog {
 			values (?, ?, ?, ?, ?, now())""";
 
 	private final JdbcTemplate jdbc;
+	private final MeterRegistry registry;
+	private final Counter recordFailures;
 
-	public OperatorAccessLog(JdbcTemplate jdbc) {
+	public OperatorAccessLog(JdbcTemplate jdbc, MeterRegistry registry) {
 		this.jdbc = jdbc;
+		this.registry = registry;
+		this.recordFailures = Counter.builder("flashcart.operator.read.record.failures")
+				.description("Operator reads refused because the access could not be recorded")
+				.register(registry);
 	}
 
 	/**
@@ -60,7 +68,26 @@ public class OperatorAccessLog {
 	 * @param customerId whose data it was
 	 */
 	public void record(String operatorId, String action, String resourceId, String customerId) {
-		jdbc.update(INSERT, operatorId, action, resourceId, customerId, CorrelationId.current());
+		try {
+			jdbc.update(INSERT, operatorId, action, resourceId, customerId, CorrelationId.current());
+		}
+		catch (RuntimeException ex) {
+			// Counted and rethrown, never swallowed. The rethrow is the property ADR 0025 exists for:
+			// an operator does not see another customer's data unless the access was recorded. The
+			// count is so that the refusal is visible as something other than a rise in 500s, which
+			// is what it looks like from the outside.
+			recordFailures.increment();
+			throw ex;
+		}
+		// Counted per action rather than in total. "Operator reads happened" is not a useful number;
+		// a list read is a different event from a single row, and telling them apart is the whole
+		// reason the action is stored in the first place.
+		Counter.builder("flashcart.operator.reads")
+				.description("Operator reads of another customer's data, by action")
+				.tag("action", action)
+				.register(registry)
+				.increment();
+
 		// Also logged, because the table answers "who read this customer's data" and the log answers
 		// "what happened in this request" -- and during an incident the second one is usually what
 		// somebody has open.
