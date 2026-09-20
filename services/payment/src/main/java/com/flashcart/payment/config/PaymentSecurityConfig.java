@@ -11,6 +11,9 @@ import com.flashcart.common.security.OperatorAccessRetention;
 import com.flashcart.common.security.OperatorFilter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.context.annotation.Configuration;
@@ -43,8 +46,11 @@ public class PaymentSecurityConfig {
 	 * recording an operator's access adds no dependency the read did not already have. See ADR 0025.
 	 */
 	@Bean
-	public OperatorAccessLog operatorAccessLog(JdbcTemplate jdbc) {
-		return new OperatorAccessLog(jdbc);
+	public OperatorAccessLog operatorAccessLog(JdbcTemplate jdbc,
+			ObjectProvider<MeterRegistry> registry) {
+		// Metrics optional in the same way the outbox treats them: a service without a
+		// registry still records the access, and only the counter is missing.
+		return new OperatorAccessLog(jdbc, registry.getIfAvailable(SimpleMeterRegistry::new));
 	}
 
 	@Bean

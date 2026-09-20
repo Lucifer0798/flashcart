@@ -610,7 +610,7 @@ Its password is in the repository and is meant to be: it is a development creden
 of the profile is that it cannot arrive anywhere it was not requested. See
 [ADR 0024](docs/adr/0024-the-development-operator-is-not-schema.md).
 
-**Every operator read of somebody else's data is recorded.** Payment and shipping each keep an
+**Every operator read of somebody else's data is recorded.** Order, payment and shipping each keep an
 `operator_access_log` in their own database: who looked, whose data it was, what they looked at, and
 the correlation id that ties it to the logs and the trace. A customer reading their own is not
 recorded — that is the ordinary path, and auditing it would bury the rows that matter.
@@ -624,6 +624,17 @@ See [ADR 0025](docs/adr/0025-record-what-an-operator-reads.md).
 select operator_id, action, resource_id, read_at
 from operator_access_log where customer_id = ? order by read_at desc;
 ```
+
+**And it is visible, not just recorded.** `flashcart_operator_reads_total{action}` puts operator
+access on the dashboard beside the outbox and the gate — because a row in a table nobody queries is
+not visibility, and ADR 0018's whole idea is that these metrics are a list of the platform's
+silences. There is deliberately **no threshold** on it: how much operator reading is normal is a
+business fact, not a fault.
+
+What does alert is `flashcart_operator_read_record_failures_total`, which can only be non-zero when
+the log is unwritable — meaning the service is refusing operator reads rather than serving one
+unrecorded. That is wrong on its own terms, and from outside it would otherwise look like an
+unexplained rise in 500s. See [ADR 0029](docs/adr/0029-an-operator-read-was-a-silence.md).
 
 **How long those records are kept is a setting, and it is empty on purpose.**
 `flashcart.audit.retention` deletes nothing until somebody names a window — a default that quietly

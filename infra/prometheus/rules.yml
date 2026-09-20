@@ -53,3 +53,21 @@ groups:
           description: >
             Duplicates are caught by processed_events before reaching the guard, so this is not
             redelivery. Something is driving an order into a state it cannot reach from.
+
+      - alert: OperatorReadsUnrecordable
+        # Not a volume alert. ADR 0018's rule is that an alert describes a state which is wrong on
+        # its own terms, never a metric being high -- and "operators are reading a lot today" is a
+        # business fact, not a fault. This is the fault: the service cannot write to
+        # operator_access_log, so by ADR 0025 it is refusing every operator read of another
+        # customer's data rather than serving one unrecorded. From outside that looks like a rise in
+        # 500s on a handful of endpoints, which is the least informative thing it could look like.
+        expr: rate(flashcart_operator_read_record_failures_total[5m]) > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }}: operator reads are being refused because the audit write fails"
+          description: >
+            operator_access_log is unwritable -- missing, out of space, or the role lost its grant.
+            Customers reading their own data are unaffected; only operator access to somebody else's
+            is refused, and deliberately so: an unrecorded operator read is the one thing this
+            platform will not serve.
