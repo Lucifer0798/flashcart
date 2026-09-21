@@ -123,9 +123,20 @@ public class OrderController {
 	}
 
 	@PostMapping("/{orderNumber}/cancel")
-	@Operation(summary = "Cancel an order and give its stock back",
-			description = "Records the cancellation and asks inventory to release the hold. Refused with "
-					+ "409 while a payment is in flight — that has to resolve first.")
+	@Operation(summary = "Cancel an order",
+			description = "What this does depends on whether the order has been paid for. Before "
+					+ "payment it cancels outright and asks inventory to release the hold. After "
+					+ "payment it returns CANCELLATION_REQUESTED and asks shipping whether the parcel "
+					+ "has left; the order becomes CANCELLED with a refund on its way if it had not, "
+					+ "and returns to SHIPPED if it had. Either way the answer arrives asynchronously "
+					+ "— poll the order, and its payment for the refund.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "200", description = "Cancelled, or the cancellation was asked "
+					+ "for. The returned status says which."),
+			@ApiResponse(responseCode = "409", description = "ORDER_NOT_CANCELLABLE — a payment is in "
+					+ "flight and has to resolve first, or the order has already been delivered."),
+			@ApiResponse(responseCode = "404", description = "No such order of yours")
+	})
 	public OrderResponse cancel(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
 			@PathVariable String orderNumber,
 			@Valid @RequestBody(required = false) CancelOrderRequest request) {

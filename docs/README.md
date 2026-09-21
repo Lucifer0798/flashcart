@@ -69,6 +69,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0027](adr/0027-the-outbox-hop-is-a-span.md) — The outbox hop is a span
 - [0028](adr/0028-looking-is-not-acting.md) — Looking is not acting
 - [0029](adr/0029-an-operator-read-was-a-silence.md) — An operator read was a silence
+- [0030](adr/0030-cancelling-a-paid-order.md) — Cancelling a paid order
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)

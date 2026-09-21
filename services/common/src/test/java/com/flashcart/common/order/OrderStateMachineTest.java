@@ -64,6 +64,47 @@ class OrderStateMachineTest {
 				.containsExactlyInAnyOrder(OrderStatus.PAID, OrderStatus.CANCELLED);
 	}
 
+	// --- cancelling after the money has moved -------------------------------------------------------
+
+	@Test
+	@DisplayName("a paid order cannot walk straight to cancelled")
+	void cancellingAPaidOrderIsNotOneStep() {
+		// Both of these edges existed, and taking either compensated nothing: the capture stayed
+		// with the platform and the committed units did not come back, so the customer was left with
+		// neither. Nothing asserted them, which is how they survived.
+		assertThat(OrderStateMachine.canTransition(OrderStatus.PAID, OrderStatus.CANCELLED)).isFalse();
+		assertThat(OrderStateMachine.canTransition(OrderStatus.FULFILLING, OrderStatus.CANCELLED))
+				.isFalse();
+		assertThat(OrderStateMachine.canTransition(OrderStatus.SHIPPED, OrderStatus.CANCELLED)).isFalse();
+	}
+
+	@Test
+	@DisplayName("it goes through a request instead, which shipping answers either way")
+	void cancellationIsRequestedAndAnswered() {
+		assertThat(OrderStateMachine.canTransition(OrderStatus.SHIPPED,
+				OrderStatus.CANCELLATION_REQUESTED)).isTrue();
+
+		// Both answers, and the refusal matters as much as the success: without SHIPPED here, an
+		// order whose parcel had already left would sit in CANCELLATION_REQUESTED with no exit.
+		assertThat(OrderStateMachine.nextStates(OrderStatus.CANCELLATION_REQUESTED))
+				.containsExactlyInAnyOrder(OrderStatus.CANCELLED, OrderStatus.SHIPPED);
+	}
+
+	@Test
+	@DisplayName("a delivered order is not cancellable, because that is a return")
+	void deliveredIsNotCancellable() {
+		assertThat(OrderStateMachine.canTransition(OrderStatus.DELIVERED,
+				OrderStatus.CANCELLATION_REQUESTED)).isFalse();
+		assertThat(OrderStatus.DELIVERED.isTerminal()).isTrue();
+	}
+
+	@Test
+	@DisplayName("cancelling before payment is still one step, because nothing was taken")
+	void cancellingBeforePaymentIsUnchanged() {
+		assertThat(OrderStateMachine.canTransition(OrderStatus.CREATED, OrderStatus.CANCELLED)).isTrue();
+		assertThat(OrderStateMachine.canTransition(OrderStatus.RESERVED, OrderStatus.CANCELLED)).isTrue();
+	}
+
 	@ParameterizedTest
 	@EnumSource(OrderStatus.class)
 	@DisplayName("every status is either terminal or has somewhere to go")

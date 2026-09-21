@@ -18,6 +18,24 @@ public interface PaymentProvider {
 	 */
 	Outcome charge(String idempotencyKey, BigDecimal amount, String currency, String customerId);
 
+	/**
+	 * Reverse a capture.
+	 *
+	 * <p>No timeout case, and that asymmetry with {@link #charge} is deliberate rather than an
+	 * omission. A charge that times out leaves the platform unable to say whether the customer was
+	 * billed, which is why {@code PaymentTimedOut} exists and why the saga refuses to release stock on
+	 * it. A refund that times out is not the same problem: the money is the customer's either way, so
+	 * a refund whose outcome is unknown can simply be attempted again. Modelling a state for it would
+	 * be modelling a decision nobody has to make.
+	 *
+	 * @param idempotencyKey the refund's own key, not the charge's — a provider given the capture's
+	 *                       key would be entitled to read this as a repeat of the capture
+	 * @param providerReference what the provider called the original capture. A refund names the
+	 *                       charge it reverses; without it the provider is being asked to send money
+	 *                       to a customer rather than to give a specific payment back.
+	 */
+	Outcome refund(String idempotencyKey, String providerReference, BigDecimal amount, String currency);
+
 	/** @param declineCode the provider's own code, null on success */
 	record Outcome(boolean approved, String providerReference, String declineCode, String declineReason) {
 

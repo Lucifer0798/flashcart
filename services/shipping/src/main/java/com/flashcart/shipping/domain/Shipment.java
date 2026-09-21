@@ -52,6 +52,9 @@ public class Shipment {
 	@Column(name = "delivered_at")
 	private Instant deliveredAt;
 
+	@Column(name = "cancelled_at")
+	private Instant cancelledAt;
+
 	@OneToMany(mappedBy = "shipment", cascade = CascadeType.ALL, orphanRemoval = true)
 	private List<ShipmentLine> lines = new ArrayList<>();
 
@@ -95,6 +98,17 @@ public class Shipment {
 		this.deliveredAt = at;
 	}
 
+	/**
+	 * Stop the consignment. Only legal from {@code CREATED}, and the caller checks that.
+	 *
+	 * <p>There is no undo. A dispatched parcel is a physical object in somebody else's van, and the
+	 * one thing this method must never do is let a status column claim otherwise.
+	 */
+	public void cancel(Instant at) {
+		this.status = ShipmentStatus.CANCELLED;
+		this.cancelledAt = at;
+	}
+
 	public UUID getId() {
 		return id;
 	}
@@ -109,6 +123,10 @@ public class Shipment {
 
 	public String getCustomerId() {
 		return customerId;
+	}
+
+	public Instant getCancelledAt() {
+		return cancelledAt;
 	}
 
 	public ShipmentStatus getStatus() {

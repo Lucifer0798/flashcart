@@ -25,6 +25,12 @@ import java.util.Set;
  * RESERVED        -&gt; RESERVATION_EXPIRED -&gt; CANCELLED   (release inventory)
  * PAYMENT_PENDING -&gt; PAYMENT_TIMEOUT     -&gt; PAID | CANCELLED (reconciliation decides)
  * </pre>
+ *
+ * <p>Cancelling after the money has moved:
+ * <pre>
+ * SHIPPED -&gt; CANCELLATION_REQUESTED -&gt; CANCELLED (consignment stopped, capture refunded)
+ *                                   -&gt; SHIPPED   (refused; the parcel had already left)
+ * </pre>
  */
 public final class OrderStateMachine {
 
@@ -36,9 +42,22 @@ public final class OrderStateMachine {
 				EnumSet.of(OrderStatus.PAYMENT_PENDING, OrderStatus.RESERVATION_EXPIRED, OrderStatus.CANCELLED));
 		ALLOWED.put(OrderStatus.PAYMENT_PENDING,
 				EnumSet.of(OrderStatus.PAID, OrderStatus.PAYMENT_FAILED, OrderStatus.PAYMENT_TIMEOUT));
-		ALLOWED.put(OrderStatus.PAID, EnumSet.of(OrderStatus.FULFILLING, OrderStatus.CANCELLED));
-		ALLOWED.put(OrderStatus.FULFILLING, EnumSet.of(OrderStatus.SHIPPED, OrderStatus.CANCELLED));
-		ALLOWED.put(OrderStatus.SHIPPED, EnumSet.of(OrderStatus.DELIVERED));
+		// No edge to CANCELLED from either of these, and that is the point. Both once had one, and
+		// taking it compensated nothing: the capture stayed with us and the committed units did not
+		// come back, so the customer lost the goods and the money. Cancelling a paid order is now a
+		// request, and it is made from SHIPPED -- see below.
+		ALLOWED.put(OrderStatus.PAID, EnumSet.of(OrderStatus.FULFILLING));
+		ALLOWED.put(OrderStatus.FULFILLING, EnumSet.of(OrderStatus.SHIPPED));
+		// SHIPPED means a consignment exists, not that it has left the building. That is exactly the
+		// window a customer wants to cancel in, and the only one where cancelling is answerable: the
+		// shipment row is certainly there, because its creation is what put the order here.
+		ALLOWED.put(OrderStatus.SHIPPED,
+				EnumSet.of(OrderStatus.DELIVERED, OrderStatus.CANCELLATION_REQUESTED));
+		// Shipping decides which of these two it becomes. Back to SHIPPED is not a regression; it is
+		// the honest record of a cancellation that was asked for and refused.
+		ALLOWED.put(OrderStatus.CANCELLATION_REQUESTED,
+				EnumSet.of(OrderStatus.CANCELLED, OrderStatus.SHIPPED));
+		// Terminal. A delivered order is a return, which is a different transaction entirely.
 		ALLOWED.put(OrderStatus.DELIVERED, EnumSet.noneOf(OrderStatus.class));
 		// Compensation states funnel into CANCELLED once inventory is actually back.
 		ALLOWED.put(OrderStatus.PAYMENT_FAILED, EnumSet.of(OrderStatus.CANCELLED));

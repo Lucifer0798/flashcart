@@ -71,3 +71,22 @@ groups:
             Customers reading their own data are unaffected; only operator access to somebody else's
             is refused, and deliberately so: an unrecorded operator read is the one thing this
             platform will not serve.
+
+      - alert: RefundRefused
+        # Its sibling, flashcart_payment_refunds_total{outcome="completed"}, has no alert and should
+        # not: how many customers cancelled today is a business fact. This one is wrong on its own
+        # terms. The provider would not reverse a capture for an order the platform has already told
+        # the customer is cancelled, so every other part of the system believes they have been made
+        # whole and only the payments row disagrees. Nothing retries it yet -- ADR 0030 -- so this
+        # alert is currently the only thing that will ever notice.
+        expr: increase(flashcart_payment_refunds_total{outcome="refused"}[15m]) > 0
+        # No `for`, unlike the alert above. That one waits to distinguish a blip from a broken table;
+        # here a single occurrence is already the whole fault, and waiting would only delay it.
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "payment: a refund was refused and the money is still held"
+          description: >
+            One or more captures could not be reversed. The orders are CANCELLED and the payments are
+            REFUND_FAILED, which is money owed to a customer who has been told they are getting it
+            back. Find them with: select * from payments where status = 'REFUND_FAILED'.

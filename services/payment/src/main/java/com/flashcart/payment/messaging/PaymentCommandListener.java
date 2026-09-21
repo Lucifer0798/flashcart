@@ -3,6 +3,7 @@ package com.flashcart.payment.messaging;
 import java.util.UUID;
 
 import com.flashcart.common.event.Topics;
+import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.RequestPayment;
 import com.flashcart.common.event.outbox.IdempotentHandler;
 import com.flashcart.payment.service.PaymentService;
@@ -45,5 +46,23 @@ public class PaymentCommandListener {
 				command.amount(),
 				command.currency(),
 				command.idempotencyKey()));
+	}
+
+	/**
+	 * Its own consumer group, and that is not cosmetic.
+	 *
+	 * <p>Two listeners in one group on one topic are two members of that group: Kafka hands each of
+	 * them a share of the partitions, and whichever one owns a partition filters out every message of
+	 * the other's type and acknowledges it. The result is not a warning or a lag — it is both
+	 * listeners silently missing most of their own messages. A group each means both read every
+	 * partition and filter independently.
+	 */
+	@KafkaListener(topics = Topics.PAYMENT_COMMANDS, containerFactory = "refundPaymentFactory",
+			groupId = PaymentKafkaConfig.GROUP + "-refund")
+	public void onRefundPayment(RefundPayment command) {
+		// The same two defences as the charge. A refund paid twice is cheaper than a charge taken
+		// twice and no less wrong, and the claim is what stops the provider ever hearing it.
+		handler.handle(command, CONSUMER, () -> payments.refund(
+				command.orderNumber(), command.reason(), command.idempotencyKey()));
 	}
 }

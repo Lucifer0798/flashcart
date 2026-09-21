@@ -17,6 +17,7 @@ public record ShipmentResponse(
 		String trackingNumber,
 		Instant dispatchedAt,
 		Instant deliveredAt,
+		Instant cancelledAt,
 		List<Line> lines,
 		Instant createdAt) {
 
@@ -27,6 +28,7 @@ public record ShipmentResponse(
 		return new ShipmentResponse(shipment.getId(), shipment.getOrderId(), shipment.getOrderNumber(),
 				shipment.getCustomerId(), shipment.getStatus(), shipment.getCarrier(),
 				shipment.getTrackingNumber(), shipment.getDispatchedAt(), shipment.getDeliveredAt(),
+				shipment.getCancelledAt(),
 				shipment.getLines().stream().map(line -> new Line(line.getSku(), line.getQuantity()))
 						.toList(),
 				shipment.getCreatedAt());

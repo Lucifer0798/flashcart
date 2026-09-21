@@ -1,6 +1,7 @@
 package com.flashcart.payment.messaging;
 
 import com.flashcart.common.event.ConsumerFactories;
+import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.RequestPayment;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
@@ -19,5 +20,13 @@ public class PaymentKafkaConfig {
 			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
 			KafkaTemplate<String, Object> template) {
 		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, RequestPayment.class, template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, RefundPayment> refundPaymentFactory(
+			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
+			KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP + "-refund",
+				RefundPayment.class, template);
 	}
 }

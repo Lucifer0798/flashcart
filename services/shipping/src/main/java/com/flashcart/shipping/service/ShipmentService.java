@@ -10,6 +10,8 @@ import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.event.EventMetadata;
 import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
+import com.flashcart.common.event.message.ShipmentCancellationRefused;
+import com.flashcart.common.event.message.ShipmentCancelled;
 import com.flashcart.common.event.message.ShipmentCreated;
 import com.flashcart.shipping.domain.Shipment;
 import com.flashcart.shipping.domain.ShipmentLine;
@@ -89,6 +91,53 @@ public class ShipmentService {
 		return shipment;
 	}
 
+	/**
+	 * Stop the consignment for an order, if it has not gone yet.
+	 *
+	 * <p>This is the only place in the platform that answers a question rather than carrying out an
+	 * instruction, and it is here because it is the only service that knows. The order service cannot
+	 * decide whether a cancellation is possible; the parcel either left or it did not, and that fact
+	 * lives in this table.
+	 *
+	 * <p>Both answers are published as events, which is the part worth insisting on. A refusal that
+	 * only logged would leave the order stuck in {@code CANCELLATION_REQUESTED} forever, waiting for a
+	 * reply that was never going to come — the failure mode being silent is precisely what makes a
+	 * saga hard to debug.
+	 *
+	 * <p>A dispatch racing a cancellation is settled by the row's {@code @Version}: both transactions
+	 * read {@code CREATED}, one commits, and the other fails its optimistic lock. Because the loser is
+	 * this consumer, it is retried, reads {@code DISPATCHED} and refuses — which is the right answer,
+	 * arrived at by the database rather than by whichever message happened to be quicker.
+	 */
+	@Transactional
+	public Shipment cancel(String orderNumber, String reason) {
+		Shipment shipment = shipments.findByOrderNumber(orderNumber)
+				.orElseThrow(() -> ResourceNotFoundException.of("Shipment for order", orderNumber));
+
+		if (shipment.getStatus() == ShipmentStatus.CANCELLED) {
+			// A redelivery. As everywhere else here, the lost message is likelier to have been the
+			// answer than the question, so the answer is sent again.
+			log.info("Shipment {} is already cancelled; re-publishing", shipment.getTrackingNumber());
+			publishCancelled(shipment);
+			return shipment;
+		}
+		if (shipment.getStatus() != ShipmentStatus.CREATED) {
+			log.info("Refusing to cancel shipment {} for order {}: it is {}",
+					shipment.getTrackingNumber(), orderNumber, shipment.getStatus());
+			events.publish(Topics.SHIPPING_EVENTS, new ShipmentCancellationRefused(
+					EventMetadata.of(ShipmentCancellationRefused.TYPE, shipment.getOrderId()),
+					shipment.getId().toString(), orderNumber, shipment.getStatus().name(),
+					"the consignment has already been " + shipment.getStatus().name().toLowerCase()));
+			return shipment;
+		}
+
+		shipment.cancel(clock.instant());
+		log.info("Cancelled shipment {} for order {} ({})", shipment.getTrackingNumber(), orderNumber,
+				reason);
+		publishCancelled(shipment);
+		return shipment;
+	}
+
 	@Transactional
 	public Shipment dispatch(String trackingNumber) {
 		Shipment shipment = requireByTracking(trackingNumber);
@@ -137,6 +186,12 @@ public class ShipmentService {
 	private Shipment requireByTracking(String trackingNumber) {
 		return shipments.findByTrackingNumber(trackingNumber)
 				.orElseThrow(() -> ResourceNotFoundException.of("Shipment", trackingNumber));
+	}
+
+	private void publishCancelled(Shipment shipment) {
+		events.publish(Topics.SHIPPING_EVENTS, new ShipmentCancelled(
+				EventMetadata.of(ShipmentCancelled.TYPE, shipment.getOrderId()),
+				shipment.getId().toString(), shipment.getOrderNumber(), shipment.getTrackingNumber()));
 	}
 
 	private void publishCreated(Shipment shipment) {

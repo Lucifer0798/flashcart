@@ -136,27 +136,42 @@ public class OrderService {
 	/**
 	 * The customer or an operator cancels.
 	 *
-	 * <p>Now asks inventory to release rather than telling it to. The order moves to
-	 * {@code CANCELLED} straight away because that is a decision this service is entitled to make on
-	 * its own; the stock comes back when inventory gets round to the command.
+	 * <p>Two quite different things wear this one name, and which one happens depends entirely on
+	 * whether money has moved.
+	 *
+	 * <p><strong>Before payment</strong> the order moves to {@code CANCELLED} immediately. Nothing was
+	 * taken, so there is nothing to give back, and inventory is asked to release rather than told —
+	 * the stock comes back when it gets round to the command.
+	 *
+	 * <p><strong>After payment</strong> this service is no longer entitled to decide. The order moves
+	 * to {@code CANCELLATION_REQUESTED} and shipping is asked whether the consignment can still be
+	 * stopped; only shipping knows whether the parcel has left. ADR 0030 has the argument, and the
+	 * short version is that the previous behaviour — {@code CANCELLED} on the spot — cancelled the
+	 * order while keeping both the money and the goods.
 	 */
 	@Transactional
 	public Order cancel(String orderNumber, String reason) {
 		Order order = requireByNumber(orderNumber);
 
-		if (order.getStatus() == OrderStatus.CANCELLED) {
+		if (order.getStatus() == OrderStatus.CANCELLED
+				|| order.getStatus() == OrderStatus.CANCELLATION_REQUESTED) {
+			// Already asked. Sending a second CancelShipment would be harmless but pointless, and
+			// returning the order as it stands is what a caller retrying a timed-out request wants.
 			return order;
 		}
+
+		if (OrderStateMachine.canTransition(order.getStatus(), OrderStatus.CANCELLATION_REQUESTED)) {
+			history.save(order.transitionTo(OrderStatus.CANCELLATION_REQUESTED,
+					reason == null ? "cancellation requested" : reason, CorrelationId.current()));
+			saga.requestShipmentCancellation(order, reason == null ? "order cancelled" : reason);
+			return order;
+		}
+
 		// Checked before anything is published. In particular there is deliberately no
 		// PAYMENT_PENDING -> CANCELLED edge: a charge is in flight and has to be resolved rather
 		// than walked away from.
 		if (!OrderStateMachine.canTransition(order.getStatus(), OrderStatus.CANCELLED)) {
-			throw new ConflictException("ORDER_NOT_CANCELLABLE",
-					order.getStatus() == OrderStatus.PAYMENT_PENDING
-							? ("Order %s has a payment in flight; resolve the payment before cancelling"
-									.formatted(orderNumber))
-							: ("Order %s is %s and can no longer be cancelled"
-									.formatted(orderNumber, order.getStatus())));
+			throw new ConflictException("ORDER_NOT_CANCELLABLE", explainRefusal(order));
 		}
 
 		if (order.holdsInventory()) {
@@ -165,6 +180,28 @@ public class OrderService {
 		history.save(order.transitionTo(OrderStatus.CANCELLED, reason == null ? "cancelled" : reason,
 				CorrelationId.current()));
 		return order;
+	}
+
+	/**
+	 * Why this order cannot be cancelled, in terms the caller can act on.
+	 *
+	 * <p>{@code PAID} and {@code FULFILLING} get their own sentence because they are the states where
+	 * refusing looks arbitrary: the customer has paid, nothing has shipped, and "no" is the wrong
+	 * answer for more than the second or two it lasts. The order is on its way to {@code SHIPPED},
+	 * where cancelling works — so the message says to try again rather than implying it is over.
+	 */
+	private String explainRefusal(Order order) {
+		return switch (order.getStatus()) {
+			case PAYMENT_PENDING -> "Order %s has a payment in flight; resolve the payment before cancelling"
+					.formatted(order.getOrderNumber());
+			case PAID, FULFILLING -> ("Order %s has been paid and is being made ready; it can be "
+					+ "cancelled once its shipment exists, which is a moment away")
+					.formatted(order.getOrderNumber());
+			case DELIVERED -> "Order %s has been delivered and can no longer be cancelled"
+					.formatted(order.getOrderNumber());
+			default -> "Order %s is %s and can no longer be cancelled"
+					.formatted(order.getOrderNumber(), order.getStatus());
+		};
 	}
 
 	@Transactional(readOnly = true)
