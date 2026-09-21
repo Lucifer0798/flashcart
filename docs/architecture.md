@@ -92,6 +92,10 @@ stateDiagram-v2
     SHIPPED --> DELIVERED
     DELIVERED --> [*]
 
+    SHIPPED --> CANCELLATION_REQUESTED: customer cancels
+    CANCELLATION_REQUESTED --> CANCELLED: consignment stopped, capture refunded
+    CANCELLATION_REQUESTED --> SHIPPED: refused, the parcel had left
+
     CREATED --> CANCELLED: sold out
     RESERVED --> RESERVATION_EXPIRED: hold lapsed
     PAYMENT_PENDING --> PAYMENT_FAILED: provider declined
@@ -106,9 +110,14 @@ stateDiagram-v2
     CANCELLED --> [*]
 
     note right of PAYMENT_TIMEOUT
-        The only state with two legal exits.
-        A decline is an answer; silence is not,
-        and the charge may still land.
+        Two legal exits. A decline is an answer;
+        silence is not, and the charge may still land.
+    end note
+
+    note right of CANCELLATION_REQUESTED
+        Two legal exits, and this service
+        chooses neither. Only shipping knows
+        whether the parcel has left.
     end note
 ```
 
@@ -127,6 +136,15 @@ legal exits.
 **Compensation is a state, not a side effect.** `PAYMENT_FAILED` and `RESERVATION_EXPIRED` are real,
 persisted states that funnel into `CANCELLED` only once the stock is actually back. An order is
 never quietly cancelled with its reservation still held.
+
+**Cancelling after payment is a request, not a decision.** `PAID → CANCELLED` and
+`FULFILLING → CANCELLED` used to be edges, and taking either compensated nothing — the capture stayed
+with the platform and the committed units did not come back, so the customer lost both. Both are
+gone. A paid order is cancelled from `SHIPPED`, which means a consignment exists and not that it has
+moved, and `CANCELLATION_REQUESTED` is where the order waits while shipping answers the one question
+the order service cannot: has the parcel left?
+[ADR 0030](adr/0030-cancelling-a-paid-order.md) has the argument, including what is deliberately not
+given back.
 
 `OrderStateMachine.releasesInventory(state)` is the single predicate the compensation logic asks.
 
@@ -601,7 +619,9 @@ place order ─▶ CREATED
    ├─◀ PaymentCompleted           ─▶ PAID ─▶ CommitInventory + CreateShipment ─▶ FULFILLING
    ├─◀ PaymentFailed              ─▶ PAYMENT_FAILED ─▶ ReleaseInventory ─▶ CANCELLED
    ├─◀ PaymentTimedOut            ─▶ PAYMENT_TIMEOUT              (releases nothing, ever)
-   └─◀ ShipmentCreated            ─▶ SHIPPED
+   ├─◀ ShipmentCreated            ─▶ SHIPPED
+   ├─◀ ShipmentCancelled          ─▶ RefundPayment ─▶ CANCELLED
+   └─◀ ShipmentCancellationRefused ─▶ back to SHIPPED, nothing refunded
 ```
 
 Two things in that diagram carry most of the weight.

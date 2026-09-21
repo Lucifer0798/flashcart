@@ -254,6 +254,50 @@
           "legendFormat": "{{service}}"
         }
       ]
+    },
+    {
+      "type": "row",
+      "title": "Refunds — money going back",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Refunds completed",
+      "description": "Captures reversed because a customer cancelled a paid order before it was dispatched (ADR 0030). No threshold: how many people change their minds is a business fact, and an alert on it would be a guess dressed as a fault. A rise here is a question for whoever runs the sale, not for whoever is on call.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "targets": [
+        {
+          "expr": "sum (rate(flashcart_payment_refunds_total{outcome=\"completed\"}[5m]))",
+          "legendFormat": "refunded"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Refunds the provider refused — money still held",
+      "description": "Should sit at zero. Anything else is a capture the provider would not reverse for an order that is already CANCELLED: the customer has been told they are getting their money back and they are not. This is the panel that alerts. Nothing retries these yet (ADR 0030), so find them with: select * from payments where status = 'REFUND_FAILED'.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "targets": [
+        {
+          "expr": "sum (rate(flashcart_payment_refunds_total{outcome=\"refused\"}[5m]))",
+          "legendFormat": "refused"
+        }
+      ]
     }
   ]
 }

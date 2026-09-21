@@ -1,6 +1,7 @@
 package com.flashcart.shipping.messaging;
 
 import com.flashcart.common.event.ConsumerFactories;
+import com.flashcart.common.event.message.CancelShipment;
 import com.flashcart.common.event.message.CreateShipment;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
@@ -19,5 +20,13 @@ public class ShippingKafkaConfig {
 			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
 			KafkaTemplate<String, Object> template) {
 		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, CreateShipment.class, template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, CancelShipment> cancelShipmentFactory(
+			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
+			KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP + "-cancel",
+				CancelShipment.class, template);
 	}
 }

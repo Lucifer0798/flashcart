@@ -295,7 +295,7 @@ duplicates neither.
 | `GET`  | `/api/v1/orders/{orderNumber}` | |
 | `GET`  | `/api/v1/orders` | Yours, newest first — whose is decided by the token |
 | `GET`  | `/api/v1/orders/{orderNumber}/history` | Every transition, with reasons |
-| `POST` | `/api/v1/orders/{orderNumber}/cancel` | Cancels and asks inventory to release |
+| `POST` | `/api/v1/orders/{orderNumber}/cancel` | Before payment, cancels and releases the hold. After payment, asks shipping whether the parcel has left |
 
 There is deliberately **no endpoint to request payment or to record one failing.** Both were manual
 in Phase 4 and are now the saga's, driven by events. Leaving them exposed would give the order
@@ -336,6 +336,28 @@ That last row is the interesting one. A refusal and a timeout are different fail
 timeout could strand real stock, and confirming on one could promise stock nobody holds. See
 [ADR 0010](docs/adr/0010-refusal-and-silence-are-different-failures.md).
 
+### Cancelling after you have paid
+
+Before payment, cancelling is immediate: nothing was taken, so nothing has to be given back.
+
+**After payment it is a request, because only the warehouse can answer it.** The order moves to
+`CANCELLATION_REQUESTED` and shipping is asked whether the consignment has been dispatched.
+
+| Shipping's answer | The order | The money |
+|---|---|---|
+| still in the warehouse | `CANCELLED` | refunded, and the payment shows `REFUNDED` |
+| already with the carrier | back to `SHIPPED`, with the refusal and its reason in the history | the charge stands |
+
+Cancelling is possible from `SHIPPED` — which means *a consignment exists*, not that anything has
+moved — and that is the window a shopper actually wants. In the second or two an order spends in
+`PAID` or `FULFILLING`, cancelling returns 409 and says to try again shortly.
+
+This used to be one step. `PAID → CANCELLED` was a legal edge and taking it compensated nothing: the
+capture stayed with the platform and the committed units did not come back, so the customer lost the
+goods *and* the money, while `OrderStatus.CANCELLED` claimed in its own javadoc that both had been
+returned. No test covered it. [ADR 0030](docs/adr/0030-cancelling-a-paid-order.md) has the argument,
+including the one thing still deliberately not given back — the stock.
+
 ### The state machine
 
 ```
@@ -344,6 +366,9 @@ CREATED ──▶ RESERVED ──▶ PAYMENT_PENDING ──▶ PAID ──▶ FU
 PAYMENT_PENDING ──▶ PAYMENT_FAILED      ──▶ CANCELLED          (release inventory)
 RESERVED        ──▶ RESERVATION_EXPIRED ──▶ CANCELLED          (release inventory)
 PAYMENT_PENDING ──▶ PAYMENT_TIMEOUT     ──▶ PAID | CANCELLED   (reconciliation decides)
+
+SHIPPED ──▶ CANCELLATION_REQUESTED ──▶ CANCELLED   (consignment stopped, capture refunded)
+                                   ──▶ SHIPPED     (refused; the parcel had already left)
 ```
 
 Phase 4 drives `CREATED` through `PAYMENT_PENDING` and every compensation below it; `PAID` onward
@@ -355,6 +380,8 @@ declining something now signals a real anomaly instead of routine redelivery.
 
 Compensation is a persisted state, not a side effect: a declined payment walks
 `PAYMENT_PENDING → PAYMENT_FAILED → CANCELLED`, and the history says which it was.
+`CANCELLATION_REQUESTED` is the same idea applied to a decision this service does not get to make —
+it is where the order waits while shipping answers.
 
 ---
 
@@ -372,6 +399,12 @@ Both expose reads.
 | `GET` | `/api/v1/shipments` | Yours, newest first |
 | `GET` | `/api/v1/shipments/{trackingNumber}`, `/api/v1/shipments/order/{orderNumber}` | Yours; somebody else's is `404` |
 | `POST` | `/api/v1/shipments/{trackingNumber}/dispatch`, `.../deliver` | **Operator** — a warehouse action |
+
+Stopping a consignment has no endpoint either, for the same reason: it arrives as `CancelShipment`
+when a customer cancels a paid order, and shipping answers on the bus with either
+`ShipmentCancelled` or `ShipmentCancellationRefused`. A refund is likewise a `RefundPayment` command,
+never a request — so the two operations that move money out of the platform and goods out of the
+warehouse each still have exactly one way in.
 
 An operator may add `?customerId=` to either listing to read somebody else's. Anyone else doing that
 is refused with `403` rather than quietly handed their own rows, because an answer that looks like

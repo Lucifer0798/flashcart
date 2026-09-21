@@ -8,11 +8,13 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
+import com.flashcart.common.event.message.CancelShipment;
 import com.flashcart.common.event.message.CommitInventory;
 import com.flashcart.common.event.message.CreateShipment;
 import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderLineMessage;
+import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.RequestPayment;
 import com.flashcart.common.event.message.ReserveInventory;
@@ -56,6 +58,18 @@ import org.springframework.transaction.annotation.Transactional;
  * ReservationExpired         ─▶ RESERVATION_EXPIRED             ─▶ CANCELLED
  * PaymentTimedOut            ─▶ PAYMENT_TIMEOUT                 ─▶ reconciliation, never auto-release
  * </pre>
+ *
+ * <h2>And the one the customer starts</h2>
+ *
+ * <pre>
+ * customer cancels a SHIPPED order ─▶ CANCELLATION_REQUESTED ─▶ CancelShipment
+ *                     (ShipmentCancelled)          ─▶ RefundPayment ─▶ CANCELLED
+ *                     (ShipmentCancellationRefused) ─▶ back to SHIPPED, nothing refunded
+ * </pre>
+ *
+ * <p>Every other compensation here is started by a service reporting a failure. This one is started
+ * by a person, and it is the only leg whose outcome is not the saga's to choose: shipping answers,
+ * and the order does what it is told.
  *
  * <h2>Idempotency without a dedup table</h2>
  *
@@ -112,6 +126,34 @@ public class OrderSaga {
 				// The order id again: a provider charged twice for one order is the most expensive
 				// possible consequence of at-least-once delivery, so this key goes all the way down.
 				order.getId().toString()));
+	}
+
+	/**
+	 * Ask shipping whether the consignment can still be stopped.
+	 *
+	 * <p>Sent <em>after</em> the order is already in {@code CANCELLATION_REQUESTED}, not before. The
+	 * publish is an outbox write in the same transaction as the transition, so the two cannot come
+	 * apart; sending first would open a window where shipping cancels a parcel for an order that never
+	 * recorded asking.
+	 */
+	public void requestShipmentCancellation(Order order, String reason) {
+		events.publish(Topics.SHIPPING_COMMANDS, new CancelShipment(
+				EventMetadata.of(CancelShipment.TYPE, order.getId()),
+				order.getOrderNumber(), reason));
+	}
+
+	/**
+	 * Ask payment for the money back.
+	 *
+	 * <p>The key is {@code refund:<order id>} rather than the order id, which is the charge's. One key
+	 * for both would invite a provider to treat the refund as a repeat of the capture — and, closer to
+	 * home, would collide in payment's own unique index on {@code idempotency_key}.
+	 */
+	public void requestRefund(Order order, String reason) {
+		events.publish(Topics.PAYMENT_COMMANDS, new RefundPayment(
+				EventMetadata.of(RefundPayment.TYPE, order.getId()),
+				order.getOrderNumber(), order.getTotal(), order.getCurrency(), reason,
+				"refund:" + order.getId()));
 	}
 
 	public void releaseInventory(Order order, String reason) {
@@ -194,6 +236,31 @@ public class OrderSaga {
 		// reconciliation, which is the only actor that can find out what actually happened.
 		advance(orderId, OrderStatus.PAYMENT_TIMEOUT,
 				"payment provider did not answer; awaiting reconciliation", order -> { });
+	}
+
+	@Transactional
+	public void onShipmentCancelled(UUID orderId) {
+		advance(orderId, OrderStatus.CANCELLED, "consignment stopped before dispatch", order -> {
+			// Only now, with the goods confirmed still in the warehouse, is the money given back.
+			// Refunding on the request rather than on this answer would pay out for parcels that
+			// turned out to have already left.
+			requestRefund(order, "order cancelled after payment");
+			publishCancelled(order, "CANCELLED_AFTER_PAYMENT");
+		});
+
+		// Note what does not happen here: the committed units are not returned to stock. Putting
+		// them back raises questions this saga is not the place to answer -- whether they rejoin the
+		// flash sale's allocation or general stock, and whether the customer's per-sale cap is
+		// refunded with them. ADR 0030 records that as open rather than guessing at it.
+	}
+
+	@Transactional
+	public void onShipmentCancellationRefused(UUID orderId, String shipmentStatus, String reason) {
+		// Back where it was. The customer keeps the goods and the charge stands, which is the correct
+		// outcome for a parcel already in transit -- and the history now carries the attempt and the
+		// reason it failed, so "I cancelled this and it arrived anyway" has an answer.
+		advance(orderId, OrderStatus.SHIPPED,
+				"cancellation refused: %s (%s)".formatted(reason, shipmentStatus), order -> { });
 	}
 
 	@Transactional

@@ -9,10 +9,12 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.flashcart.common.error.ResourceNotFoundException;
+import com.flashcart.common.event.message.CancelShipment;
 import com.flashcart.common.event.message.CommitInventory;
 import com.flashcart.common.event.message.CreateShipment;
 import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
+import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.RequestPayment;
 import com.flashcart.common.event.message.ReserveInventory;
@@ -187,6 +189,28 @@ class OrderIT {
 	@SuppressWarnings("unchecked")
 	private List<Map<String, Object>> historyOf(String orderNumber) {
 		return rest.getForObject("/api/v1/orders/" + orderNumber + "/history", List.class);
+	}
+
+	/**
+	 * An order that is paid for and has a consignment booked — the state a customer cancels from.
+	 *
+	 * <p>Reached by driving the saga rather than by waiting, because every one of these steps is a
+	 * reply from another service and none of them is this suite's subject.
+	 */
+	private OrderResponse shippedOrder(String customerId) {
+		OrderResponse order = place(customerId, "AUD-HP-001", 1);
+		inventoryReserved(order);
+		saga.onPaymentCompleted(order.id(), "pay-123");
+		saga.onShipmentCreated(order.id(), "FCL0123456789");
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.SHIPPED);
+		return order;
+	}
+
+	private void requestCancellation(OrderResponse order) {
+		OrderResponse requested = rest.postForObject(
+				"/api/v1/orders/" + order.orderNumber() + "/cancel",
+				Map.of("reason", "changed my mind"), OrderResponse.class);
+		assertThat(requested.status()).isEqualTo(OrderStatus.CANCELLATION_REQUESTED);
 	}
 
 	/** Simulates inventory replying that it holds the stock. */
@@ -442,6 +466,80 @@ class OrderIT {
 
 		assertThat(cancelled.status()).isEqualTo(OrderStatus.CANCELLED);
 		assertThat(events.published(ReleaseInventory.class)).isFalse();
+	}
+
+	// --- cancelling after the money has moved -------------------------------------------------------
+
+	@Test
+	@DisplayName("cancelling a shipped order asks shipping first, and does not cancel on its own")
+	void cancellingAPaidOrderIsARequest() {
+		OrderResponse order = shippedOrder("cust-1");
+		events.clear();
+
+		OrderResponse requested = rest.postForObject(
+				"/api/v1/orders/" + order.orderNumber() + "/cancel",
+				Map.of("reason", "changed my mind"), OrderResponse.class);
+
+		// Not CANCELLED. Until this change it was, and nothing was compensated: the capture stayed
+		// with the platform and the committed units did not come back.
+		assertThat(requested.status()).isEqualTo(OrderStatus.CANCELLATION_REQUESTED);
+		assertThat(events.require(CancelShipment.class).orderNumber()).isEqualTo(order.orderNumber());
+		// And crucially not yet. Refunding on the request rather than on shipping's answer would pay
+		// out for parcels that turn out to have already left.
+		assertThat(events.published(RefundPayment.class)).isFalse();
+	}
+
+	@Test
+	@DisplayName("shipping confirming the stop is what cancels the order and sends the money back")
+	void cancelledShipmentRefundsAndCancels() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		events.clear();
+
+		saga.onShipmentCancelled(order.id());
+
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.CANCELLED);
+
+		RefundPayment refund = events.require(RefundPayment.class);
+		assertThat(refund.orderNumber()).isEqualTo(order.orderNumber());
+		// Not the order id, which is the charge's key. One key for both would collide in payment's
+		// unique index and invite a provider to read the refund as a repeat of the capture.
+		assertThat(refund.idempotencyKey()).isEqualTo("refund:" + order.id());
+		assertThat(events.published(OrderCancelled.class)).isTrue();
+	}
+
+	@Test
+	@DisplayName("shipping refusing puts the order back and refunds nothing")
+	void refusedCancellationReturnsTheOrderToShipped() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		events.clear();
+
+		saga.onShipmentCancellationRefused(order.id(), "DISPATCHED", "the consignment has already been dispatched");
+
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.SHIPPED);
+		// The customer has the goods, so the charge stands. A refund here would be a free parcel.
+		assertThat(events.published(RefundPayment.class)).isFalse();
+		assertThat(events.published(OrderCancelled.class)).isFalse();
+
+		// The attempt and its reason survive in the history, which is what answers "I cancelled this
+		// and it arrived anyway".
+		assertThat(historyOf(order.orderNumber())).extracting(entry -> entry.get("toStatus"))
+				.containsSubsequence("SHIPPED", "CANCELLATION_REQUESTED", "SHIPPED");
+	}
+
+	@Test
+	@DisplayName("asking twice does not ask shipping twice")
+	void repeatedCancellationRequestIsHarmless() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		events.clear();
+
+		OrderResponse again = rest.postForObject("/api/v1/orders/" + order.orderNumber() + "/cancel",
+				null, OrderResponse.class);
+
+		assertThat(again.status()).isEqualTo(OrderStatus.CANCELLATION_REQUESTED);
+		assertThat(events.published(CancelShipment.class)).isFalse();
 	}
 
 	@Test

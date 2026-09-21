@@ -42,7 +42,23 @@ public enum OrderStatus {
 	 */
 	PAYMENT_TIMEOUT(false),
 
-	/** Terminal. Stock is back on the shelf and any capture has been refunded. */
+	/**
+	 * The customer has asked for a paid order to be stopped, and shipping has not answered yet.
+	 *
+	 * <p>Not terminal, and deliberately not {@code CANCELLED}: whether this order can be cancelled at
+	 * all is shipping's to answer, because only shipping knows whether the parcel has left. It resolves
+	 * to {@code CANCELLED} if the consignment was still in the warehouse, or back to {@code SHIPPED} if
+	 * it was not.
+	 */
+	CANCELLATION_REQUESTED(false),
+
+	/**
+	 * Terminal. Nothing is owed in either direction.
+	 *
+	 * <p>What that means depends on how the order got here. Before payment, the hold has been given
+	 * back to inventory. After payment, the consignment was cancelled before dispatch and the capture
+	 * has been refunded. The units themselves are <em>not</em> returned to stock; ADR 0030 says why.
+	 */
 	CANCELLED(true);
 
 	private final boolean terminal;

@@ -7,6 +7,8 @@ import com.flashcart.common.event.message.PaymentCompleted;
 import com.flashcart.common.event.message.PaymentFailed;
 import com.flashcart.common.event.message.PaymentTimedOut;
 import com.flashcart.common.event.message.ReservationExpired;
+import com.flashcart.common.event.message.ShipmentCancellationRefused;
+import com.flashcart.common.event.message.ShipmentCancelled;
 import com.flashcart.common.event.message.ShipmentCreated;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
@@ -69,5 +71,21 @@ public class OrderKafkaConfig {
 			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
 			KafkaTemplate<String, Object> template) {
 		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, ShipmentCreated.class, template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, ShipmentCancelled> shipmentCancelledFactory(
+			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
+			KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, ShipmentCancelled.class,
+				template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, ShipmentCancellationRefused>
+			shipmentCancellationRefusedFactory(KafkaProperties properties,
+			KafkaConnectionDetails connectionDetails, KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP,
+				ShipmentCancellationRefused.class, template);
 	}
 }

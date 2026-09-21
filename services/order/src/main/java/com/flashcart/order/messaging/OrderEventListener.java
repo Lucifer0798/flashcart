@@ -9,6 +9,8 @@ import com.flashcart.common.event.message.PaymentCompleted;
 import com.flashcart.common.event.message.PaymentFailed;
 import com.flashcart.common.event.message.PaymentTimedOut;
 import com.flashcart.common.event.message.ReservationExpired;
+import com.flashcart.common.event.message.ShipmentCancellationRefused;
+import com.flashcart.common.event.message.ShipmentCancelled;
 import com.flashcart.common.event.message.ShipmentCreated;
 import com.flashcart.common.event.outbox.IdempotentHandler;
 import com.flashcart.order.service.OrderSaga;
@@ -94,5 +96,26 @@ public class OrderEventListener {
 	public void onShipmentCreated(ShipmentCreated event) {
 		handler.handle(event, CONSUMER, () ->
 				saga.onShipmentCreated(UUID.fromString(event.aggregateId()), event.trackingNumber()));
+	}
+
+	@KafkaListener(topics = Topics.SHIPPING_EVENTS, containerFactory = "shipmentCancelledFactory",
+			groupId = OrderKafkaConfig.GROUP + "-shipment-cancelled")
+	public void onShipmentCancelled(ShipmentCancelled event) {
+		handler.handle(event, CONSUMER, () ->
+				saga.onShipmentCancelled(UUID.fromString(event.aggregateId())));
+	}
+
+	/**
+	 * The refusal is consumed as carefully as the success, because it is the only thing that gets an
+	 * order out of {@code CANCELLATION_REQUESTED} when the answer is no. Dropping it would strand the
+	 * order in a non-terminal state with nothing left to wake it.
+	 */
+	@KafkaListener(topics = Topics.SHIPPING_EVENTS,
+			containerFactory = "shipmentCancellationRefusedFactory",
+			groupId = OrderKafkaConfig.GROUP + "-shipment-cancel-refused")
+	public void onShipmentCancellationRefused(ShipmentCancellationRefused event) {
+		handler.handle(event, CONSUMER, () ->
+				saga.onShipmentCancellationRefused(UUID.fromString(event.aggregateId()),
+						event.shipmentStatus(), event.reason()));
 	}
 }

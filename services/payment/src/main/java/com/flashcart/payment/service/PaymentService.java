@@ -11,10 +11,13 @@ import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
 import com.flashcart.common.event.message.PaymentCompleted;
 import com.flashcart.common.event.message.PaymentFailed;
+import com.flashcart.common.event.message.PaymentRefunded;
 import com.flashcart.common.event.message.PaymentTimedOut;
 import com.flashcart.payment.domain.Payment;
 import com.flashcart.payment.domain.PaymentStatus;
 import com.flashcart.payment.repository.PaymentRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -46,14 +49,27 @@ public class PaymentService {
 	private final EventPublisher events;
 	private final Clock clock;
 	private final TransactionTemplate transactions;
+	private final Counter refundsCompleted;
+	private final Counter refundsRefused;
 
 	public PaymentService(PaymentRepository payments, PaymentProvider provider, EventPublisher events,
-			Clock clock, PlatformTransactionManager transactionManager) {
+			Clock clock, PlatformTransactionManager transactionManager, MeterRegistry meters) {
 		this.payments = payments;
 		this.provider = provider;
 		this.events = events;
 		this.clock = clock;
 		this.transactions = new TransactionTemplate(transactionManager);
+		this.refundsCompleted = Counter.builder("flashcart.payment.refunds")
+				.description("Captures reversed after an order was cancelled")
+				.tag("outcome", "completed")
+				.register(meters);
+		// Alertable, unlike its sibling. A refused refund is not a business fact about how many
+		// customers changed their minds; it is money the platform is holding for an order it has
+		// already told the customer is cancelled, and nothing else in the system disagrees.
+		this.refundsRefused = Counter.builder("flashcart.payment.refunds")
+				.description("Captures reversed after an order was cancelled")
+				.tag("outcome", "refused")
+				.register(meters);
 	}
 
 	/**
@@ -124,6 +140,63 @@ public class PaymentService {
 		}
 	}
 
+	/**
+	 * Give the money back for an order that has been cancelled.
+	 *
+	 * <p>Same shape as {@link #charge}, and for the same reason: the dangerous case is doing it twice.
+	 * The guard is the payment's own status rather than a second idempotency row — a refund is only
+	 * legal from a state that says money is currently held, and performing one leaves the payment in a
+	 * state that no longer says that. A redelivered command therefore finds {@code REFUNDED} and
+	 * re-publishes rather than paying out again.
+	 *
+	 * <p>Note what is <em>not</em> refunded. A payment that never captured has nothing to reverse, and
+	 * a payment that timed out has an outcome nobody knows; reversing that one would be sending money
+	 * for a charge that may never have happened. Both are logged and left to the reconciler.
+	 */
+	public Payment refund(String orderNumber, String reason, String idempotencyKey) {
+		Payment payment = payments.findByOrderNumber(orderNumber)
+				.orElseThrow(() -> ResourceNotFoundException.of("Payment for order", orderNumber));
+
+		if (payment.getStatus() == PaymentStatus.REFUNDED) {
+			// As with a duplicated charge, the missing event is the likelier explanation than a
+			// duplicated command, and staying silent is what would strand somebody.
+			log.info("Payment {} is already refunded; re-publishing", payment.getId());
+			publishRefunded(payment);
+			return payment;
+		}
+		if (!payment.getStatus().isRefundable()) {
+			log.warn("Refusing to refund payment {} for order {}: it is {}, so no money is held",
+					payment.getId(), orderNumber, payment.getStatus());
+			return payment;
+		}
+
+		PaymentProvider.Outcome outcome = provider.refund(idempotencyKey,
+				payment.getProviderReference(), payment.getAmount(), payment.getCurrency());
+
+		if (!outcome.approved()) {
+			log.error("Refund refused for order {} ({}): {}. The platform is still holding {} {}",
+					orderNumber, outcome.declineCode(), outcome.declineReason(), payment.getAmount(),
+					payment.getCurrency());
+			// No event. Nothing downstream should act as though the customer has their money back,
+			// and the order is already cancelled, so there is no state left for an event to move.
+			Payment refused = settle(payment.getId(),
+					held -> held.refundFailed(outcome.declineCode(), outcome.declineReason()));
+			// Counted after the write, not before it: a count of refusals that the database never
+			// recorded would be a number nobody can reconcile against the rows it claims to describe.
+			refundsRefused.increment();
+			return refused;
+		}
+
+		Payment refunded = settle(payment.getId(), held -> {
+			held.refund(outcome.providerReference(), clock.instant());
+			publishRefunded(held);
+		});
+		refundsCompleted.increment();
+		log.info("Refunded {} {} for order {} ({})", payment.getAmount(), payment.getCurrency(),
+				orderNumber, reason);
+		return refunded;
+	}
+
 	@Transactional(readOnly = true)
 	public Payment get(UUID paymentId) {
 		return payments.findById(paymentId)
@@ -161,10 +234,23 @@ public class PaymentService {
 			case TIMED_OUT -> events.publish(Topics.PAYMENT_EVENTS, new PaymentTimedOut(
 					EventMetadata.of(PaymentTimedOut.TYPE, payment.getOrderId()),
 					payment.getId().toString()));
+			case REFUNDED -> publishRefunded(payment);
 			// Still in flight from the first command. Saying anything now would be a guess.
 			case PENDING -> log.debug("Payment {} is still pending; nothing to republish",
 					payment.getId());
+			// A capture that stands because the provider would not reverse it. The charge succeeded,
+			// so re-publishing PaymentCompleted would be true and useless; the order it belongs to is
+			// already cancelled and would ignore it.
+			case REFUND_FAILED -> log.warn("Payment {} is REFUND_FAILED; money is still held",
+					payment.getId());
 		}
+	}
+
+	private void publishRefunded(Payment payment) {
+		events.publish(Topics.PAYMENT_EVENTS, new PaymentRefunded(
+				EventMetadata.of(PaymentRefunded.TYPE, payment.getOrderId()),
+				payment.getId().toString(), payment.getAmount(), payment.getCurrency(),
+				payment.getRefundReference()));
 	}
 
 	/** Exposed for the reconciler. */

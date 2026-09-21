@@ -31,16 +31,16 @@ public final class Topics {
 	/** What inventory did: reserved, refused, released, committed, expired. Keyed by order id. */
 	public static final String INVENTORY_EVENTS = "flashcart.inventory.events";
 
-	/** Instructions to payment: take this money. Keyed by order id. */
+	/** Instructions to payment: take this money, or give it back. Keyed by order id. */
 	public static final String PAYMENT_COMMANDS = "flashcart.payment.commands";
 
-	/** What payment did: completed, failed, timed out. Keyed by order id. */
+	/** What payment did: completed, failed, timed out, refunded. Keyed by order id. */
 	public static final String PAYMENT_EVENTS = "flashcart.payment.events";
 
-	/** Instructions to shipping: create this shipment. Keyed by order id. */
+	/** Instructions to shipping: create this shipment, or stop it. Keyed by order id. */
 	public static final String SHIPPING_COMMANDS = "flashcart.shipping.commands";
 
-	/** What shipping did: shipment created, dispatched, delivered. Keyed by order id. */
+	/** What shipping did: created, dispatched, delivered, cancelled or refused to cancel. */
 	public static final String SHIPPING_EVENTS = "flashcart.shipping.events";
 
 	/** Catalog changes, so read models and caches can invalidate. Keyed by product id. */

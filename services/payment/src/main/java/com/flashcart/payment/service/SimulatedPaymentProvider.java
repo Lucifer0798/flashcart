@@ -22,8 +22,13 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>an amount ending in {@code .13} is declined</li>
  *   <li>an amount ending in {@code .99} times out</li>
+ *   <li>an amount ending in {@code .77} captures normally but cannot be refunded</li>
  *   <li>anything else is approved</li>
  * </ul>
+ *
+ * <p>The refund trigger needs a value of its own rather than reusing {@code .13}: an amount that is
+ * declined never captures, so it can never reach a refund, and a test written against {@code .13}
+ * would pass without the refund path ever running.
  *
  * <p>Picking the amount rather than a magic customer id or a header means the compose stack can
  * demonstrate a declined checkout with nothing but a product price, and the trigger survives every
@@ -62,6 +67,22 @@ public class SimulatedPaymentProvider implements PaymentProvider {
 		// the point is that it is the provider's identifier, not ours.
 		String reference = "sim_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
 		log.debug("Simulated approval for {} -> {}", idempotencyKey, reference);
+		return Outcome.approved(reference);
+	}
+
+	@Override
+	public Outcome refund(String idempotencyKey, String providerReference, BigDecimal amount,
+			String currency) {
+
+		int pence = amount.movePointRight(2).remainder(HUNDRED).abs().intValue();
+
+		if (pence == properties.refundDeclineOnCents()) {
+			log.info("Simulated refund decline for {} ({} {})", idempotencyKey, amount, currency);
+			return Outcome.declined("REFUND_REFUSED", "The issuer would not reverse the capture");
+		}
+
+		String reference = "simref_" + UUID.randomUUID().toString().replace("-", "").substring(0, 17);
+		log.debug("Simulated refund of {} -> {}", providerReference, reference);
 		return Outcome.approved(reference);
 	}
 }

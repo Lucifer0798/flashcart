@@ -60,6 +60,12 @@ public class Payment {
 	@Column(name = "settled_at")
 	private Instant settledAt;
 
+	@Column(name = "refunded_at")
+	private Instant refundedAt;
+
+	@Column(name = "refund_reference", length = 100)
+	private String refundReference;
+
 	@Version
 	private Long version;
 
@@ -98,6 +104,32 @@ public class Payment {
 		this.failureCode = code;
 		this.failureReason = reason;
 		this.settledAt = at;
+	}
+
+	/**
+	 * The capture was reversed.
+	 *
+	 * <p>{@code settledAt} is left where it was. It records when the money moved, and it did move;
+	 * overwriting it would erase the fact that this customer was charged at all, which is the one
+	 * thing a refunded payment most needs to keep.
+	 */
+	public void refund(String refundReference, Instant at) {
+		this.status = PaymentStatus.REFUNDED;
+		this.refundReference = refundReference;
+		this.refundedAt = at;
+	}
+
+	/**
+	 * The provider would not reverse the capture, so the platform is still holding the money.
+	 *
+	 * <p>Reuses the failure columns rather than adding a second pair. A payment is either failing to
+	 * take money or failing to return it, never both: the two statuses are mutually exclusive, so a
+	 * second set of columns would be null in every row that ever populated the first.
+	 */
+	public void refundFailed(String code, String reason) {
+		this.status = PaymentStatus.REFUND_FAILED;
+		this.failureCode = code;
+		this.failureReason = reason;
 	}
 
 	/** No {@code settledAt}: nothing has settled, which is the entire problem with this outcome. */
@@ -157,6 +189,14 @@ public class Payment {
 
 	public Instant getSettledAt() {
 		return settledAt;
+	}
+
+	public Instant getRefundedAt() {
+		return refundedAt;
+	}
+
+	public String getRefundReference() {
+		return refundReference;
 	}
 
 	public Long getVersion() {
