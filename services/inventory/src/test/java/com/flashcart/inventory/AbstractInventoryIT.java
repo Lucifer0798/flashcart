@@ -132,9 +132,20 @@ abstract class AbstractInventoryIT {
 	 * exception is rethrown, failing the test with the connection error rather than with whatever
 	 * confusing shape a missing counter takes later.
 	 */
+	/**
+	 * Whether this class expects to be able to reach Redis at all.
+	 *
+	 * <p>Overridden by the one class that points the gate at a dead port on purpose: warming a
+	 * connection that is meant to be refused would fail the run here, in setup, before the test could
+	 * assert anything about the refusal being handled.
+	 */
+	protected boolean redisIsReachable() {
+		return true;
+	}
+
 	@BeforeEach
 	void establishTheRedisConnection() {
-		if (redisConnectionEstablished) {
+		if (redisConnectionEstablished || !redisIsReachable()) {
 			return;
 		}
 		for (int attempt = 1; ; attempt++) {
