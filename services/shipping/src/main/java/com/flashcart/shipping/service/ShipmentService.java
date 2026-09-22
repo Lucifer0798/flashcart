@@ -12,6 +12,7 @@ import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
 import com.flashcart.common.event.message.ShipmentCancellationRefused;
 import com.flashcart.common.event.message.ShipmentCancelled;
+import com.flashcart.common.event.message.ShipmentDelivered;
 import com.flashcart.common.event.message.ShipmentCreated;
 import com.flashcart.shipping.domain.Shipment;
 import com.flashcart.shipping.domain.ShipmentLine;
@@ -152,10 +153,25 @@ public class ShipmentService {
 		return shipment;
 	}
 
+	/**
+	 * The parcel arrived, and the order is told so.
+	 *
+	 * <p>Publishing is the whole of what changed here. This method has always set its own status and
+	 * said nothing, which left {@code OrderStatus.DELIVERED} unreachable: no order in the history of
+	 * this platform had ever finished, though the README and the architecture diagram both drew it as
+	 * the end of the happy path.
+	 *
+	 * <p>Re-publishes when called again on a delivered parcel, for the reason {@link #create} does.
+	 * The repeat almost always means the first event was what went missing, and an operator scanning
+	 * a parcel twice is a great deal more likely than an order that is content to sit in
+	 * {@code SHIPPED} forever.
+	 */
 	@Transactional
 	public Shipment deliver(String trackingNumber) {
 		Shipment shipment = requireByTracking(trackingNumber);
 		if (shipment.getStatus() == ShipmentStatus.DELIVERED) {
+			log.info("Shipment {} is already delivered; re-publishing", trackingNumber);
+			publishDelivered(shipment);
 			return shipment;
 		}
 		if (shipment.getStatus() != ShipmentStatus.DISPATCHED) {
@@ -164,6 +180,7 @@ public class ShipmentService {
 							shipment.getStatus()));
 		}
 		shipment.deliver(clock.instant());
+		publishDelivered(shipment);
 		return shipment;
 	}
 
@@ -186,6 +203,13 @@ public class ShipmentService {
 	private Shipment requireByTracking(String trackingNumber) {
 		return shipments.findByTrackingNumber(trackingNumber)
 				.orElseThrow(() -> ResourceNotFoundException.of("Shipment", trackingNumber));
+	}
+
+	private void publishDelivered(Shipment shipment) {
+		events.publish(Topics.SHIPPING_EVENTS, new ShipmentDelivered(
+				EventMetadata.of(ShipmentDelivered.TYPE, shipment.getOrderId()),
+				shipment.getId().toString(), shipment.getOrderNumber(), shipment.getTrackingNumber(),
+				shipment.getDeliveredAt()));
 	}
 
 	private void publishCancelled(Shipment shipment) {

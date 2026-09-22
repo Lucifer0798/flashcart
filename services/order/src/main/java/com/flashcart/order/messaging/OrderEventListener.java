@@ -12,6 +12,7 @@ import com.flashcart.common.event.message.ReservationExpired;
 import com.flashcart.common.event.message.ShipmentCancellationRefused;
 import com.flashcart.common.event.message.ShipmentCancelled;
 import com.flashcart.common.event.message.ShipmentCreated;
+import com.flashcart.common.event.message.ShipmentDelivered;
 import com.flashcart.common.event.outbox.IdempotentHandler;
 import com.flashcart.order.service.OrderSaga;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -96,6 +97,13 @@ public class OrderEventListener {
 	public void onShipmentCreated(ShipmentCreated event) {
 		handler.handle(event, CONSUMER, () ->
 				saga.onShipmentCreated(UUID.fromString(event.aggregateId()), event.trackingNumber()));
+	}
+
+	@KafkaListener(topics = Topics.SHIPPING_EVENTS, containerFactory = "shipmentDeliveredFactory",
+			groupId = OrderKafkaConfig.GROUP + "-shipment-delivered")
+	public void onShipmentDelivered(ShipmentDelivered event) {
+		handler.handle(event, CONSUMER, () ->
+				saga.onShipmentDelivered(UUID.fromString(event.aggregateId()), event.deliveredAt()));
 	}
 
 	@KafkaListener(topics = Topics.SHIPPING_EVENTS, containerFactory = "shipmentCancelledFactory",

@@ -14,6 +14,7 @@ import com.flashcart.common.event.message.CommitInventory;
 import com.flashcart.common.event.message.CreateShipment;
 import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
+import com.flashcart.common.event.message.OrderDelivered;
 import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.RequestPayment;
@@ -492,6 +493,62 @@ class OrderIT {
 
 		assertThat(cancelled.status()).isEqualTo(OrderStatus.CANCELLED);
 		assertThat(events.published(ReleaseInventory.class)).isFalse();
+	}
+
+	@Test
+	@DisplayName("a delivered shipment finishes the order, which nothing could do before")
+	void deliveryFinishesTheOrder() {
+		OrderResponse order = shippedOrder("cust-1");
+		events.clear();
+
+		Instant deliveredAt = Instant.now();
+		saga.onShipmentDelivered(order.id(), deliveredAt);
+
+		OrderResponse delivered = fetch(order.orderNumber());
+		assertThat(delivered.status()).isEqualTo(OrderStatus.DELIVERED);
+		// Terminal, so there is nowhere left to go. Every other state in this machine has an exit.
+		assertThat(delivered.allowedNextStates()).isEmpty();
+
+		assertThat(historyOf(order.orderNumber())).extracting(entry -> entry.get("toStatus"))
+				.containsExactly("CREATED", "RESERVED", "PAYMENT_PENDING", "PAID", "FULFILLING",
+						"SHIPPED", "DELIVERED");
+
+		// The happy ending on the order topic, beside OrderConfirmed and OrderCancelled.
+		assertThat(events.require(OrderDelivered.class).orderNumber()).isEqualTo(order.orderNumber());
+	}
+
+	@Test
+	@DisplayName("a delivered order cannot be cancelled, because that would be a return")
+	void deliveredOrderIsNotCancellable() {
+		OrderResponse order = shippedOrder("cust-1");
+		saga.onShipmentDelivered(order.id(), Instant.now());
+		events.clear();
+
+		ResponseEntity<Map> refused = rest.postForEntity(
+				"/api/v1/orders/" + order.orderNumber() + "/cancel", null, Map.class);
+
+		// This test could not be written until delivery was reachable -- ADR 0030 had to drop it,
+		// because no order had ever been DELIVERED. Refused outright rather than becoming a
+		// cancellation request: returning goods that have arrived is a different transaction.
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(refused.getBody()).containsEntry("code", "ORDER_NOT_CANCELLABLE");
+		assertThat(events.published(CancelShipment.class)).isFalse();
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DELIVERED);
+	}
+
+	@Test
+	@DisplayName("a redelivered delivery event is ignored rather than throwing")
+	void deliveryIsIdempotent() {
+		OrderResponse order = shippedOrder("cust-1");
+		saga.onShipmentDelivered(order.id(), Instant.now());
+		events.clear();
+
+		// DELIVERED -> DELIVERED is not an edge, so the state machine declines it. Shipping
+		// re-publishes on a repeat scan, so this arrives in normal operation and must be harmless.
+		saga.onShipmentDelivered(order.id(), Instant.now());
+
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DELIVERED);
+		assertThat(events.published(OrderDelivered.class)).isFalse();
 	}
 
 	// --- cancelling after the money has moved -------------------------------------------------------

@@ -4,6 +4,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.common.event.message.ShipmentCreated;
+import com.flashcart.common.event.message.ShipmentDelivered;
 import com.flashcart.shipping.domain.Shipment;
 import com.flashcart.shipping.domain.ShipmentStatus;
 import org.junit.jupiter.api.DisplayName;
@@ -75,6 +76,48 @@ class ShippingIT extends AbstractShippingIT {
 		assertThat(shipments.deliver(tracking).getStatus()).isEqualTo(ShipmentStatus.DELIVERED);
 		assertThat(shipments.deliver(tracking).getStatus()).isEqualTo(ShipmentStatus.DELIVERED);
 		assertThat(shipments.getByTracking(tracking).getDeliveredAt()).isNotNull();
+	}
+
+	@Test
+	@DisplayName("delivery is announced, which is what lets an order finish")
+	void deliveryIsPublished() {
+		Shipment shipment = create(UUID.randomUUID(), "FC-SHIP0009");
+		String tracking = shipment.getTrackingNumber();
+		shipments.dispatch(tracking);
+		events.clear();
+
+		shipments.deliver(tracking);
+
+		// The event that did not exist. Without it OrderStatus.DELIVERED was unreachable and every
+		// shipped order stayed SHIPPED forever, while the README drew delivery as the happy ending.
+		ShipmentDelivered event = events.require(ShipmentDelivered.class);
+		assertThat(event.trackingNumber()).isEqualTo(tracking);
+		assertThat(event.orderNumber()).isEqualTo("FC-SHIP0009");
+		assertThat(event.deliveredAt()).isNotNull();
+	}
+
+	@Test
+	@DisplayName("scanning a delivered parcel again re-announces it rather than saying nothing")
+	void deliveryIsRepublished() {
+		Shipment shipment = create(UUID.randomUUID(), "FC-SHIP0010");
+		String tracking = shipment.getTrackingNumber();
+		shipments.dispatch(tracking);
+		shipments.deliver(tracking);
+		events.clear();
+
+		shipments.deliver(tracking);
+
+		// An operator scanning twice is far likelier than an order content to sit in SHIPPED, so a
+		// repeat is treated as evidence the first event was lost -- as create() already does.
+		ShipmentDelivered event = events.require(ShipmentDelivered.class);
+
+		// And this is where the provenance claim is pinned, rather than on the first publish. The
+		// event has to carry the time the parcel arrived, not the time it was talked about -- but on
+		// the first publish both sides are within microseconds of each other, so any assertion there
+		// passes whether the value came from the row or from a fresh clock reading. Here the entity
+		// has been round-tripped through PostgreSQL, so the stored value is the only thing that can
+		// produce an exact match, and a re-read of the clock would fail this.
+		assertThat(event.deliveredAt()).isEqualTo(shipments.getByTracking(tracking).getDeliveredAt());
 	}
 
 	@Test

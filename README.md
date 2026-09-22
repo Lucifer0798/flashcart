@@ -388,6 +388,11 @@ declining something now signals a real anomaly instead of routine redelivery.
 
 Compensation is a persisted state, not a side effect: a declined payment walks
 `PAYMENT_PENDING → PAYMENT_FAILED → CANCELLED`, and the history says which it was.
+
+`DELIVERED` is the only successful terminal state, and until
+[ADR 0032](docs/adr/0032-an-order-that-can-finish.md) nothing could reach it: shipping recorded a
+delivery on its own row and told nobody, so every shipped order stayed `SHIPPED` forever while this
+diagram drew delivery as the happy ending. Shipping now publishes `ShipmentDelivered`.
 `CANCELLATION_REQUESTED` is the same idea applied to a decision this service does not get to make —
 it is where the order waits while shipping answers.
 
