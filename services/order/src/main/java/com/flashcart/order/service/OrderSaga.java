@@ -1,5 +1,6 @@
 package com.flashcart.order.service;
 
+import java.time.Instant;
 import java.util.UUID;
 
 import com.flashcart.common.event.EventMetadata;
@@ -13,6 +14,7 @@ import com.flashcart.common.event.message.CommitInventory;
 import com.flashcart.common.event.message.CreateShipment;
 import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
+import com.flashcart.common.event.message.OrderDelivered;
 import com.flashcart.common.event.message.OrderLineMessage;
 import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
@@ -48,6 +50,7 @@ import org.springframework.transaction.annotation.Transactional;
  *                     ─▶ RequestPayment     ─▶ (PaymentCompleted)    ─▶ PAID
  *                     ─▶ CommitInventory + CreateShipment            ─▶ FULFILLING
  *                                           ─▶ (ShipmentCreated)     ─▶ SHIPPED
+ *                                           ─▶ (ShipmentDelivered)   ─▶ DELIVERED
  * </pre>
  *
  * <h2>And the compensations</h2>
@@ -267,6 +270,22 @@ public class OrderSaga {
 	public void onShipmentCreated(UUID orderId, String trackingNumber) {
 		advance(orderId, OrderStatus.SHIPPED, "handed to carrier, tracking " + trackingNumber,
 				order -> { });
+	}
+
+	/**
+	 * The end of the happy path, and until now the only step of it nothing could take.
+	 *
+	 * <p>{@code DELIVERED} is terminal, so this is also what closes the cancellation window: a
+	 * delivered order has no edge out, and asking to cancel one is refused rather than becoming a
+	 * request nobody can answer. Returning goods after they arrive is a different transaction, and
+	 * deliberately not this one.
+	 */
+	@Transactional
+	public void onShipmentDelivered(UUID orderId, Instant deliveredAt) {
+		advance(orderId, OrderStatus.DELIVERED, "delivered " + deliveredAt, order ->
+				events.publish(Topics.ORDER_EVENTS, new OrderDelivered(
+						EventMetadata.of(OrderDelivered.TYPE, order.getId()),
+						order.getOrderNumber(), order.getCustomerId())));
 	}
 
 	// --- the guard every handler goes through -------------------------------------------------------

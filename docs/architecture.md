@@ -620,6 +620,7 @@ place order ─▶ CREATED
    ├─◀ PaymentFailed              ─▶ PAYMENT_FAILED ─▶ ReleaseInventory ─▶ CANCELLED
    ├─◀ PaymentTimedOut            ─▶ PAYMENT_TIMEOUT              (releases nothing, ever)
    ├─◀ ShipmentCreated            ─▶ SHIPPED
+   ├─◀ ShipmentDelivered          ─▶ DELIVERED  (terminal; the only successful ending)
    ├─◀ ShipmentCancelled          ─▶ RefundPayment ─▶ CANCELLED
    └─◀ ShipmentCancellationRefused ─▶ back to SHIPPED, nothing refunded
 ```
