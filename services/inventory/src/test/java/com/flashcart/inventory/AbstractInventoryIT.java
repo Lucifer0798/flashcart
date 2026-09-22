@@ -14,6 +14,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import com.flashcart.common.security.AccessTokens;
 import org.springframework.http.HttpHeaders;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +24,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.TestPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -99,6 +101,56 @@ abstract class AbstractInventoryIT {
 
 	@Autowired
 	protected AccessTokens tokens;
+
+	@Autowired
+	protected StringRedisTemplate redis;
+
+	/** Set once per JVM: the shared Lettuce connection outlives every context and every class. */
+	private static boolean redisConnectionEstablished;
+
+	/**
+	 * Pays for the lazy Lettuce handshake here, rather than inside whichever test happens to issue
+	 * the first Redis command.
+	 *
+	 * <p>Lettuce connects on first use and bounds <em>connection initialisation</em> by the command
+	 * timeout — 250ms, set deliberately, because ADR 0016 wants the gate to give up faster than
+	 * PostgreSQL would have answered rather than hold up a reservation. (Not the connect timeout:
+	 * raising {@code spring.data.redis.connect-timeout} leaves the failure reading "timed out after
+	 * 250 millisecond(s)" unchanged.) A container handshake on a loaded machine does not fit in
+	 * 250ms — but only the first attempt pays it, and every command after it succeeds against the
+	 * established connection.
+	 *
+	 * <p>Absorbed here instead of by relaxing the timeout in test scope, so the suite goes on running
+	 * against exactly the production values. Two things went wrong without it, and only one of them
+	 * was visible: {@code AvailabilityGateIT} failed on Redis connectivity rather than on the thing
+	 * it asserts, and — silently — the first reserve of the run executed with the gate unavailable,
+	 * because {@link com.flashcart.inventory.service.RedisAvailabilityGate} swallows that error into
+	 * {@code UNKNOWN}. A suite whose first gate assertion is decided by a handshake is not testing
+	 * the gate.
+	 *
+	 * <p>Bounded, so this cannot hide a Redis that is genuinely gone: five refusals and the
+	 * exception is rethrown, failing the test with the connection error rather than with whatever
+	 * confusing shape a missing counter takes later.
+	 */
+	@BeforeEach
+	void establishTheRedisConnection() {
+		if (redisConnectionEstablished) {
+			return;
+		}
+		for (int attempt = 1; ; attempt++) {
+			try {
+				// Any command will do; this one cannot disturb a counter.
+				redis.hasKey("flashcart:avail:connection-warm-up");
+				redisConnectionEstablished = true;
+				return;
+			}
+			catch (DataAccessException ex) {
+				if (attempt == 5) {
+					throw ex;
+				}
+			}
+		}
+	}
 
 	/**
 	 * Signs every request in this hierarchy as an operator.
