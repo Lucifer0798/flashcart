@@ -89,4 +89,40 @@ groups:
           description: >
             One or more captures could not be reversed. The orders are CANCELLED and the payments are
             REFUND_FAILED, which is money owed to a customer who has been told they are getting it
-            back. Find them with: select * from payments where status = 'REFUND_FAILED'.
+            back. The retry job (ADR 0031) is attempting these automatically; if it succeeds this
+            stops on its own. Find them with: select * from payments where status = 'REFUND_FAILED'.
+
+      - alert: RefundAbandoned
+        # The escalation of the alert above, and the one that means nothing further will happen on
+        # its own. The retry job has hit its attempt cap, so the platform has stopped trying to
+        # return money it still owes for an order the customer was told is cancelled. Wrong on its
+        # own terms in the strongest sense available here: every other part of the system believes
+        # this customer has been made whole.
+        expr: increase(flashcart_payment_refunds_abandoned_total[30m]) > 0
+        for: 0m
+        labels: { severity: critical }
+        annotations:
+          summary: "payment: gave up refunding a customer; the money is still owed"
+          description: >
+            A refund was refused on every attempt up to the cap. Nothing will retry it again, and the
+            payment is still REFUND_FAILED and still refundable -- giving up on retrying is not a
+            decision that the money is not owed. This needs somebody to talk to the provider.
+            select order_number, amount, currency, customer_id, refund_attempts, failure_reason
+              from payments where status = 'REFUND_FAILED' order by updated_at desc;
+
+      - alert: CancellationsUnanswered
+        # Not "a cancellation was re-asked" -- one re-ask is a lost message, which is what the
+        # backstop is for and is not a fault. This fires when re-asking is not working: the rate has
+        # not fallen back to zero, so the platform is putting the same question to shipping every
+        # timeout and getting nothing. The orders behind it are stuck in CANCELLATION_REQUESTED,
+        # where the customer is told neither that they were refunded nor that they were not.
+        expr: rate(flashcart_order_cancellations_unanswered_total[10m]) > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "order: cancellation requests are going unanswered"
+          description: >
+            Shipping is not answering CancelShipment. Check that the shipping service is up and its
+            flashcart-shipping-cancel consumer group is not lagging, then look for the commands in
+            the DLQ. Affected orders:
+            select order_number, updated_at from orders where status = 'CANCELLATION_REQUESTED';

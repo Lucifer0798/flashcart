@@ -66,6 +66,9 @@ public class Payment {
 	@Column(name = "refund_reference", length = 100)
 	private String refundReference;
 
+	@Column(name = "refund_attempts", nullable = false)
+	private int refundAttempts;
+
 	@Version
 	private Long version;
 
@@ -130,6 +133,10 @@ public class Payment {
 		this.status = PaymentStatus.REFUND_FAILED;
 		this.failureCode = code;
 		this.failureReason = reason;
+		// Counted here rather than where a refund is attempted, so it counts refusals and not tries.
+		// A refund that succeeds leaves this at whatever it was, which is the honest record: it says
+		// how many times the provider said no before it said yes.
+		this.refundAttempts++;
 	}
 
 	/** No {@code settledAt}: nothing has settled, which is the entire problem with this outcome. */
@@ -197,6 +204,10 @@ public class Payment {
 
 	public String getRefundReference() {
 		return refundReference;
+	}
+
+	public int getRefundAttempts() {
+		return refundAttempts;
 	}
 
 	public Long getVersion() {

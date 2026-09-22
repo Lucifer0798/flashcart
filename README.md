@@ -358,6 +358,14 @@ goods *and* the money, while `OrderStatus.CANCELLED` claimed in its own javadoc 
 returned. No test covered it. [ADR 0030](docs/adr/0030-cancelling-a-paid-order.md) has the argument,
 including the one thing still deliberately not given back — the stock.
 
+**If an answer goes missing, two backstops pick it up** — and only one of them is allowed to conclude
+anything. A cancellation nobody answered is **asked again**, once per timeout, because the order
+service holds no fact that would let it decide; timing out to `CANCELLED` would refund parcels
+already in transit and timing out to `SHIPPED` would keep the money for goods still on a shelf. A
+refund the provider refused is **retried**, up to a cap, and then given up on loudly — the payment
+stays `REFUND_FAILED` and stays refundable, because giving up on retrying is not deciding the money
+is not owed. [ADR 0031](docs/adr/0031-when-nobody-answers.md).
+
 ### The state machine
 
 ```
