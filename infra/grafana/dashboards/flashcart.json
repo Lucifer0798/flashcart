@@ -298,6 +298,40 @@
           "legendFormat": "refused"
         }
       ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Refunds given up on — money owed, nothing trying",
+      "description": "The escalation of the panel beside it. The retry job (ADR 0031) hit its attempt cap, so nothing will attempt this refund again on its own. The payment is still REFUND_FAILED and still refundable — giving up on retrying is not deciding the money is not owed. Pages, unlike the refusal count, because no further automatic step exists.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "targets": [
+        {
+          "expr": "sum (increase(flashcart_payment_refunds_abandoned_total[1h]))",
+          "legendFormat": "abandoned (1h)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cancellation requests re-asked",
+      "description": "Orders waiting in CANCELLATION_REQUESTED whose answer never arrived, where the backstop has put the question to shipping again (ADR 0031). A spike is a lost message and is what the backstop is for. A line that does not return to zero means shipping is not answering at all, and the customers behind those orders are being told neither that they were refunded nor that they were not.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 42
+      },
+      "targets": [
+        {
+          "expr": "sum (rate(flashcart_order_cancellations_unanswered_total[5m]))",
+          "legendFormat": "re-asked"
+        }
+      ]
     }
   ]
 }

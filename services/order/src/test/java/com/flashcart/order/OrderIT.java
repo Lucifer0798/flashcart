@@ -23,6 +23,7 @@ import com.flashcart.common.web.CorrelationId;
 import com.flashcart.order.api.dto.OrderResponse;
 import com.flashcart.order.api.dto.PlaceOrderRequest;
 import com.flashcart.order.client.CatalogClient;
+import com.flashcart.order.service.CancellationReconciliationService;
 import com.flashcart.order.service.OrderReconciliationService;
 import com.flashcart.order.service.OrderSaga;
 import org.junit.jupiter.api.BeforeEach;
@@ -158,6 +159,9 @@ class OrderIT {
 	@Autowired
 	private OrderReconciliationService reconciler;
 
+	@Autowired
+	private CancellationReconciliationService cancellations;
+
 	@BeforeEach
 	void reset() {
 		signedInAs("cust-1");
@@ -204,6 +208,28 @@ class OrderIT {
 		saga.onShipmentCreated(order.id(), "FCL0123456789");
 		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.SHIPPED);
 		return order;
+	}
+
+	/** How many CancelShipment commands were published for this particular order. */
+	private long cancelCommandsFor(OrderResponse order) {
+		return events.all().stream()
+				.map(RecordingEventPublisher.Recorder.Published::message)
+				.filter(CancelShipment.class::isInstance)
+				.map(CancelShipment.class::cast)
+				.filter(command -> command.orderNumber().equals(order.orderNumber()))
+				.count();
+	}
+
+	/**
+	 * Backdates the order so the cancellation backstop considers it overdue.
+	 *
+	 * <p>Moving the row rather than the clock, because the query reads {@code updated_at} and a
+	 * {@code @UpdateTimestamp} is written by Hibernate rather than from the injected clock — a test
+	 * that advanced the clock would be testing something the production query does not consult.
+	 */
+	private void waitedLongEnough(OrderResponse order) {
+		jdbc.update("update orders set updated_at = now() - interval '1 hour' where order_number = ?",
+				order.orderNumber());
 	}
 
 	private void requestCancellation(OrderResponse order) {
@@ -540,6 +566,96 @@ class OrderIT {
 
 		assertThat(again.status()).isEqualTo(OrderStatus.CANCELLATION_REQUESTED);
 		assertThat(events.published(CancelShipment.class)).isFalse();
+	}
+
+	@Test
+	@DisplayName("an unanswered cancellation is asked again, not decided")
+	void unansweredCancellationIsReasked() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		waitedLongEnough(order);
+		events.clear();
+
+		cancellations.reconcileBatch();
+
+		// The question again, verbatim, and exactly once. Not a conclusion: the order service still
+		// does not know whether the parcel has left, and a timeout is not evidence either way.
+		assertThat(cancelCommandsFor(order)).isEqualTo(1);
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.CANCELLATION_REQUESTED);
+		assertThat(events.published(RefundPayment.class)).isFalse();
+	}
+
+	@Test
+	@DisplayName("re-asking restarts the clock, so a stuck order is chased once per timeout")
+	void reaskingDoesNotRepeatEveryTick() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		waitedLongEnough(order);
+		events.clear();
+
+		// Two ticks, one overdue order. Nothing about the order changes when it is re-asked, so
+		// without an explicit touch the row keeps its original timestamp, stays past the cutoff
+		// forever, and is chased again on every pass -- a shipping outage turning one stuck order
+		// into a command every fifteen seconds.
+		cancellations.reconcileBatch();
+		cancellations.reconcileBatch();
+
+		assertThat(cancelCommandsFor(order)).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("re-asking leaves no trail in the history")
+	void reaskingDoesNotWriteHistory() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		int before = historyOf(order.orderNumber()).size();
+
+		waitedLongEnough(order);
+		cancellations.reconcileBatch();
+		waitedLongEnough(order);
+		cancellations.reconcileBatch();
+
+		// Two re-asks, no entries. A history entry per tick would bury the transitions that mean
+		// something under a running commentary on how long the order has been waiting.
+		assertThat(historyOf(order.orderNumber())).hasSize(before);
+	}
+
+	@Test
+	@DisplayName("an order that has only just asked is left alone")
+	void freshCancellationIsNotReasked() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		events.clear();
+
+		// No backdating, so it is inside the timeout. Chasing an answer that is merely in flight
+		// would make every cancellation send two commands.
+		cancellations.reconcileBatch();
+
+		// Asserted on what was published for *this* order rather than on the batch count: these
+		// tests share a database, so "the batch did nothing" would depend on what every other test
+		// left behind, and would pass or fail for reasons unrelated to the claim.
+		assertThat(cancelCommandsFor(order)).isZero();
+	}
+
+	@Test
+	@DisplayName("an answered cancellation is not chased, whichever way it was answered")
+	void answeredCancellationIsNotReasked() {
+		OrderResponse cancelled = shippedOrder("cust-1");
+		requestCancellation(cancelled);
+		saga.onShipmentCancelled(cancelled.id());
+
+		OrderResponse refused = shippedOrder("cust-1");
+		requestCancellation(refused);
+		saga.onShipmentCancellationRefused(refused.id(), "DISPATCHED", "already dispatched");
+
+		waitedLongEnough(cancelled);
+		waitedLongEnough(refused);
+		events.clear();
+
+		cancellations.reconcileBatch();
+
+		assertThat(cancelCommandsFor(cancelled)).isZero();
+		assertThat(cancelCommandsFor(refused)).isZero();
 	}
 
 	@Test
