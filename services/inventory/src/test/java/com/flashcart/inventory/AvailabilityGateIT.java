@@ -10,7 +10,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
@@ -30,9 +29,6 @@ class AvailabilityGateIT extends AbstractInventoryIT {
 
 	@Autowired
 	private AvailabilityGate gate;
-
-	@Autowired
-	private StringRedisTemplate redis;
 
 	private String counter(String sku) {
 		return redis.opsForValue().get(KEY_PREFIX + sku);
