@@ -38,3 +38,4 @@ when someone revisits it in six months.
 | [0030](0030-cancelling-a-paid-order.md) | Cancelling a paid order | Accepted |
 | [0031](0031-when-nobody-answers.md) | When nobody answers | Accepted |
 | [0032](0032-an-order-that-can-finish.md) | An order that can finish | Accepted |
+| [0033](0033-shipped-did-not-mean-shipped.md) | SHIPPED did not mean shipped | Accepted |

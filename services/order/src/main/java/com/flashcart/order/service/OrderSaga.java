@@ -50,6 +50,7 @@ import org.springframework.transaction.annotation.Transactional;
  *                     ─▶ RequestPayment     ─▶ (PaymentCompleted)    ─▶ PAID
  *                     ─▶ CommitInventory + CreateShipment            ─▶ FULFILLING
  *                                           ─▶ (ShipmentCreated)     ─▶ SHIPPED
+ *                                           ─▶ (ShipmentDispatched)  ─▶ DISPATCHED
  *                                           ─▶ (ShipmentDelivered)   ─▶ DELIVERED
  * </pre>
  *
@@ -91,6 +92,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class OrderSaga {
 
 	private static final Logger log = LoggerFactory.getLogger(OrderSaga.class);
+
+	/** Compared by name rather than by importing shipping's enum, which is shipping's to change. */
+	private static final String SHIPMENT_DELIVERED = "DELIVERED";
 
 	private final OrderRepository orders;
 	private final OrderStatusChangeRepository history;
@@ -259,16 +263,39 @@ public class OrderSaga {
 
 	@Transactional
 	public void onShipmentCancellationRefused(UUID orderId, String shipmentStatus, String reason) {
-		// Back where it was. The customer keeps the goods and the charge stands, which is the correct
-		// outcome for a parcel already in transit -- and the history now carries the attempt and the
-		// reason it failed, so "I cancelled this and it arrived anyway" has an answer.
-		advance(orderId, OrderStatus.SHIPPED,
+		// Forward, not back. Shipping only ever refuses because the parcel is with the carrier or has
+		// arrived, so the refusal is itself news about where the goods are -- and the order records
+		// that rather than returning to SHIPPED, where the customer could ask again and be refused
+		// again for the rest of time.
+		OrderStatus resolved = SHIPMENT_DELIVERED.equals(shipmentStatus)
+				? OrderStatus.DELIVERED : OrderStatus.DISPATCHED;
+
+		// The customer keeps the goods and the charge stands, which is the correct outcome for a
+		// parcel already in transit -- and the history carries the attempt and the reason it failed,
+		// so "I cancelled this and it arrived anyway" has an answer.
+		advance(orderId, resolved,
 				"cancellation refused: %s (%s)".formatted(reason, shipmentStatus), order -> { });
 	}
+
 
 	@Transactional
 	public void onShipmentCreated(UUID orderId, String trackingNumber) {
 		advance(orderId, OrderStatus.SHIPPED, "handed to carrier, tracking " + trackingNumber,
+				order -> { });
+	}
+
+	/**
+	 * The parcel left, which is the moment cancelling stops being possible.
+	 *
+	 * <p>The order records it so the refusal can be made here rather than asked for. ADR 0030 made
+	 * shipping the authority on whether a parcel has gone, and it remains so — this is the order
+	 * keeping what it was told, which lets it refuse immediately in the ordinary case while shipping
+	 * still settles the race where a parcel is dispatched between the asking and the answering.
+	 * Refusing early is always safe; it is granting early that would not be.
+	 */
+	@Transactional
+	public void onShipmentDispatched(UUID orderId, Instant dispatchedAt) {
+		advance(orderId, OrderStatus.DISPATCHED, "handed to the carrier " + dispatchedAt,
 				order -> { });
 	}
 

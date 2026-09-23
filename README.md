@@ -349,7 +349,9 @@ Before payment, cancelling is immediate: nothing was taken, so nothing has to be
 | already with the carrier | back to `SHIPPED`, with the refusal and its reason in the history | the charge stands |
 
 Cancelling is possible from `SHIPPED` — which means *a consignment exists*, not that anything has
-moved — and that is the window a shopper actually wants. In the second or two an order spends in
+moved — and that is the window a shopper actually wants. Once the warehouse dispatches, the order
+moves to `DISPATCHED` and cancelling is refused immediately, without asking shipping a question it
+has already answered ([ADR 0033](docs/adr/0033-shipped-did-not-mean-shipped.md)). In the second or two an order spends in
 `PAID` or `FULFILLING`, cancelling returns 409 and says to try again shortly.
 
 This used to be one step. `PAID → CANCELLED` was a legal edge and taking it compensated nothing: the
@@ -375,8 +377,10 @@ PAYMENT_PENDING ──▶ PAYMENT_FAILED      ──▶ CANCELLED          (rele
 RESERVED        ──▶ RESERVATION_EXPIRED ──▶ CANCELLED          (release inventory)
 PAYMENT_PENDING ──▶ PAYMENT_TIMEOUT     ──▶ PAID | CANCELLED   (reconciliation decides)
 
+SHIPPED ──▶ DISPATCHED ──▶ DELIVERED               (the parcel leaves, then arrives)
+
 SHIPPED ──▶ CANCELLATION_REQUESTED ──▶ CANCELLED   (consignment stopped, capture refunded)
-                                   ──▶ SHIPPED     (refused; the parcel had already left)
+                                   ──▶ DISPATCHED  (refused; the parcel had already left)
 ```
 
 Phase 4 drives `CREATED` through `PAYMENT_PENDING` and every compensation below it; `PAID` onward

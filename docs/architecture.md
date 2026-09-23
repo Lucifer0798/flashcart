@@ -89,12 +89,14 @@ stateDiagram-v2
     PAYMENT_PENDING --> PAID: provider approved
     PAID --> FULFILLING: shipment created
     FULFILLING --> SHIPPED: carrier has it
-    SHIPPED --> DELIVERED
+    SHIPPED --> DISPATCHED: parcel left the warehouse
+    DISPATCHED --> DELIVERED
+    SHIPPED --> DELIVERED: delivery applied before its dispatch
     DELIVERED --> [*]
 
     SHIPPED --> CANCELLATION_REQUESTED: customer cancels
     CANCELLATION_REQUESTED --> CANCELLED: consignment stopped, capture refunded
-    CANCELLATION_REQUESTED --> SHIPPED: refused, the parcel had left
+    CANCELLATION_REQUESTED --> DISPATCHED: refused, the parcel had left
 
     CREATED --> CANCELLED: sold out
     RESERVED --> RESERVATION_EXPIRED: hold lapsed
@@ -620,6 +622,7 @@ place order ─▶ CREATED
    ├─◀ PaymentFailed              ─▶ PAYMENT_FAILED ─▶ ReleaseInventory ─▶ CANCELLED
    ├─◀ PaymentTimedOut            ─▶ PAYMENT_TIMEOUT              (releases nothing, ever)
    ├─◀ ShipmentCreated            ─▶ SHIPPED
+   ├─◀ ShipmentDispatched         ─▶ DISPATCHED (no cancellation edge out)
    ├─◀ ShipmentDelivered          ─▶ DELIVERED  (terminal; the only successful ending)
    ├─◀ ShipmentCancelled          ─▶ RefundPayment ─▶ CANCELLED
    └─◀ ShipmentCancellationRefused ─▶ back to SHIPPED, nothing refunded

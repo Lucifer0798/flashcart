@@ -496,6 +496,76 @@ class OrderIT {
 	}
 
 	@Test
+	@DisplayName("dispatch moves the order on, and closes the cancellation window locally")
+	void dispatchClosesTheCancellationWindow() {
+		OrderResponse order = shippedOrder("cust-1");
+		events.clear();
+
+		saga.onShipmentDispatched(order.id(), Instant.now());
+
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DISPATCHED);
+
+		ResponseEntity<Map> refused = rest.postForEntity(
+				"/api/v1/orders/" + order.orderNumber() + "/cancel", null, Map.class);
+
+		// 409 straight away. Before DISPATCHED existed this was a CancelShipment on the bus and a
+		// wait to be told what shipping had already recorded.
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(refused.getBody()).containsEntry("code", "ORDER_NOT_CANCELLABLE");
+		assertThat((String) refused.getBody().get("message")).contains("already with the carrier");
+		assertThat(cancelCommandsFor(order)).isZero();
+	}
+
+	@Test
+	@DisplayName("a refused cancellation moves the order forward, not back to SHIPPED")
+	void refusedCancellationResolvesForward() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		events.clear();
+
+		saga.onShipmentCancellationRefused(order.id(), "DISPATCHED", "already dispatched");
+
+		// DISPATCHED, not SHIPPED. The refusal is itself news about where the goods are, and going
+		// back to SHIPPED would let the customer ask again and be refused again for the rest of time.
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DISPATCHED);
+		// The customer has the goods, so the charge stands. A refund here would be a free parcel.
+		assertThat(events.published(RefundPayment.class)).isFalse();
+		assertThat(events.published(OrderCancelled.class)).isFalse();
+
+		// The attempt and its reason survive in the history, which is what answers "I cancelled this
+		// and it arrived anyway".
+		assertThat(historyOf(order.orderNumber())).extracting(entry -> entry.get("toStatus"))
+				.containsSubsequence("SHIPPED", "CANCELLATION_REQUESTED", "DISPATCHED");
+	}
+
+	@Test
+	@DisplayName("a cancellation refused because it had already arrived resolves to DELIVERED")
+	void refusalAfterDeliveryResolvesToDelivered() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+
+		saga.onShipmentCancellationRefused(order.id(), "DELIVERED", "already delivered");
+
+		// The other status shipping can refuse with. Resolving it to DISPATCHED would leave the order
+		// claiming the parcel is still in transit when shipping has just said it arrived.
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DELIVERED);
+	}
+
+	@Test
+	@DisplayName("a delivery that overtakes its dispatch still lands")
+	void deliveryMayOvertakeDispatch() {
+		OrderResponse order = shippedOrder("cust-1");
+
+		// Separate consumer groups, so nothing orders these against each other. Applied in this
+		// order the delivery must still be accepted, or the arrival is lost.
+		saga.onShipmentDelivered(order.id(), Instant.now());
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DELIVERED);
+
+		saga.onShipmentDispatched(order.id(), Instant.now());
+		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DELIVERED);
+	}
+
+	@Test
 	@DisplayName("a delivered shipment finishes the order, which nothing could do before")
 	void deliveryFinishesTheOrder() {
 		OrderResponse order = shippedOrder("cust-1");
@@ -589,26 +659,6 @@ class OrderIT {
 		// unique index and invite a provider to read the refund as a repeat of the capture.
 		assertThat(refund.idempotencyKey()).isEqualTo("refund:" + order.id());
 		assertThat(events.published(OrderCancelled.class)).isTrue();
-	}
-
-	@Test
-	@DisplayName("shipping refusing puts the order back and refunds nothing")
-	void refusedCancellationReturnsTheOrderToShipped() {
-		OrderResponse order = shippedOrder("cust-1");
-		requestCancellation(order);
-		events.clear();
-
-		saga.onShipmentCancellationRefused(order.id(), "DISPATCHED", "the consignment has already been dispatched");
-
-		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.SHIPPED);
-		// The customer has the goods, so the charge stands. A refund here would be a free parcel.
-		assertThat(events.published(RefundPayment.class)).isFalse();
-		assertThat(events.published(OrderCancelled.class)).isFalse();
-
-		// The attempt and its reason survive in the history, which is what answers "I cancelled this
-		// and it arrived anyway".
-		assertThat(historyOf(order.orderNumber())).extracting(entry -> entry.get("toStatus"))
-				.containsSubsequence("SHIPPED", "CANCELLATION_REQUESTED", "SHIPPED");
 	}
 
 	@Test

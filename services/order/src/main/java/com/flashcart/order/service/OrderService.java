@@ -197,6 +197,11 @@ public class OrderService {
 			case PAID, FULFILLING -> ("Order %s has been paid and is being made ready; it can be "
 					+ "cancelled once its shipment exists, which is a moment away")
 					.formatted(order.getOrderNumber());
+			// Refused here rather than by asking shipping and being told the same thing. The order
+			// knows the parcel left because shipping said so, and refusing on a stale "not yet
+			// dispatched" is impossible: this state is only ever entered by being told it had.
+			case DISPATCHED -> ("Order %s is already with the carrier and can no longer be cancelled")
+					.formatted(order.getOrderNumber());
 			case DELIVERED -> "Order %s has been delivered and can no longer be cancelled"
 					.formatted(order.getOrderNumber());
 			default -> "Order %s is %s and can no longer be cancelled"

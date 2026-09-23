@@ -11,6 +11,7 @@ import com.flashcart.common.event.message.ShipmentCancellationRefused;
 import com.flashcart.common.event.message.ShipmentCancelled;
 import com.flashcart.common.event.message.ShipmentCreated;
 import com.flashcart.common.event.message.ShipmentDelivered;
+import com.flashcart.common.event.message.ShipmentDispatched;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
 import org.springframework.context.annotation.Bean;
@@ -72,6 +73,14 @@ public class OrderKafkaConfig {
 			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
 			KafkaTemplate<String, Object> template) {
 		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, ShipmentCreated.class, template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, ShipmentDispatched> shipmentDispatchedFactory(
+			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
+			KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, ShipmentDispatched.class,
+				template);
 	}
 
 	@Bean

@@ -13,6 +13,7 @@ import com.flashcart.common.event.Topics;
 import com.flashcart.common.event.message.ShipmentCancellationRefused;
 import com.flashcart.common.event.message.ShipmentCancelled;
 import com.flashcart.common.event.message.ShipmentDelivered;
+import com.flashcart.common.event.message.ShipmentDispatched;
 import com.flashcart.common.event.message.ShipmentCreated;
 import com.flashcart.shipping.domain.Shipment;
 import com.flashcart.shipping.domain.ShipmentLine;
@@ -139,10 +140,21 @@ public class ShipmentService {
 		return shipment;
 	}
 
+	/**
+	 * The consignment goes to the carrier, and the order is told.
+	 *
+	 * <p>The last transition here that used to happen in silence. It is the moment cancelling becomes
+	 * impossible, and until ADR 0033 the order service had no way to know it had passed: it could only
+	 * ask, and wait to be refused.
+	 *
+	 * <p>Re-publishes on a repeat call, as {@link #create} and {@link #deliver} do.
+	 */
 	@Transactional
 	public Shipment dispatch(String trackingNumber) {
 		Shipment shipment = requireByTracking(trackingNumber);
 		if (shipment.getStatus() == ShipmentStatus.DISPATCHED) {
+			log.info("Shipment {} is already dispatched; re-publishing", trackingNumber);
+			publishDispatched(shipment);
 			return shipment;
 		}
 		if (shipment.getStatus() != ShipmentStatus.CREATED) {
@@ -150,6 +162,7 @@ public class ShipmentService {
 					"Shipment %s is %s".formatted(trackingNumber, shipment.getStatus()));
 		}
 		shipment.dispatch(clock.instant());
+		publishDispatched(shipment);
 		return shipment;
 	}
 
@@ -203,6 +216,13 @@ public class ShipmentService {
 	private Shipment requireByTracking(String trackingNumber) {
 		return shipments.findByTrackingNumber(trackingNumber)
 				.orElseThrow(() -> ResourceNotFoundException.of("Shipment", trackingNumber));
+	}
+
+	private void publishDispatched(Shipment shipment) {
+		events.publish(Topics.SHIPPING_EVENTS, new ShipmentDispatched(
+				EventMetadata.of(ShipmentDispatched.TYPE, shipment.getOrderId()),
+				shipment.getId().toString(), shipment.getOrderNumber(), shipment.getTrackingNumber(),
+				shipment.getDispatchedAt()));
 	}
 
 	private void publishDelivered(Shipment shipment) {
