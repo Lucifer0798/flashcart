@@ -5,6 +5,7 @@ import java.util.UUID;
 
 import com.flashcart.common.event.message.ShipmentCreated;
 import com.flashcart.common.event.message.ShipmentDelivered;
+import com.flashcart.common.event.message.ShipmentDispatched;
 import com.flashcart.shipping.domain.Shipment;
 import com.flashcart.shipping.domain.ShipmentStatus;
 import org.junit.jupiter.api.DisplayName;
@@ -76,6 +77,27 @@ class ShippingIT extends AbstractShippingIT {
 		assertThat(shipments.deliver(tracking).getStatus()).isEqualTo(ShipmentStatus.DELIVERED);
 		assertThat(shipments.deliver(tracking).getStatus()).isEqualTo(ShipmentStatus.DELIVERED);
 		assertThat(shipments.getByTracking(tracking).getDeliveredAt()).isNotNull();
+	}
+
+	@Test
+	@DisplayName("dispatch is announced, and re-announced on a repeat scan")
+	void dispatchIsPublished() {
+		Shipment shipment = create(UUID.randomUUID(), "FC-SHIP0011");
+		String tracking = shipment.getTrackingNumber();
+		events.clear();
+
+		shipments.dispatch(tracking);
+
+		// The last transition here that used to happen in silence. It is the moment cancelling
+		// becomes impossible, and the order service had no way to know it had passed.
+		assertThat(events.require(ShipmentDispatched.class).trackingNumber()).isEqualTo(tracking);
+
+		events.clear();
+		shipments.dispatch(tracking);
+		ShipmentDispatched again = events.require(ShipmentDispatched.class);
+		// Both sides round-tripped through PostgreSQL by now, so this is an exact comparison that
+		// can fail -- a fresh clock reading here would not match the row.
+		assertThat(again.dispatchedAt()).isEqualTo(shipments.getByTracking(tracking).getDispatchedAt());
 	}
 
 	@Test

@@ -27,6 +27,16 @@ public enum OrderStatus {
 	/** Handed to the carrier. */
 	SHIPPED(false),
 
+	/**
+	 * The parcel has left the building.
+	 *
+	 * <p>The distinction {@code SHIPPED} was pretending to make. {@code SHIPPED} means a consignment
+	 * record exists, which is the window a customer may still cancel in; this means it is with the
+	 * carrier, which is the window they may not. Before this state the boundary lived only inside
+	 * shipping, and the order had to ask over the bus to find out which side of it an order was on.
+	 */
+	DISPATCHED(false),
+
 	/** Terminal, happy path. */
 	DELIVERED(true),
 
@@ -47,8 +57,8 @@ public enum OrderStatus {
 	 *
 	 * <p>Not terminal, and deliberately not {@code CANCELLED}: whether this order can be cancelled at
 	 * all is shipping's to answer, because only shipping knows whether the parcel has left. It resolves
-	 * to {@code CANCELLED} if the consignment was still in the warehouse, or back to {@code SHIPPED} if
-	 * it was not.
+	 * to {@code CANCELLED} if the consignment was still in the warehouse, or to {@code DISPATCHED} (or
+	 * {@code DELIVERED}) if it was not.
 	 */
 	CANCELLATION_REQUESTED(false),
 

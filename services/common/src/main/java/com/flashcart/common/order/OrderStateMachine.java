@@ -28,8 +28,8 @@ import java.util.Set;
  *
  * <p>Cancelling after the money has moved:
  * <pre>
- * SHIPPED -&gt; CANCELLATION_REQUESTED -&gt; CANCELLED (consignment stopped, capture refunded)
- *                                   -&gt; SHIPPED   (refused; the parcel had already left)
+ * SHIPPED -&gt; CANCELLATION_REQUESTED -&gt; CANCELLED  (consignment stopped, capture refunded)
+ *                                   -&gt; DISPATCHED (refused; the parcel had already left)
  * </pre>
  */
 public final class OrderStateMachine {
@@ -48,15 +48,24 @@ public final class OrderStateMachine {
 		// request, and it is made from SHIPPED -- see below.
 		ALLOWED.put(OrderStatus.PAID, EnumSet.of(OrderStatus.FULFILLING));
 		ALLOWED.put(OrderStatus.FULFILLING, EnumSet.of(OrderStatus.SHIPPED));
-		// SHIPPED means a consignment exists, not that it has left the building. That is exactly the
-		// window a customer wants to cancel in, and the only one where cancelling is answerable: the
-		// shipment row is certainly there, because its creation is what put the order here.
-		ALLOWED.put(OrderStatus.SHIPPED,
-				EnumSet.of(OrderStatus.DELIVERED, OrderStatus.CANCELLATION_REQUESTED));
-		// Shipping decides which of these two it becomes. Back to SHIPPED is not a regression; it is
-		// the honest record of a cancellation that was asked for and refused.
+		// SHIPPED means a consignment exists, not that it has left the building -- exactly the window
+		// a customer wants to cancel in. DISPATCHED is the other side of that line, and having it
+		// here is what lets the order service refuse a cancellation without asking.
+		//
+		// SHIPPED -> DELIVERED stays legal and is not dead weight. Dispatch and delivery are consumed
+		// by separate groups (they must be: two listeners in one group split the partitions and drop
+		// each other's messages), so nothing orders them relative to each other. If a delivery is
+		// applied first, this edge is what stops it being declined and the arrival lost.
+		ALLOWED.put(OrderStatus.SHIPPED, EnumSet.of(OrderStatus.DISPATCHED, OrderStatus.DELIVERED,
+				OrderStatus.CANCELLATION_REQUESTED));
+		// No cancellation edge. The parcel is with the carrier, and this is the refusal that used to
+		// cost a round trip to shipping and come back saying the same thing.
+		ALLOWED.put(OrderStatus.DISPATCHED, EnumSet.of(OrderStatus.DELIVERED));
+		// Shipping decides which of these it becomes, and it only ever refuses because the shipment
+		// is DISPATCHED or DELIVERED -- so there is deliberately no edge back to SHIPPED. There was
+		// one until DISPATCHED existed, and it had become unreachable the moment this state did.
 		ALLOWED.put(OrderStatus.CANCELLATION_REQUESTED,
-				EnumSet.of(OrderStatus.CANCELLED, OrderStatus.SHIPPED));
+				EnumSet.of(OrderStatus.CANCELLED, OrderStatus.DISPATCHED, OrderStatus.DELIVERED));
 		// Terminal. A delivered order is a return, which is a different transaction entirely.
 		ALLOWED.put(OrderStatus.DELIVERED, EnumSet.noneOf(OrderStatus.class));
 		// Compensation states funnel into CANCELLED once inventory is actually back.

@@ -84,10 +84,42 @@ class OrderStateMachineTest {
 		assertThat(OrderStateMachine.canTransition(OrderStatus.SHIPPED,
 				OrderStatus.CANCELLATION_REQUESTED)).isTrue();
 
-		// Both answers, and the refusal matters as much as the success: without SHIPPED here, an
-		// order whose parcel had already left would sit in CANCELLATION_REQUESTED with no exit.
+		// Both answers, and the refusal matters as much as the success: without an exit for it, an
+		// order whose parcel had already left would sit in CANCELLATION_REQUESTED forever.
 		assertThat(OrderStateMachine.nextStates(OrderStatus.CANCELLATION_REQUESTED))
-				.containsExactlyInAnyOrder(OrderStatus.CANCELLED, OrderStatus.SHIPPED);
+				.containsExactlyInAnyOrder(OrderStatus.CANCELLED, OrderStatus.DISPATCHED,
+						OrderStatus.DELIVERED);
+
+		// And not back to SHIPPED. Shipping only refuses because the parcel is with the carrier or
+		// has arrived, so a refusal is news about where the goods are; returning the order to SHIPPED
+		// would let the customer ask again and be refused again indefinitely.
+		assertThat(OrderStateMachine.canTransition(OrderStatus.CANCELLATION_REQUESTED,
+				OrderStatus.SHIPPED)).isFalse();
+	}
+
+	@Test
+	@DisplayName("a dispatched order cannot be cancelled, and does not have to ask to find out")
+	void dispatchedOrderIsNotCancellable() {
+		assertThat(OrderStateMachine.canTransition(OrderStatus.SHIPPED, OrderStatus.DISPATCHED))
+				.isTrue();
+
+		// The point of the state. Before it existed the order had to send CancelShipment and wait to
+		// be told what shipping had already recorded; now the refusal is local and immediate.
+		assertThat(OrderStateMachine.canTransition(OrderStatus.DISPATCHED,
+				OrderStatus.CANCELLATION_REQUESTED)).isFalse();
+		assertThat(OrderStateMachine.nextStates(OrderStatus.DISPATCHED))
+				.containsExactly(OrderStatus.DELIVERED);
+	}
+
+	@Test
+	@DisplayName("a delivery that overtakes its dispatch still lands")
+	void deliveryMayOvertakeDispatch() {
+		// Dispatch and delivery are consumed by separate groups -- they must be, since two listeners
+		// in one group split the partitions and drop each other's messages -- so nothing orders them
+		// against each other. This edge looks redundant beside SHIPPED -> DISPATCHED -> DELIVERED and
+		// is not: without it, a delivery applied first is declined and the arrival is lost.
+		assertThat(OrderStateMachine.canTransition(OrderStatus.SHIPPED, OrderStatus.DELIVERED))
+				.isTrue();
 	}
 
 	@Test

@@ -72,6 +72,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0030](adr/0030-cancelling-a-paid-order.md) — Cancelling a paid order
 - [0031](adr/0031-when-nobody-answers.md) — When nobody answers
 - [0032](adr/0032-an-order-that-can-finish.md) — An order that can finish
+- [0033](adr/0033-shipped-did-not-mean-shipped.md) — SHIPPED did not mean shipped
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)
