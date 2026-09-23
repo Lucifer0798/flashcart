@@ -56,7 +56,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 		// Logs a stack trace for any connection held longer than this. On by default in the suite
 		// rather than switched on during an investigation: a connection leak here would show up as
 		// "every test after the concurrent one times out", which looks like flakiness and is not.
-		"spring.datasource.hikari.leak-detection-threshold=10000"
+		"spring.datasource.hikari.leak-detection-threshold=10000",
+		// These suites are about what the service decides, not about a round trip through a broker --
+		// InventoryKafkaIT owns that, with a real Kafka of its own. Same arrangement as
+		// AbstractPaymentIT and AbstractShippingIT; inventory was the one base class that never got
+		// it.
+		"spring.kafka.listener.auto-startup=false",
+		// EventTopicsConfiguration is matchIfMissing = true, so every context stands up a KafkaAdmin
+		// to declare nine topics. That admin client, not the listeners, is what actually floods these
+		// runs: one AvailabilityGateIT run logged 50,151 AdminMetadataManager lines against 297 from
+		// the consumers. Nothing in this hierarchy publishes or consumes, so there is nothing here
+		// for it to declare topics for.
+		"flashcart.kafka.declare-topics=false",
+		// A bootstrap address that is nothing, because application.yml's default is localhost:19092
+		// -- the compose stack's host port. A developer with the stack up was not merely making
+		// noise: the admin client was declaring topics on the real broker and the listeners would
+		// have joined real consumer groups on it. Belt and braces behind the two switches above, so
+		// that anything added here later still cannot reach the machine's dev Kafka.
+		"spring.kafka.bootstrap-servers=localhost:1"
 })
 abstract class AbstractInventoryIT {
 
