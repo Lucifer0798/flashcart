@@ -104,3 +104,8 @@ than trusting the gateway; ADR 0022's reasoning is unchanged. An operator still 
 customer's *order*, which ADR 0025 noted is not obviously right. And the audit table has no reader —
 answering "who read my data" means a SQL query, not an endpoint, which is honest for now and would
 not be if anybody outside the team needed the answer.
+
+*The order half was since closed by [ADR 0028](0028-looking-is-not-acting.md), which opened operator
+reads of another customer's order and left cancel closed. Its neighbour [ADR 0027](0027-the-outbox-hop-is-a-span.md)
+was given this note when the others were; this one was missed. The ports and the missing audit reader
+still stand.*

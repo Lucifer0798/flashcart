@@ -124,7 +124,7 @@ achieves nothing, and retrying a provider that will always refuse achieves nothi
 built to make that *visible* rather than to solve it, which is the same position
 `PaymentReconciliationService` already takes about a provider it cannot query.
 
-**Still open.**
+**Still open** *(at the time of writing — see below)*.
 
 - **`OrderStatus.DELIVERED` remains unreachable.** `ShipmentService.deliver` publishes no event and
   the saga has no handler, so no order has ever reached the successful terminal state that the
@@ -134,3 +134,6 @@ built to make that *visible* rather than to solve it, which is the same position
 - Cancelled paid orders still do not return their units to stock (ADR 0030), per-service ports remain
   published, the publisher still stores a hard-coded sampled flag, and `operator_access_log` still
   has no reader across three databases.
+
+*`DELIVERED` was since made reachable by [ADR 0032](0032-an-order-that-can-finish.md). The abandoned
+refund still has no button, and the rest of that list stands.*

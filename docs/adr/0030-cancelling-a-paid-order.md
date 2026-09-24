@@ -1,6 +1,6 @@
 # 0030 — Cancelling a paid order
 
-**Status:** Accepted · **Date:** 2026-09-21 · **Phase:** post-roadmap
+**Status:** Accepted · **Date:** 2026-09-21 · **Phase:** post-roadmap · **Amended by [ADR 0033](0033-shipped-did-not-mean-shipped.md)**
 
 ## Context
 
@@ -53,6 +53,11 @@ SHIPPED ─▶ CANCELLATION_REQUESTED ─▶ CANCELLED  (consignment stopped, ca
                                   ─▶ SHIPPED    (refused; the parcel had already left)
 ```
 
+> **Amended.** [ADR 0033](0033-shipped-did-not-mean-shipped.md) gave the order a `DISPATCHED` state,
+> and the refusal now resolves to it rather than back to `SHIPPED`. The edge drawn above was removed
+> rather than left unused: once `DISPATCHED` existed nothing could take it, because shipping only
+> ever refuses *because* the parcel is dispatched or delivered.
+
 `PAID → CANCELLED` and `FULFILLING → CANCELLED` are **removed**. Cancelling during that second now
 returns 409 with a message saying to try again shortly, which is true, rather than silently doing
 something that costs the customer twice.
@@ -63,6 +68,12 @@ This is the single reason the flow has a waiting state rather than being a local
 service cannot know whether the parcel has left; that fact lives in one table in one service. Asking
 is the only correct shape, and it makes `CancelShipment` the odd one out on a command topic — every
 other command instructs a service to do something it is able to do, and this one asks a question.
+
+> **Amended.** True as written, and narrowed by [ADR 0033](0033-shipped-did-not-mean-shipped.md): the
+> order now *is* told when a parcel leaves, so it can refuse a cancellation without asking. Shipping
+> remains the authority. The order keeps only what it was told and uses it only to refuse, which is
+> safe in one direction and not the other — a stale "already dispatched" is impossible, since that
+> state is entered only by being told, while a stale "not yet dispatched" still goes to shipping.
 
 **Both answers are events.** A refusal that only logged would leave the order in
 `CANCELLATION_REQUESTED` forever, waiting for a reply that was never coming. The refusal carries the
@@ -143,7 +154,7 @@ listeners silently missing most of their own messages.
 do not care who subscribes; the order is already `CANCELLED` by the time it lands, so there is no
 state left for it to move. The customer sees the refund on the payment itself.
 
-**Still open.**
+**Still open** *(at the time of writing — see below)*.
 
 - **A refused refund has no retry path.** `REFUND_FAILED` is refundable by design, but nothing
   re-sends the command; the alert brings a human who has no button to press. That is the next thing
@@ -157,3 +168,8 @@ state left for it to move. The customer sees the refund on the payment itself.
 - Cancelled paid orders do not return their units to stock, as above.
 - Per-service ports remain published, the publisher still stores a hard-coded sampled flag, and the
   `operator_access_log` still has no reader across three databases.
+
+*The first two were since built by [ADR 0031](0031-when-nobody-answers.md), and `DELIVERED` was made
+reachable by [ADR 0032](0032-an-order-that-can-finish.md). The misleading `SHIPPED` name was resolved
+by [ADR 0033](0033-shipped-did-not-mean-shipped.md). The stock, the ports, the sampled flag and the
+missing audit reader all still stand.*
