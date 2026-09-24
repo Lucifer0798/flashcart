@@ -95,7 +95,7 @@ actually walk, and the seven-transition history a delivered order carries is ass
 contract and not a defect, but it now applies to three events rather than two, and is worth naming
 each time rather than letting it become invisible.
 
-**Still open.**
+**Still open** *(at the time of writing — see below)*.
 
 - **`SHIPPED` still means "a consignment exists", not that anything moved**, and there is still no
   order state for dispatch. Named in ADR 0030 and again above; the next thing to pull on this
@@ -105,3 +105,7 @@ each time rather than letting it become invisible.
 - Cancelled paid orders still do not return their units to stock (ADR 0030); an abandoned refund
   still has no button (ADR 0031); per-service ports remain published; the publisher still stores a
   hard-coded sampled flag; `operator_access_log` still has no reader across three databases.
+
+*Both of the first two were since closed by [ADR 0033](0033-shipped-did-not-mean-shipped.md), which
+gave the order a `DISPATCHED` state; a refused cancellation now resolves forward rather than
+returning to `SHIPPED`. The rest of that list stands.*
