@@ -173,3 +173,5 @@ state left for it to move. The customer sees the refund on the payment itself.
 reachable by [ADR 0032](0032-an-order-that-can-finish.md). The misleading `SHIPPED` name was resolved
 by [ADR 0033](0033-shipped-did-not-mean-shipped.md). The stock, the ports, the sampled flag and the
 missing audit reader all still stand.*
+
+*The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*

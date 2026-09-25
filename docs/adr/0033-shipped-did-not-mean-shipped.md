@@ -110,3 +110,5 @@ duplication, it is the only shape in which two message types on one topic both g
 - An abandoned refund still has no button ([ADR 0031](0031-when-nobody-answers.md)).
 - `operator_access_log` still has no reader, across three databases.
 - Per-service ports remain published; the publisher still stores a hard-coded sampled flag.
+
+*The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*

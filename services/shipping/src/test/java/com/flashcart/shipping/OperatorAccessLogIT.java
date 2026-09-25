@@ -1,11 +1,14 @@
 package com.flashcart.shipping;
 
+import java.util.List;
 import java.util.Map;
 
 import com.flashcart.shipping.domain.Shipment;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
@@ -22,6 +25,27 @@ class OperatorAccessLogIT extends AbstractShippingIT {
 	// --- what an operator read is recorded (ADR 0025) -------------------------------------------------
 
 	
+
+	@Test
+	@DisplayName("an operator can read who accessed a customer's parcels; a customer cannot")
+	void accessLogIsReadableByOperatorsOnly() {
+		createFor("audit-reader-a", "FC-READLOG9");
+		// One recorded access to find. The suite's interceptor signs this as an operator.
+		rest.getForEntity("/api/v1/shipments/order/FC-READLOG9", Map.class);
+
+		List<Map<String, Object>> log = rest.getForObject(
+				"/api/v1/shipping/_access-log?customerId=audit-reader-a", List.class);
+		// The parcel read, plus this read of the log, recorded before it answered.
+		assertThat(log).extracting(e -> e.get("action"))
+				.containsExactly("READ_ACCESS_LOG", "READ_SHIPMENT");
+
+		ResponseEntity<Map> refused = rest.exchange(
+				"/api/v1/shipping/_access-log?customerId=audit-reader-a", HttpMethod.GET,
+				new HttpEntity<>(bearer("audit-reader-a")), Map.class);
+		// Closed by OperatorFilter's default-deny rather than by a rule anybody wrote for it -- and on
+		// the singular prefix, because GET /api/v1/shipments/* would have opened it to every customer.
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+	}
 
 	@Test
 	@DisplayName("an operator tracking somebody else's parcel leaves a record of who looked")

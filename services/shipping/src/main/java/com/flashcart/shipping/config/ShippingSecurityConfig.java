@@ -7,6 +7,7 @@ import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.CallerIdentity;
 import com.flashcart.common.security.CustomerDataAccess;
 import com.flashcart.common.security.OperatorAccessLog;
+import com.flashcart.common.security.OperatorAccessLogReader;
 import com.flashcart.common.security.OperatorAccessRetention;
 import com.flashcart.common.security.OperatorFilter;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +57,18 @@ public class ShippingSecurityConfig {
 	@Bean
 	public CallerIdentity callerIdentity(AccessTokens tokens) {
 		return new CallerIdentity(tokens);
+	}
+
+	/**
+	 * The reader for {@code operator_access_log}, which ADR 0025 created and left unqueried.
+	 *
+	 * <p>Takes the writer as well as the table, because reading this log is itself an operator read of
+	 * a customer's information and is recorded like any other.
+	 */
+	@Bean
+	public OperatorAccessLogReader operatorAccessLogReader(JdbcTemplate jdbc, CallerIdentity caller,
+			OperatorAccessLog accessLog) {
+		return new OperatorAccessLogReader(jdbc, caller, accessLog);
 	}
 
 	/**

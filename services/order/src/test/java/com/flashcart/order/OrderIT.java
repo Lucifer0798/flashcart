@@ -894,6 +894,41 @@ class OrderIT {
 	}
 
 	@Test
+	@DisplayName("an operator can read who accessed a customer's orders")
+	void accessLogIsReadable() {
+		signedInAs("audit-reader-a");
+		String orderNumber = place(null, "AUD-HP-001", 1).orderNumber();
+
+		signedInAsOperator("ops-1");
+		rest.getForEntity("/api/v1/orders/" + orderNumber, OrderResponse.class);
+
+		List<Map<String, Object>> log = rest.getForObject(
+				"/api/v1/order/_access-log?customerId=audit-reader-a", List.class);
+
+		// Two: the order read, and this read of the log -- recorded before it answered, which is
+		// ADR 0025's invariant applied to the table itself.
+		assertThat(log).extracting(e -> e.get("action"))
+				.containsExactly("READ_ACCESS_LOG", "READ_ORDER");
+		assertThat(log.get(1)).containsEntry("resourceId", orderNumber);
+	}
+
+	@Test
+	@DisplayName("a signed-in customer cannot read the access log, and nothing but this holds that")
+	void customerCannotReadTheAccessLog() {
+		signedInAs("audit-reader-b");
+
+		ResponseEntity<Map> refused = rest.getForEntity(
+				"/api/v1/order/_access-log?customerId=audit-reader-b", Map.class);
+
+		// This service has no OperatorFilter -- unlike payment and shipping it is not default-deny --
+		// so the check inside OperatorAccessLogReader is the only thing refusing this. If it were
+		// removed, nothing behind it would notice, which is why the assertion exists. ADR 0034.
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+		assertThat(refused.getBody()).containsEntry("code", "OPERATOR_REQUIRED");
+		assertThat(auditRows("audit-reader-b")).isZero();
+	}
+
+	@Test
 	@DisplayName("an operator may NOT cancel somebody else's order: looking is not acting")
 	void operatorCannotCancelAnothersOrder() {
 		signedInAs("audit-owner-e");

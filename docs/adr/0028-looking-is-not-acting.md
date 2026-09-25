@@ -105,3 +105,5 @@ than trusting the gateway. The publisher still stores a hard-coded sampled flag.
 no reader — and it now exists in three services rather than two, which makes "who read my data" a
 query against three databases rather than one. That is the cost of database-per-service and was
 always going to be the shape of it, but it is worth naming now that it is three.
+
+*The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*

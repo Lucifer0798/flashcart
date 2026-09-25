@@ -109,3 +109,5 @@ each time rather than letting it become invisible.
 *Both of the first two were since closed by [ADR 0033](0033-shipped-did-not-mean-shipped.md), which
 gave the order a `DISPATCHED` state; a refused cancellation now resolves forward rather than
 returning to `SHIPPED`. The rest of that list stands.*
+
+*The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*
