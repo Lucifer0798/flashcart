@@ -92,3 +92,5 @@ answer a question about the past should be reaching for the table, and the panel
 **Still open.** The audit table has no reader, and now lives in three databases. Per-service ports
 remain published. The publisher still stores a hard-coded sampled flag. And an operator still cannot
 *cancel* another customer's order, which ADR 0028 left deliberately undecided.
+
+*The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*

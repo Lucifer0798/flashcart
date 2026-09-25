@@ -31,6 +31,72 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class OperatorAccessLogIT extends AbstractPaymentIT {
 
+	// --- reading the log back (ADR 0034) --------------------------------------------------------------
+
+	@Test
+	@DisplayName("an operator can read who accessed a customer's payments")
+	void accessLogIsReadable() {
+		UUID orderId = UUID.randomUUID();
+		payments.charge(orderId, "FC-READLOG1", "audit-reader-a", new BigDecimal("15.00"), "USD",
+				orderId.toString());
+		// One recorded access to find.
+		rest.getForEntity("/api/v1/payments/order/FC-READLOG1", Map.class);
+
+		ResponseEntity<List> log = rest.getForEntity(
+				"/api/v1/payment/_access-log?customerId=audit-reader-a", List.class);
+
+		assertThat(log.getStatusCode()).isEqualTo(HttpStatus.OK);
+		List<Map<String, Object>> entries = log.getBody();
+		// Two: the payment read, and this read of the log.
+		assertThat(entries).hasSize(2);
+		assertThat(entries).extracting(e -> e.get("action"))
+				.containsExactly("READ_ACCESS_LOG", "READ_PAYMENT");
+		assertThat(entries.get(1)).containsEntry("resourceId", "FC-READLOG1");
+		assertThat(entries.get(0)).containsEntry("operatorId", "ops-test");
+	}
+
+	@Test
+	@DisplayName("reading the log is recorded first, so the newest entry is the request that asked")
+	void readingTheLogIsItselfRecorded() {
+		jdbc.update("insert into operator_access_log (operator_id, action, customer_id) "
+				+ "values ('ops-old', 'READ_PAYMENT', 'audit-reader-b')");
+
+		rest.getForEntity("/api/v1/payment/_access-log?customerId=audit-reader-b", List.class);
+
+		// ADR 0025's invariant is that the row exists before the data is disclosed, so a read of this
+		// table appears in its own response rather than only in the next one.
+		assertThat(auditRows("audit-reader-b")).isEqualTo(2);
+		assertThat(jdbc.queryForObject("select count(*) from operator_access_log "
+				+ "where customer_id = 'audit-reader-b' and action = 'READ_ACCESS_LOG'", Long.class))
+				.isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("a signed-in customer cannot read the log, and is told so plainly")
+	void customerCannotReadTheAccessLog() {
+		ResponseEntity<Map> refused = rest.exchange(
+				"/api/v1/payment/_access-log?customerId=audit-reader-c", HttpMethod.GET,
+				new HttpEntity<>(bearer("audit-reader-c")), Map.class);
+
+		// 403, not 404. The oracle argument that makes somebody else's order a 404 does not apply:
+		// this path is fixed and published, and the caller already knew the customer id they sent.
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+		assertThat(refused.getBody()).containsEntry("code", "OPERATOR_REQUIRED");
+		// And the refusal discloses nothing, so it records nothing.
+		assertThat(auditRows("audit-reader-c")).isZero();
+	}
+
+	@Test
+	@DisplayName("a customer nobody has looked at has an empty log, not an error")
+	void untouchedCustomerHasAnEmptyLog() {
+		ResponseEntity<List> log = rest.getForEntity(
+				"/api/v1/payment/_access-log?customerId=audit-reader-d", List.class);
+
+		assertThat(log.getStatusCode()).isEqualTo(HttpStatus.OK);
+		// One entry: this request. Nothing had looked at them before it.
+		assertThat(log.getBody()).hasSize(1);
+	}
+
 	// --- what an operator read is recorded (ADR 0025) -------------------------------------------------
 
 	

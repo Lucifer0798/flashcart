@@ -109,3 +109,5 @@ not be if anybody outside the team needed the answer.
 reads of another customer's order and left cancel closed. Its neighbour [ADR 0027](0027-the-outbox-hop-is-a-span.md)
 was given this note when the others were; this one was missed. The ports and the missing audit reader
 still stand.*
+
+*The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*

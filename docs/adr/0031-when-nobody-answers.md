@@ -137,3 +137,5 @@ built to make that *visible* rather than to solve it, which is the same position
 
 *`DELIVERED` was since made reachable by [ADR 0032](0032-an-order-that-can-finish.md). The abandoned
 refund still has no button, and the rest of that list stands.*
+
+*The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*

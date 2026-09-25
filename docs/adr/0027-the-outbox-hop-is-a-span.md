@@ -95,3 +95,5 @@ boundary. An operator cannot read another customer's order. And the audit table 
 
 *The order half was since closed by [ADR 0028](0028-looking-is-not-acting.md), which opened the reads
 and left cancel closed. The other two still stand.*
+
+*The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*
