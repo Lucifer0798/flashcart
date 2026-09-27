@@ -19,7 +19,9 @@ import com.flashcart.catalog.api.dto.UpdateProductRequest;
 import com.flashcart.catalog.domain.FlashSalePhase;
 import com.flashcart.catalog.domain.FlashSaleStatus;
 import com.flashcart.catalog.domain.ProductStatus;
+import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.web.CorrelationId;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -62,7 +64,110 @@ class CatalogIT {
 	@Autowired
 	private TestRestTemplate rest;
 
+	@Autowired
+	private AccessTokens tokens;
+
+	/**
+	 * Signs every request as an operator.
+	 *
+	 * <p>Needed since ADR 0036, which made catalog writes require the role. Without it this suite would
+	 * be exercising the filter rather than the catalog, and twenty-odd tests would fail on a 401 that
+	 * says nothing about whether a product round-trips.
+	 *
+	 * <p>Only when the caller has not said who it is, so the tests that act as somebody specific --
+	 * anonymously, or as a shopper -- are not quietly turned into more operator tests that pass for the
+	 * wrong reason.
+	 */
+	@BeforeEach
+	void signInAsOperator() {
+		String token = tokens.issue("ops-test", "ops@example.test", List.of(AccessTokens.OPERATOR));
+		rest.getRestTemplate().getInterceptors().clear();
+		rest.getRestTemplate().getInterceptors().add((request, body, execution) -> {
+			if (!request.getHeaders().containsHeader(HttpHeaders.AUTHORIZATION)) {
+				request.getHeaders().set(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+			}
+			return execution.execute(request, body);
+		});
+	}
+
+	// --- who may change a catalogue (ADR 0036) ----------------------------------------------------
+
+	@Test
+	@DisplayName("a catalogue is not editable without an account")
+	void anonymousWriteIsRefused() {
+		CategoryResponse category = createCategory(unique("Audio"));
+
+		ResponseEntity<Map> refused = rest.exchange("/api/v1/products", HttpMethod.POST,
+				new HttpEntity<>(new CreateProductRequest(unique("ANON").toUpperCase(), "Anonymous",
+						null, "probe", category.id(), new BigDecimal("0.01"), "USD",
+						ProductStatus.ACTIVE, null), anonymous()), Map.class);
+
+		// This is the hole ADR 0036 closed, and it went all the way through: create a product, reprice
+		// it, and the order service copies that price onto the line. ADR 0011 stops a client naming its
+		// own price in the request; nothing stopped it naming one in the catalogue.
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+	}
+
+	@Test
+	@DisplayName("nor by a shopper, because being signed in is not running a shop")
+	void shopperWriteIsRefused() {
+		CategoryResponse category = createCategory(unique("Audio"));
+
+		ResponseEntity<Map> refused = rest.exchange("/api/v1/products", HttpMethod.POST,
+				new HttpEntity<>(new CreateProductRequest(unique("SHOP").toUpperCase(), "Shopper",
+						null, "probe", category.id(), new BigDecimal("0.01"), "USD",
+						ProductStatus.ACTIVE, null), as("cust-1")), Map.class);
+
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+	}
+
+	@Test
+	@DisplayName("but anybody may browse, which is what a catalogue is for")
+	void readsStayPublic() {
+		CategoryResponse category = createCategory(unique("Audio"));
+		String sku = unique("PUB").toUpperCase();
+		createProduct(category.id(), sku, "Public read probe", "19.00");
+
+		// Every read path, unauthenticated. The README's first example is an anonymous curl of the
+		// live flash sale, and a catalogue nobody can browse is not a catalogue.
+		for (String path : List.of("/api/v1/products", "/api/v1/products/sku/" + sku,
+				"/api/v1/categories", "/api/v1/categories/" + category.id(),
+				"/api/v1/flash-sales", "/api/v1/flash-sales/active", "/api/v1/flash-sales/upcoming")) {
+			assertThat(rest.exchange(path, HttpMethod.GET, new HttpEntity<>(anonymous()), String.class)
+					.getStatusCode())
+					.as("anonymous GET %s", path)
+					.isEqualTo(HttpStatus.OK);
+		}
+	}
+
+	@Test
+	@DisplayName("a write the filter has no rule for is closed, not opened")
+	void unlistedWritesAreClosed() {
+		// Default-deny is the property, so every verb that is not a listed GET needs the role --
+		// including the ones nobody thought about when writing the list.
+		for (HttpMethod method : List.of(HttpMethod.PUT, HttpMethod.DELETE, HttpMethod.PATCH)) {
+			assertThat(rest.exchange("/api/v1/products/" + UUID.randomUUID(), method,
+					new HttpEntity<>(anonymous()), String.class).getStatusCode())
+					.as("anonymous %s on a product", method)
+					.isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+	}
+
 	// --- helpers ---------------------------------------------------------------------------------
+
+	/** Headers that deliberately carry no token; the interceptor leaves them alone. */
+	private HttpHeaders anonymous() {
+		HttpHeaders headers = new HttpHeaders();
+		headers.set(HttpHeaders.AUTHORIZATION, "");
+		return headers;
+	}
+
+	private HttpHeaders as(String customerId) {
+		HttpHeaders headers = new HttpHeaders();
+		headers.set(HttpHeaders.AUTHORIZATION,
+				"Bearer " + tokens.issue(customerId, customerId + "@example.test"));
+		return headers;
+	}
 
 	private CategoryResponse createCategory(String name) {
 		ResponseEntity<CategoryResponse> response = rest.postForEntity("/api/v1/categories",

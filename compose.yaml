@@ -177,6 +177,8 @@ services:
       # `demo` adds classpath:db/seed to the Flyway locations, so a fresh stack comes up with a
       # catalog you can actually browse. Drop the profile for an empty one.
       SPRING_PROFILES_ACTIVE: demo
+      # Verifies operator tokens for every write. Reads stay public. See ADR 0036.
+      JWT_SECRET: ${JWT_SECRET:-flashcart-development-secret-do-not-use-anywhere-real}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_catalog
       SPRING_DATASOURCE_USERNAME: flashcart
       SPRING_DATASOURCE_PASSWORD: flashcart

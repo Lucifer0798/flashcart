@@ -41,3 +41,4 @@ when someone revisits it in six months.
 | [0033](0033-shipped-did-not-mean-shipped.md) | SHIPPED did not mean shipped | Accepted |
 | [0034](0034-who-read-my-data.md) | Who read my data | Accepted |
 | [0035](0035-nothing-behind-the-check.md) | Nothing behind the check | Accepted |
+| [0036](0036-anyone-could-set-the-price.md) | Anyone could set the price | Accepted |
