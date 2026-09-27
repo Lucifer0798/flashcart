@@ -202,7 +202,7 @@ jobs:
           curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR" \
             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI decline\"}" > /dev/null
           CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
-          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' \
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR" \
             -d "{\"sku\":\"$SKU\",\"name\":\"CI Decline Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.13,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
           curl -s -o /tmp/d.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
@@ -248,15 +248,29 @@ jobs:
           curl -s $G/api/v1/products/00000000-0000-4000-8000-0000000000ff | grep -q '"code":"NOT_FOUND"'
           # A wrong verb is a 405, not a 500 -- the whole platform shares one handler for this.
           #
-          # Probed on catalog, which has no OperatorFilter. This used to probe /api/v1/orders, and
-          # since ADR 0035 that service is default-deny: an unlisted method is not a listed one, so
-          # the filter answers 403 before Spring ever decides the verb is wrong. Relaxing the
-          # assertion to accept 403 would have kept CI green while no longer proving the 405 path
-          # works at all, so the probe moved to a service the filter does not intercept.
-          VERB=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE $G/api/v1/categories)
-          echo "wrong verb on an unfiltered service: $VERB"
+          # Sent as an operator, on a verb no controller maps. This probe has moved twice: off
+          # /api/v1/orders when ADR 0035 made that service default-deny, and off catalog when ADR 0036
+          # did the same there. Both times the filter answered 403 before Spring could decide the verb
+          # was wrong, and both times relaxing the assertion to accept 403 would have kept CI green
+          # while no longer proving the 405 path works at all.
+          #
+          # An operator token settles it for good: the filter passes, so whatever answers is the
+          # shared handler rather than the guard in front of it. PUT on a collection is mapped
+          # nowhere.
+          VERB=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $OPERATOR" $G/api/v1/products)
+          echo "wrong verb, past the filter: $VERB"
           test "$VERB" = "405"
-          # And the order service refuses it earlier, which is the filter working rather than a gap.
+          # Nobody may edit the catalogue without the role. ADR 0011 keeps a client from naming its
+          # own price; until ADR 0036 it could name one by editing the product, and the order service
+          # copied it onto the line -- 201 to create, 200 to reprice, then a 0.01 order.
+          ANON=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/products -H 'Content-Type: application/json'             -d '{"sku":"CI-NOAUTH","name":"CI no-auth probe","basePrice":0.01,"currency":"USD","status":"ACTIVE"}')
+          echo "anonymous product create: $ANON"
+          test "$ANON" = "401"
+          SHOPPER=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN"             -d '{"sku":"CI-SHOPPER","name":"CI shopper probe","basePrice":0.01,"currency":"USD","status":"ACTIVE"}')
+          echo "signed-in shopper product create: $SHOPPER"
+          test "$SHOPPER" = "403"
+
+          # And the order service refuses a wrong verb earlier, which is the filter working.
           DENIED=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $TOKEN" $G/api/v1/orders)
           echo "wrong verb on a default-deny service: $DENIED"
           test "$DENIED" = "403"
@@ -268,7 +282,7 @@ jobs:
           SKU=CI-AUTH-$(date +%s)
           curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI auth\"}" > /dev/null
           CAT=$(curl -sf $G/api/v1/categories | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json'             -d "{\"sku\":\"$SKU\",\"name\":\"CI auth probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":19.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"name\":\"CI auth probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":19.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
           # 1. No token, no checkout.
           CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/orders             -H 'Content-Type: application/json'             -d "{\"idempotencyKey\":\"ci-anon-$(date +%s%N)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}")

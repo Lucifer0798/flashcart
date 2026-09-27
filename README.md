@@ -150,6 +150,12 @@ Each service's `application.yml` already defaults to the published host ports.
 
 All paths are reachable through the gateway on `:18080` and directly on `:18081`.
 
+**Reading is public; changing anything needs an operator.** Until
+[ADR 0036](docs/adr/0036-anyone-could-set-the-price.md) this service had no authentication at all, so
+anyone who could reach the gateway could create a product, reprice one, or invent a flash sale — and
+because the order service copies a product's `effectivePrice` onto the order line, repricing was a way
+to choose what you paid. Reads stay open, because a catalogue nobody can browse is not a catalogue.
+
 ### Products
 
 | Method   | Path                          | Notes                                              |
@@ -158,9 +164,9 @@ All paths are reachable through the gateway on `:18080` and directly on `:18081`
 | `GET`    | `/api/v1/products/{id}`       |                                                    |
 | `GET`    | `/api/v1/products/sku/{sku}`  | The lookup other services use                      |
 | `GET`    | `/api/v1/products/slug/{slug}`|                                                    |
-| `POST`   | `/api/v1/products`            | Defaults to `DRAFT`                                |
-| `PUT`    | `/api/v1/products/{id}`       | Send `expectedVersion` to get a 409 instead of a lost update |
-| `DELETE` | `/api/v1/products/{id}`       | Archives; never deletes                            |
+| `POST`   | `/api/v1/products`            | **Operator.** Defaults to `DRAFT`                  |
+| `PUT`    | `/api/v1/products/{id}`       | **Operator.** Send `expectedVersion` to get a 409 instead of a lost update |
+| `DELETE` | `/api/v1/products/{id}`       | **Operator.** Archives; never deletes              |
 
 Every product response carries an **`effectivePrice`** that already accounts for any live flash
 sale, plus the `offer` behind it. Clients render that field and never recompute the discount, so the
@@ -169,7 +175,8 @@ price on the grid and the price at checkout cannot disagree.
 ### Categories
 
 `GET|POST /api/v1/categories`, `GET /api/v1/categories/{idOrSlug}` (id *or* slug),
-`PUT|DELETE /api/v1/categories/{id}`. Deleting a category that still holds products is refused.
+`PUT|DELETE /api/v1/categories/{id}`. Writing any of them needs an operator. Deleting a category
+that still holds products is refused.
 
 ### Flash sales
 
@@ -178,10 +185,10 @@ price on the grid and the price at checkout cannot disagree.
 | `GET`    | `/api/v1/flash-sales/active`            | Live right now — derived, never stale        |
 | `GET`    | `/api/v1/flash-sales/upcoming`          |                                              |
 | `GET`    | `/api/v1/flash-sales/{idOrSlug}`        |                                              |
-| `POST`   | `/api/v1/flash-sales`                   | Created `DRAFT`; sells nothing yet           |
-| `POST`   | `/api/v1/flash-sales/{id}/items`        | Refused once the sale is live                |
-| `POST`   | `/api/v1/flash-sales/{id}/schedule`     | Approves it to go live when its window opens |
-| `POST`   | `/api/v1/flash-sales/{id}/cancel`       | Prices revert on the next read               |
+| `POST`   | `/api/v1/flash-sales`                   | **Operator.** Created `DRAFT`; sells nothing yet           |
+| `POST`   | `/api/v1/flash-sales/{id}/items`        | **Operator.** Refused once the sale is live                |
+| `POST`   | `/api/v1/flash-sales/{id}/schedule`     | **Operator.** Approves it to go live when its window opens |
+| `POST`   | `/api/v1/flash-sales/{id}/cancel`       | **Operator.** Prices revert on the next read               |
 
 Whether a sale is live is **derived from its window on every read**, not stored and swept by a
 scheduler — every second a sweeper is late is a second the storefront sells at the wrong price.

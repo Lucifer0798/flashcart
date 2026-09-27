@@ -140,6 +140,14 @@
 			<artifactId>spring-boot-restclient</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Verifies operator tokens. Optional in flashcart-common on purpose, so a service needing no
+		     authentication does not carry a JWT library; that is why catalog did not have it until
+		     ADR 0036 gave it a filter. Without this the context fails to start with
+		     NoClassDefFoundError: com/nimbusds/jose/JOSEException. -->
+		<dependency>
+			<groupId>com.nimbusds</groupId>
+			<artifactId>nimbus-jose-jwt</artifactId>
+		</dependency>
 	</dependencies>
 
 	<build>

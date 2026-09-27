@@ -67,6 +67,12 @@ springdoc:
     path: /swagger-ui.html
 
 flashcart:
+  security:
+    jwt:
+      # Verifies operator tokens; this service never issues one. Reads stay public -- a catalog
+      # nobody can browse is not a catalog -- and every write needs the role. See ADR 0036.
+      secret: ${JWT_SECRET:flashcart-development-secret-do-not-use-anywhere-real}
+      ttl: ${JWT_TTL:PT12H}
   version: ${FLASHCART_VERSION:0.1.0-SNAPSHOT}
 
 ---

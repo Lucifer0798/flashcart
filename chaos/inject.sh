@@ -60,8 +60,10 @@ seed() { # sku, qty -> stock plus a priced product so orders can be placed
 	# the order which follows 404s on a sku that has no price -- and the run reads as "the platform
 	# lost an order under chaos" when nothing was wrong except the harness. That is the same mistake
 	# the load harness made with reservationKey in Phase 10, wearing a different costume.
+	# The operator header is not optional since ADR 0036: catalog writes need the role now,
+	# and without it this seed 401s and every scenario below measures the seed, not the platform.
 	code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST $G/api/v1/products \
-		-H 'Content-Type: application/json' \
+		-H 'Content-Type: application/json' -H "$AUTH" \
 		-d "{\"sku\":\"$sku\",\"name\":\"Chaos probe $sku\",\"categoryId\":\"$cat\",\"basePrice\":19.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}")
 	if [ "$code" != "201" ]; then
 		fail "could not seed a product for $sku (http $code) -- the scenario below would be measuring the seed, not the platform"

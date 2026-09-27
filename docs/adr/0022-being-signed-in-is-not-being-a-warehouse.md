@@ -112,3 +112,5 @@ that keeps the row, but the row no longer arrives unless a profile asks for it.*
 Role changes only take effect on the next sign-in, since the role is a claim in a token that lives for
 twelve hours. Revoking an operator means waiting out the token or rotating the signing secret, which
 is the cost of stateless tokens and the reason the TTL is short.
+
+*This change covered inventory, payment and shipping. The order service was given the same filter by [ADR 0035](0035-nothing-behind-the-check.md), and catalog -- which had no authentication at all and sets the prices the order service charges -- by [ADR 0036](0036-anyone-could-set-the-price.md).*

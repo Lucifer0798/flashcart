@@ -136,3 +136,5 @@ That is not redundancy: they answer different questions, and the filter cannot a
   argued through the way these four now have, and that is worth doing rather than assuming.
 - Per-service ports remain published, which is
   [ADR 0022](0022-being-signed-in-is-not-being-a-warehouse.md)'s decision rather than an oversight.
+
+*Catalog was since given the same filter by [ADR 0036](0036-anyone-could-set-the-price.md), which found it had no authentication of any kind. Only the user service is left, and it is the sign-in surface.*
