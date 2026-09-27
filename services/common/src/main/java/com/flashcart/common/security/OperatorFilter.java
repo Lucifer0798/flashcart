@@ -163,7 +163,41 @@ public class OperatorFilter extends OncePerRequestFilter {
 		if (rule.endsWith("**")) {
 			return path.startsWith(rule.substring(0, rule.length() - 2));
 		}
+		// A star in the middle: one segment, anywhere. Added last on purpose, after every branch that
+		// existed before it, so no rule that already matched something can be diverted here -- the
+		// four cases above win exactly as they did. A rule with a mid-path star previously fell
+		// through to the equality below and matched nothing at all, because paths do not contain
+		// stars, so this branch can only add matches and never take one away.
+		//
+		// It exists because the shape of this matcher had quietly been deciding which rules were
+		// writable. GET /api/v1/orders/*/history ends with "/history", so it landed on the equality
+		// and silently matched no request -- which in a default-deny filter means the endpoint is
+		// operator-only however carefully you list it. See ADR 0035.
+		if (rule.indexOf('*') >= 0) {
+			return segmentsMatch(rule.split("/", -1), path.split("/", -1));
+		}
 		return path.equals(rule);
+	}
+
+	/** Segment by segment, where {@code *} is exactly one segment and never an empty one. */
+	private static boolean segmentsMatch(String[] rule, String[] path) {
+		if (rule.length != path.length) {
+			return false;
+		}
+		for (int i = 0; i < rule.length; i++) {
+			if ("*".equals(rule[i])) {
+				// Never empty: a path with two slashes together has not named a segment, and a rule
+				// asking for one should not be satisfied by its absence.
+				if (path[i].isEmpty()) {
+					return false;
+				}
+				continue;
+			}
+			if (!rule[i].equals(path[i])) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/** The platform's error envelope, so a refusal here looks like a refusal anywhere else. */

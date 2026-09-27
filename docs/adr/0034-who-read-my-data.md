@@ -95,7 +95,7 @@ This was measured, not inferred. With the operator check in `OperatorAccessLogRe
 | payment's audit suite | **14 pass** — `OperatorFilter` refuses the customer before the code runs |
 | order's `customerCannotReadTheAccessLog` | **fails** — nothing else refuses |
 
-Not fixed here, because adding a default-deny filter to a service with eight existing endpoints is a
+Not fixed here, because adding a default-deny filter to a service with seven existing endpoints is a
 security-posture change that deserves its own argument and its own test pass — not a paragraph in a
 change about reading a table. It is named, and a test asserts the guard it currently depends on.
 
@@ -138,3 +138,5 @@ named rather than left to be rediscovered.
   an abandoned refund has no button ([ADR 0031](0031-when-nobody-answers.md)); the publisher still
   stores a hard-coded sampled flag. Per-service ports remain published, which is
   [ADR 0022](0022-being-signed-in-is-not-being-a-warehouse.md)'s decision rather than an omission.
+
+*The order service was since given its filter by [ADR 0035](0035-nothing-behind-the-check.md), which had to extend the path matcher first: two of its endpoints could not be expressed as rules at all. (That paragraph said eight endpoints; there are seven.)*
