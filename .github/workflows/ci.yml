@@ -246,8 +246,20 @@ jobs:
           set -e
           G=http://localhost:18080
           curl -s $G/api/v1/products/00000000-0000-4000-8000-0000000000ff | grep -q '"code":"NOT_FOUND"'
-          # A wrong verb is a 405, not a 500 — the whole platform shares one handler for this.
-          curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $TOKEN" $G/api/v1/orders | grep -qE '^40[45]$'
+          # A wrong verb is a 405, not a 500 -- the whole platform shares one handler for this.
+          #
+          # Probed on catalog, which has no OperatorFilter. This used to probe /api/v1/orders, and
+          # since ADR 0035 that service is default-deny: an unlisted method is not a listed one, so
+          # the filter answers 403 before Spring ever decides the verb is wrong. Relaxing the
+          # assertion to accept 403 would have kept CI green while no longer proving the 405 path
+          # works at all, so the probe moved to a service the filter does not intercept.
+          VERB=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE $G/api/v1/categories)
+          echo "wrong verb on an unfiltered service: $VERB"
+          test "$VERB" = "405"
+          # And the order service refuses it earlier, which is the filter working rather than a gap.
+          DENIED=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $TOKEN" $G/api/v1/orders)
+          echo "wrong verb on a default-deny service: $DENIED"
+          test "$DENIED" = "403"
 
       - name: A client cannot say who it is
         run: |
