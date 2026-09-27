@@ -61,6 +61,62 @@ class OperatorFilterTest {
 	}
 
 	@Nested
+	@DisplayName("a star in the middle is one segment, anywhere")
+	class MidPathStar {
+
+		private static final String HISTORY = "GET /api/v1/orders/*/history";
+
+		// Before the matcher understood a mid-path star this rule fell through to equality and
+		// matched nothing, which in a default-deny filter left the endpoint operator-only however
+		// carefully it was listed -- and the list looked correct. That is why ADR 0035 exists, and it
+		// is a fact about the old matcher rather than something assertable against this one.
+		@Test
+		void matchesTheSegmentItStandsFor() {
+			assertThat(OperatorFilter.matches(HISTORY, "GET", "/api/v1/orders/FC-12345/history"))
+					.isTrue();
+		}
+
+		@Test
+		@DisplayName("and not two segments where one was asked for")
+		void doesNotMatchDeeper() {
+			assertThat(OperatorFilter.matches(HISTORY, "GET", "/api/v1/orders/a/b/history")).isFalse();
+		}
+
+		@Test
+		@DisplayName("and not a shorter or longer path")
+		void lengthMustAgree() {
+			assertThat(OperatorFilter.matches(HISTORY, "GET", "/api/v1/orders/FC-1")).isFalse();
+			assertThat(OperatorFilter.matches(HISTORY, "GET", "/api/v1/orders/FC-1/history/extra"))
+					.isFalse();
+		}
+
+		@Test
+		@DisplayName("and not an empty segment, which names nothing")
+		void doesNotMatchEmptySegment() {
+			assertThat(OperatorFilter.matches(HISTORY, "GET", "/api/v1/orders//history")).isFalse();
+		}
+
+		@Test
+		@DisplayName("the method qualifier still applies")
+		void methodStillApplies() {
+			assertThat(OperatorFilter.matches(HISTORY, "POST", "/api/v1/orders/FC-1/history")).isFalse();
+			assertThat(OperatorFilter.matches("POST /api/v1/orders/*/cancel", "POST",
+					"/api/v1/orders/FC-1/cancel")).isTrue();
+		}
+
+		@Test
+		@DisplayName("adding this changed nothing about a trailing star")
+		void trailingStarIsUntouched() {
+			// The branch was added after every branch that existed before it, so a rule that already
+			// matched cannot be diverted into it. This is the rule that keeps the movement ledger
+			// closed, asserted again here because it is the one that would hurt to lose.
+			assertThat(OperatorFilter.matches(STOCK, "GET", "/api/v1/inventory/stock/OPS-1")).isTrue();
+			assertThat(OperatorFilter.matches(STOCK, "GET", "/api/v1/inventory/stock/OPS-1/movements"))
+					.isFalse();
+		}
+	}
+
+	@Nested
 	@DisplayName("the method qualifier")
 	class Method {
 

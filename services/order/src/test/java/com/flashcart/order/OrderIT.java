@@ -913,6 +913,23 @@ class OrderIT {
 	}
 
 	@Test
+	@DisplayName("the service is default-deny: an unlisted path is closed without a token")
+	void unlistedPathsAreClosed() {
+		// ADR 0035. The filter's public and signed-in lists name six paths between them; anything else
+		// requires an operator, so a path nobody has classified is refused rather than served. Asserted
+		// on a path that does not exist, because that is the case the direction of the list decides:
+		// an unknown path reaches the filter before it reaches a 404.
+		// The token only, dropped the way signedInAs drops it; @BeforeEach puts it back for the next
+		// test. Clearing everything would work today and would break whenever a second interceptor
+		// arrives.
+		rest.getRestTemplate().getInterceptors().removeIf(i -> i instanceof BearerToken);
+		ResponseEntity<Map> refused = rest.getForEntity("/api/v1/orders/anything/whatever", Map.class);
+
+		assertThat(refused.getStatusCode())
+				.isIn(HttpStatus.UNAUTHORIZED, HttpStatus.FORBIDDEN);
+	}
+
+	@Test
 	@DisplayName("a signed-in customer cannot read the access log, and nothing but this holds that")
 	void customerCannotReadTheAccessLog() {
 		signedInAs("audit-reader-b");

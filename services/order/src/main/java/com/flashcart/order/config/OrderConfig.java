@@ -9,14 +9,19 @@ import io.swagger.v3.oas.models.info.Info;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;
+import java.util.List;
+
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.CallerIdentity;
 import com.flashcart.common.security.CustomerDataAccess;
 import com.flashcart.common.security.OperatorAccessLog;
 import com.flashcart.common.security.OperatorAccessLogReader;
+import com.flashcart.common.security.OperatorFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.core.Ordered;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.context.annotation.Configuration;
@@ -96,6 +101,51 @@ public class OrderConfig {
 	public OperatorAccessLogReader operatorAccessLogReader(JdbcTemplate jdbc, CallerIdentity caller,
 			OperatorAccessLog accessLog) {
 		return new OperatorAccessLogReader(jdbc, caller, accessLog);
+	}
+
+	/**
+	 * Default-deny, at last.
+	 *
+	 * <p>This service was the one without it. ADR 0022 gave the filter to inventory, payment and
+	 * shipping because those had no authentication at all; this one already authenticated in every
+	 * handler, so it was passed over — and that was never a decision anybody wrote down. The effect
+	 * was that a new endpoint here shipped open unless its author remembered, which
+	 * {@code AccessLogController} demonstrated: the check inside {@code OperatorAccessLogReader} was
+	 * the only thing refusing a customer, and nothing behind it would have noticed if it went. See
+	 * ADR 0035.
+	 *
+	 * <p><strong>The middle list is the dangerous one</strong>, exactly as {@link OperatorFilter} says:
+	 * passing the filter is not the whole check there, and every path in it is a path whose handler
+	 * must decide whose row it is. All five do — {@code OrderController} resolves ownership and returns
+	 * 404 rather than 403 so an order number cannot be probed (ADR 0021). The filter does not replace
+	 * those checks and could not: a path does not say who owns what is behind it.
+	 *
+	 * <p>Two of these rules could not have been written before this change. The history and cancel
+	 * rules end in a literal segment after their star, and the matcher understood a star only at
+	 * the end of a rule — so they would have fallen through to string equality, matched nothing, and
+	 * left both endpoints operator-only while the list looked correct.
+	 */
+	@Bean
+	public FilterRegistrationBean<OperatorFilter> operatorFilter(AccessTokens tokens) {
+		FilterRegistrationBean<OperatorFilter> registration = new FilterRegistrationBean<>(
+				new OperatorFilter(tokens, List.of(
+						"/api/v1/order/_info",
+						// Compose health-checks this, and a container that cannot answer is a
+						// container that restarts forever.
+						"/actuator/**"),
+						List.of(
+								"POST /api/v1/orders",
+								"GET /api/v1/orders",
+								"GET /api/v1/orders/*",
+								"GET /api/v1/orders/*/history",
+								// A customer may stop their own order. Whether an operator may stop
+								// somebody else's is ADR 0028's open question, and the handler's
+								// ownership check is what keeps it closed either way.
+								"POST /api/v1/orders/*/cancel")));
+		registration.addUrlPatterns("/*");
+		// After the correlation id filter, so a refusal is still traceable to a request.
+		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);
+		return registration;
 	}
 
 	@Bean
