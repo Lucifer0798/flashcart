@@ -129,3 +129,5 @@ it is the right cost: a harness that could seed anonymously was exercising a hol
 - Cancelled paid orders do not return their units to stock
   ([ADR 0030](0030-cancelling-a-paid-order.md)); an abandoned refund has no button
   ([ADR 0031](0031-when-nobody-answers.md)); the publisher still stores a hard-coded sampled flag.
+
+*The user service was since argued through in [ADR 0037](0037-the-last-one-unargued.md) and given the same filter. Nothing was open there, but an anonymous write to `/me` answered 400 rather than 401, which the filter fixes by refusing before the body is bound.*

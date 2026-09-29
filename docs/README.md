@@ -76,6 +76,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0034](adr/0034-who-read-my-data.md) — Who read my data
 - [0035](adr/0035-nothing-behind-the-check.md) — Nothing behind the check
 - [0036](adr/0036-anyone-could-set-the-price.md) — Anyone could set the price
+- [0037](adr/0037-the-last-one-unargued.md) — The last one unargued
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)

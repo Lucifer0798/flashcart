@@ -1,6 +1,7 @@
 package com.flashcart.user;
 
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 import com.flashcart.common.security.AccessTokens;
@@ -52,6 +53,48 @@ class UserIT {
 
 	@Autowired
 	private UserRepository users;
+
+	// --- who may reach what (ADR 0037) -------------------------------------------------------------
+
+	@Test
+	@DisplayName("the two doors that must be open still are")
+	void registerAndSignInNeedNoToken() {
+		// You cannot present a token to obtain your first token. These are the only writes in the
+		// platform that must stay unauthenticated, and the filter lists them by exact path and method
+		// so nothing else under /api/v1/users inherits it.
+		String email = uniqueEmail();
+		assertThat(register(email)).isNotNull();
+		assertThat(signIn(email, "a-sufficiently-long-password")).isNotBlank();
+	}
+
+	@Test
+	@DisplayName("but your own account needs your own token")
+	void meNeedsAToken() {
+		for (HttpMethod method : List.of(HttpMethod.GET, HttpMethod.PATCH)) {
+			assertThat(rest.exchange("/api/v1/users/me", method, HttpEntity.EMPTY, String.class)
+					.getStatusCode())
+					.as("anonymous %s /me", method)
+					.isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+		assertThat(rest.exchange("/api/v1/users/me/addresses", HttpMethod.POST, HttpEntity.EMPTY,
+				String.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+	}
+
+	@Test
+	@DisplayName("and a path nobody classified is closed, which is the whole point of the change")
+	void unlistedPathsAreClosed() {
+		// This service had nothing open when the filter was added -- every endpoint was either
+		// necessarily public or already checked its own token. The filter is here for the direction
+		// of the list: the sixth endpoint ships closed rather than open. This is that property, and
+		// it is the only thing in this suite that would notice if the filter were removed.
+		assertThat(rest.exchange("/api/v1/users/anything", HttpMethod.GET, HttpEntity.EMPTY,
+				String.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+		// Including a POST that merely looks like the public one. Register is listed by exact path,
+		// so nothing below it is covered by that rule.
+		assertThat(rest.exchange("/api/v1/users/bulk", HttpMethod.POST, HttpEntity.EMPTY,
+				String.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+	}
 
 	private static String uniqueEmail() {
 		return "shopper-" + UUID.randomUUID() + "@example.test";
