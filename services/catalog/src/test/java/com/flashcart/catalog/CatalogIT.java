@@ -141,6 +141,32 @@ class CatalogIT {
 	}
 
 	@Test
+	@DisplayName("repricing is the catalogue role's work, and not the warehouse's")
+	void catalogWritesNeedTheCatalogRole() {
+		CategoryResponse category = createCategory(unique("Audio"));
+
+		// The reason ADR 0038 exists. Closing this surface in ADR 0036 folded eleven writes into the
+		// one role that also receives stock and dispatches parcels, so the account that marks a parcel
+		// dispatched could reprice every product in the shop.
+		assertThat(rest.exchange("/api/v1/products", HttpMethod.POST,
+				new HttpEntity<>(newProduct(category.id(), unique("WH").toUpperCase()),
+						withRoles(AccessTokens.WAREHOUSE)), Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.FORBIDDEN);
+
+		assertThat(rest.exchange("/api/v1/products", HttpMethod.POST,
+				new HttpEntity<>(newProduct(category.id(), unique("CAT").toUpperCase()),
+						withRoles(AccessTokens.CATALOG)), Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.CREATED);
+
+		// And OPERATOR still passes, which is what makes the split additive rather than a migration:
+		// no token that worked before this change stopped working because of it.
+		assertThat(rest.exchange("/api/v1/products", HttpMethod.POST,
+				new HttpEntity<>(newProduct(category.id(), unique("OPS").toUpperCase()),
+						withRoles(AccessTokens.OPERATOR)), Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.CREATED);
+	}
+
+	@Test
 	@DisplayName("a write the filter has no rule for is closed, not opened")
 	void unlistedWritesAreClosed() {
 		// Default-deny is the property, so every verb that is not a listed GET needs the role --
@@ -159,6 +185,18 @@ class CatalogIT {
 	private HttpHeaders anonymous() {
 		HttpHeaders headers = new HttpHeaders();
 		headers.set(HttpHeaders.AUTHORIZATION, "");
+		return headers;
+	}
+
+	private CreateProductRequest newProduct(UUID categoryId, String sku) {
+		return new CreateProductRequest(sku, "Role probe " + sku, null, "probe", categoryId,
+				new BigDecimal("19.00"), "USD", ProductStatus.ACTIVE, null);
+	}
+
+	private HttpHeaders withRoles(String... roles) {
+		HttpHeaders headers = new HttpHeaders();
+		headers.set(HttpHeaders.AUTHORIZATION,
+				"Bearer " + tokens.issue("staff-1", "staff@example.test", List.of(roles)));
 		return headers;
 	}
 

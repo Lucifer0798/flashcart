@@ -131,3 +131,5 @@ it is the right cost: a harness that could seed anonymously was exercising a hol
   ([ADR 0031](0031-when-nobody-answers.md)); the publisher still stores a hard-coded sampled flag.
 
 *The user service was since argued through in [ADR 0037](0037-the-last-one-unargued.md) and given the same filter. Nothing was open there, but an anonymous write to `/me` answered 400 rather than 401, which the filter fixes by refusing before the body is bound.*
+
+*The role question this record deferred was taken up by [ADR 0038](0038-one-role-did-too-much.md): folding catalog's writes into OPERATOR left one role authorising thirty-one endpoints, which is now split into WAREHOUSE, CATALOG and SUPPORT with OPERATOR as a superset.*

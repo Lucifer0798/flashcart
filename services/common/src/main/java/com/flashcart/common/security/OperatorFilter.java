@@ -3,6 +3,7 @@ package com.flashcart.common.security;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import com.flashcart.common.web.CorrelationId;
 import jakarta.servlet.FilterChain;
@@ -62,6 +63,7 @@ public class OperatorFilter extends OncePerRequestFilter {
 	private final AccessTokens tokens;
 	private final List<String> publicPaths;
 	private final List<String> signedInPaths;
+	private final Map<String, List<String>> roleScopedPaths;
 
 	/**
 	 * @param publicPaths what needs no token at all. Each entry is optionally prefixed with an HTTP
@@ -90,9 +92,30 @@ public class OperatorFilter extends OncePerRequestFilter {
 	 *                      user's row is not returned.
 	 */
 	public OperatorFilter(AccessTokens tokens, List<String> publicPaths, List<String> signedInPaths) {
+		this(tokens, publicPaths, signedInPaths, Map.of());
+	}
+
+	/**
+	 * @param roleScopedPaths paths that a <em>narrower</em> role is enough for, keyed by role name.
+	 *                        Same pattern syntax again. A path listed here is reachable by a token
+	 *                        carrying that role, or by {@link AccessTokens#OPERATOR}, which is a
+	 *                        superset of every role.
+	 *                        <p>This category can only ever <strong>widen</strong> access relative to
+	 *                        the operator default, never narrow it: everything not listed in any of the
+	 *                        three lists still requires {@code OPERATOR}, exactly as before. So adding
+	 *                        a rule here cannot accidentally close something, and forgetting to add one
+	 *                        leaves a path operator-only — the safe direction, as in every other list.
+	 *                        <p>What it does <em>not</em> do is take anything away from the accounts
+	 *                        that already hold {@code OPERATOR}. Least privilege starts when somebody
+	 *                        is granted {@code WAREHOUSE} rather than {@code OPERATOR}, which is a
+	 *                        deliberate UPDATE against the user row. See ADR 0038.
+	 */
+	public OperatorFilter(AccessTokens tokens, List<String> publicPaths, List<String> signedInPaths,
+			Map<String, List<String>> roleScopedPaths) {
 		this.tokens = tokens;
 		this.publicPaths = List.copyOf(publicPaths);
 		this.signedInPaths = List.copyOf(signedInPaths);
+		this.roleScopedPaths = Map.copyOf(roleScopedPaths);
 	}
 
 	@Override
@@ -107,6 +130,13 @@ public class OperatorFilter extends OncePerRequestFilter {
 
 		String token = AccessTokens.bearer(request.getHeader(HttpHeaders.AUTHORIZATION)).orElse(null);
 		if (tokens.isOperator(token)) {
+			chain.doFilter(request, response);
+			return;
+		}
+
+		// A narrower role, where one is enough. Checked after OPERATOR rather than instead of it, so
+		// this is purely additional: a request that would already have been allowed still is.
+		if (token != null && hasScopedRole(token, request.getMethod(), path)) {
 			chain.doFilter(request, response);
 			return;
 		}
@@ -128,6 +158,13 @@ public class OperatorFilter extends OncePerRequestFilter {
 		HttpStatus status = signedIn ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED;
 		log.info("Refused {} {} with {}", request.getMethod(), path, status.value());
 		write(request, response, status);
+	}
+
+	/** True when some role's rule list covers this request and the token carries that role. */
+	private boolean hasScopedRole(String token, String method, String path) {
+		return roleScopedPaths.entrySet().stream()
+				.filter(scoped -> scoped.getValue().stream().anyMatch(rule -> matches(rule, method, path)))
+				.anyMatch(scoped -> tokens.hasAnyRole(token, scoped.getKey()));
 	}
 
 	private boolean isPublic(String method, String path) {

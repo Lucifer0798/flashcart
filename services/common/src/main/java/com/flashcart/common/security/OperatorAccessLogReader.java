@@ -75,7 +75,7 @@ public class OperatorAccessLogReader {
 	 */
 	public List<Entry> forCustomer(String authorization, String customerId, int limit) {
 		String operatorId = caller.require(authorization);
-		if (!caller.isOperator(authorization)) {
+		if (!caller.maySeeAnotherCustomer(authorization)) {
 			// 403 rather than 404. The oracle argument that makes ORDER numbers a 404 does not apply:
 			// this path is fixed and published, and the customer id in the query is one the caller
 			// already knew. Refusing plainly is the honest answer. See ADR 0022.

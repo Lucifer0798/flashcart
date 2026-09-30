@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.OperatorAccessRetention;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -95,6 +96,30 @@ class OperatorAccessLogIT extends AbstractPaymentIT {
 		assertThat(log.getStatusCode()).isEqualTo(HttpStatus.OK);
 		// One entry: this request. Nothing had looked at them before it.
 		assertThat(log.getBody()).hasSize(1);
+	}
+
+	@Test
+	@DisplayName("the audit log is support's to read, and not the warehouse's")
+	void accessLogNeedsTheSupportRole() {
+		String path = "/api/v1/payment/_access-log?customerId=audit-reader-roles";
+
+		assertThat(rest.exchange(path, HttpMethod.GET,
+				new HttpEntity<>(rolesOf(AccessTokens.WAREHOUSE)), Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.FORBIDDEN);
+
+		// SUPPORT reaches it, and the capability check inside OperatorAccessLogReader agrees -- if the
+		// filter allowed the role and the code still demanded OPERATOR, this would be a 403 from one
+		// layer deeper and look identical from here.
+		assertThat(rest.exchange(path, HttpMethod.GET,
+				new HttpEntity<>(rolesOf(AccessTokens.SUPPORT)), List.class).getStatusCode())
+				.isEqualTo(HttpStatus.OK);
+	}
+
+	private HttpHeaders rolesOf(String... roles) {
+		HttpHeaders headers = new HttpHeaders();
+		headers.set(HttpHeaders.AUTHORIZATION,
+				"Bearer " + tokens.issue("staff-1", "staff@example.test", java.util.List.of(roles)));
+		return headers;
 	}
 
 	// --- what an operator read is recorded (ADR 0025) -------------------------------------------------

@@ -43,3 +43,4 @@ when someone revisits it in six months.
 | [0035](0035-nothing-behind-the-check.md) | Nothing behind the check | Accepted |
 | [0036](0036-anyone-could-set-the-price.md) | Anyone could set the price | Accepted |
 | [0037](0037-the-last-one-unargued.md) | The last one unargued | Accepted |
+| [0038](0038-one-role-did-too-much.md) | One role did too much | Accepted |

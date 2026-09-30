@@ -2,6 +2,7 @@ package com.flashcart.shipping.config;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.CallerIdentity;
@@ -105,7 +106,15 @@ public class ShippingSecurityConfig {
 						List.of(
 								"GET /api/v1/shipments",
 								"GET /api/v1/shipments/*",
-								"GET /api/v1/shipments/order/*")));
+								"GET /api/v1/shipments/order/*"),
+						Map.of(
+								// Moving a parcel is warehouse work.
+								AccessTokens.WAREHOUSE, List.of(
+										"POST /api/v1/shipments/*/dispatch",
+										"POST /api/v1/shipments/*/deliver"),
+								// Reading who looked at a customer's parcels is not. This is the split that
+								// matters most in this service: the warehouse needs neither.
+								AccessTokens.SUPPORT, List.of("GET /api/v1/shipping/_access-log"))));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);

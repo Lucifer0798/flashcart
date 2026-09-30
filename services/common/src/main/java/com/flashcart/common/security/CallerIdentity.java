@@ -49,4 +49,21 @@ public class CallerIdentity {
 	public boolean isOperator(String authorization) {
 		return AccessTokens.bearer(authorization).filter(tokens::isOperator).isPresent();
 	}
+
+	/**
+	 * Whether the caller may see a customer who is not them.
+	 *
+	 * <p>Named for the capability rather than the role, because the capability is what every caller
+	 * actually wants to ask and the roles that grant it are free to change. {@link AccessTokens#SUPPORT}
+	 * is the role for this work; {@link AccessTokens#OPERATOR} still carries it, being a superset.
+	 *
+	 * <p>Deliberately not {@code isSupport}. A method named after a role invites the next reader to add
+	 * a second one beside it and check both at every call site, which is how a permission model becomes
+	 * a list of role names scattered through handlers. See ADR 0038.
+	 */
+	public boolean maySeeAnotherCustomer(String authorization) {
+		return AccessTokens.bearer(authorization)
+				.filter(token -> tokens.hasAnyRole(token, AccessTokens.SUPPORT))
+				.isPresent();
+	}
 }

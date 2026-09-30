@@ -2,6 +2,7 @@ package com.flashcart.inventory.config;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.OperatorFilter;
@@ -43,7 +44,12 @@ public class InventorySecurityConfig {
 						// a count of a public product carries nobody's personal data. Everything else here --
 						// creating stock, receiving, adjusting, the ledger, reservations -- either moves
 						// quantities or reveals the whole catalogue's position, and needs an operator.
-						"GET /api/v1/inventory/stock/*")));
+						"GET /api/v1/inventory/stock/*"),
+						List.of(),
+						// All fifteen. Nothing this service exposes beyond public availability is anything but
+						// warehouse work, so the whole of it is one role's -- which is why /** is honest here
+						// and would not be anywhere else. See ADR 0038.
+						Map.of(AccessTokens.WAREHOUSE, List.of("/api/v1/inventory/**"))));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);

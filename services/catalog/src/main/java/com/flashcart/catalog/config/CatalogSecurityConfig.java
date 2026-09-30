@@ -2,6 +2,7 @@ package com.flashcart.catalog.config;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.OperatorFilter;
@@ -80,7 +81,21 @@ public class CatalogSecurityConfig {
 						// Nothing is merely signed-in here. A shopper has no business editing a
 						// catalogue, so the middle category -- the dangerous one, where passing the
 						// filter is not the whole check -- is deliberately empty.
-						List.of()));
+						List.of(),
+						// Eleven writes, all of them this role's work. OPERATOR still passes, being a
+						// superset, so nothing that worked yesterday stops -- see ADR 0038.
+						Map.of(AccessTokens.CATALOG, List.of(
+								"POST /api/v1/products",
+								"PUT /api/v1/products/*",
+								"DELETE /api/v1/products/*",
+								"POST /api/v1/categories",
+								"PUT /api/v1/categories/*",
+								"DELETE /api/v1/categories/*",
+								"POST /api/v1/flash-sales",
+								"POST /api/v1/flash-sales/*/items",
+								"DELETE /api/v1/flash-sales/*/items/*",
+								"POST /api/v1/flash-sales/*/schedule",
+								"POST /api/v1/flash-sales/*/cancel"))));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);
