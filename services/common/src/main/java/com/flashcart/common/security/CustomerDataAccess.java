@@ -54,7 +54,7 @@ public class CustomerDataAccess {
 		if (ownerId.equals(subject)) {
 			return true;
 		}
-		if (!caller.isOperator(authorization)) {
+		if (!caller.maySeeAnotherCustomer(authorization)) {
 			return false;
 		}
 		accessLog.record(subject, action, resourceId, ownerId);
@@ -78,7 +78,7 @@ public class CustomerDataAccess {
 		if (requestedCustomerId == null || requestedCustomerId.equals(subject)) {
 			return subject;
 		}
-		if (!caller.isOperator(authorization)) {
+		if (!caller.maySeeAnotherCustomer(authorization)) {
 			throw new OperatorRequiredException(
 					"Only an operator may read another customer's " + resource);
 		}

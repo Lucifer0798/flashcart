@@ -2,6 +2,7 @@ package com.flashcart.payment.config;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.CallerIdentity;
@@ -105,7 +106,10 @@ public class PaymentSecurityConfig {
 						List.of(
 								"GET /api/v1/payments",
 								"GET /api/v1/payments/*",
-								"GET /api/v1/payments/order/*")));
+								"GET /api/v1/payments/order/*"),
+						// The audit reader is support's work, not the warehouse's. Reading another customer's
+						// charges goes through CustomerDataAccess, which checks the same capability in code.
+						Map.of(AccessTokens.SUPPORT, List.of("GET /api/v1/payment/_access-log"))));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);

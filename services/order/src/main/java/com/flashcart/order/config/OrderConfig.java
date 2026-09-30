@@ -10,6 +10,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;
 import java.util.List;
+import java.util.Map;
 
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.common.security.CallerIdentity;
@@ -141,7 +142,8 @@ public class OrderConfig {
 								// A customer may stop their own order. Whether an operator may stop
 								// somebody else's is ADR 0028's open question, and the handler's
 								// ownership check is what keeps it closed either way.
-								"POST /api/v1/orders/*/cancel")));
+								"POST /api/v1/orders/*/cancel"),
+						Map.of(AccessTokens.SUPPORT, List.of("GET /api/v1/order/_access-log"))));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);

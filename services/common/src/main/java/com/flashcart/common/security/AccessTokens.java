@@ -64,6 +64,22 @@ public final class AccessTokens {
 	 */
 	public static final String OPERATOR = "OPERATOR";
 
+	/**
+	 * Receives stock, adjusts a ledger, dispatches a parcel.
+	 *
+	 * <p>The three roles below exist because closing the last of the open write surfaces
+	 * (ADR 0036) left one role authorising thirty-one endpoints across six services — so the account
+	 * that marks a parcel dispatched could also reprice every product and read any customer's audit
+	 * trail. See ADR 0038.
+	 */
+	public static final String WAREHOUSE = "WAREHOUSE";
+
+	/** Creates and prices products, runs flash sales. */
+	public static final String CATALOG = "CATALOG";
+
+	/** Reads another customer's orders, payments, parcels, and who has looked at them. */
+	public static final String SUPPORT = "SUPPORT";
+
 	private static final String ROLES_CLAIM = "roles";
 
 	private static final String ISSUER = "flashcart-user";
@@ -155,12 +171,40 @@ public final class AccessTokens {
 	 * questions a caller can accidentally ask only half of. A single answer cannot be half-checked.
 	 */
 	public boolean isOperator(String token) {
+		return hasAnyRole(token, OPERATOR);
+	}
+
+	/**
+	 * True when the token is valid and carries any of {@code roles} — or {@link #OPERATOR}, which is a
+	 * superset of all of them.
+	 *
+	 * <p>{@code OPERATOR} implying the narrower roles is the decision that makes ADR 0038 additive
+	 * rather than a migration: every token already issued keeps working, and separation begins when
+	 * somebody is granted {@code WAREHOUSE} instead of {@code OPERATOR} rather than the moment this
+	 * ships. Worth being plain about — this method makes least privilege <em>possible</em>; it does not
+	 * impose it.
+	 *
+	 * <p>One method rather than "is it valid" plus "does it have a role", for the reason
+	 * {@link #isOperator} gives: those are two questions a caller can accidentally ask only half of.
+	 */
+	public boolean hasAnyRole(String token, String... roles) {
 		try {
 			if (subject(token).isEmpty()) {
 				return false;
 			}
-			Object roles = SignedJWT.parse(token).getJWTClaimsSet().getClaim(ROLES_CLAIM);
-			return roles instanceof List<?> list && list.contains(OPERATOR);
+			Object claim = SignedJWT.parse(token).getJWTClaimsSet().getClaim(ROLES_CLAIM);
+			if (!(claim instanceof List<?> held)) {
+				return false;
+			}
+			if (held.contains(OPERATOR)) {
+				return true;
+			}
+			for (String role : roles) {
+				if (held.contains(role)) {
+					return true;
+				}
+			}
+			return false;
 		}
 		catch (ParseException ex) {
 			return false;
