@@ -78,6 +78,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0036](adr/0036-anyone-could-set-the-price.md) — Anyone could set the price
 - [0037](adr/0037-the-last-one-unargued.md) — The last one unargued
 - [0038](adr/0038-one-role-did-too-much.md) — One role did too much
+- [0039](adr/0039-nothing-ever-ran-without-operator.md) — Nothing ever ran without OPERATOR
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)

@@ -44,3 +44,4 @@ when someone revisits it in six months.
 | [0036](0036-anyone-could-set-the-price.md) | Anyone could set the price | Accepted |
 | [0037](0037-the-last-one-unargued.md) | The last one unargued | Accepted |
 | [0038](0038-one-role-did-too-much.md) | One role did too much | Accepted |
+| [0039](0039-nothing-ever-ran-without-operator.md) | Nothing ever ran without OPERATOR | Accepted |
