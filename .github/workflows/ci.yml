@@ -143,6 +143,21 @@ jobs:
           echo "OPERATOR=$OPERATOR" >> $GITHUB_ENV
           echo "got an operator token"
 
+      - name: Sign in as each narrow role, so nothing runs with more than it needs
+        run: |
+          set -e
+          # ADR 0039. The operator token above still exists because one probe genuinely needs it: a
+          # wrong verb on a path no role rule covers, which must stay operator-only to prove that
+          # unlisted paths still are. Everything else below holds exactly its own privileges, which is
+          # the only arrangement where a rule scoped to the wrong role fails instead of being masked
+          # by OPERATOR's superset.
+          for ROLE in warehouse catalog support; do
+            ROLE_TOKEN=$(OPERATOR_EMAIL="$ROLE@flashcart.local" ./scripts/operator-token.sh)
+            test -n "$ROLE_TOKEN"
+            echo "$(echo "$ROLE" | tr '[:lower:]' '[:upper:]')=$ROLE_TOKEN" >> $GITHUB_ENV
+          done
+          echo "got WAREHOUSE, CATALOG and SUPPORT tokens"
+
       - name: Sign in, because a checkout now needs a shopper
         run: |
           set -e
@@ -163,7 +178,7 @@ jobs:
           set -e
           G=http://localhost:18080
           SKU=AUD-HP-001
-          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR" \
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" \
             -d "{\"sku\":\"$SKU\",\"initialQuantity\":10,\"reason\":\"CI\"}" > /dev/null
 
           # 202: the order exists, but whether it got the stock is settled on the bus.
@@ -199,10 +214,10 @@ jobs:
           # The simulated provider declines any amount ending in .13, and the catalog seed has a
           # product priced at 24.99 -> so use one whose total lands on .13 via quantity.
           SKU=CI-DECLINE-$(date +%s)
-          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR" \
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" \
             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI decline\"}" > /dev/null
           CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
-          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR" \
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $CATALOG" \
             -d "{\"sku\":\"$SKU\",\"name\":\"CI Decline Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.13,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
           curl -s -o /tmp/d.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
@@ -257,6 +272,8 @@ jobs:
           # An operator token settles it for good: the filter passes, so whatever answers is the
           # shared handler rather than the guard in front of it. PUT on a collection is mapped
           # nowhere.
+          # Deliberately the operator token: PUT on the collection matches no role rule, so it is
+          # still operator-only -- which is the unlisted-path property, asserted in passing.
           VERB=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "Authorization: Bearer $OPERATOR" $G/api/v1/products)
           echo "wrong verb, past the filter: $VERB"
           test "$VERB" = "405"
@@ -280,9 +297,9 @@ jobs:
           set -e
           G=http://localhost:18080
           SKU=CI-AUTH-$(date +%s)
-          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI auth\"}" > /dev/null
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI auth\"}" > /dev/null
           CAT=$(curl -sf $G/api/v1/categories | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"name\":\"CI auth probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":19.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $CATALOG"             -d "{\"sku\":\"$SKU\",\"name\":\"CI auth probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":19.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
           # 1. No token, no checkout.
           CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/orders             -H 'Content-Type: application/json'             -d "{\"idempotencyKey\":\"ci-anon-$(date +%s%N)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}")
@@ -333,7 +350,7 @@ jobs:
           test "$ANON" = "401"
 
           # The operator can.
-          OPS=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock             -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI ops\"}")
+          OPS=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock             -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI ops\"}")
           echo "operator receiving stock: $OPS"
           test "$OPS" = "201"
 
@@ -382,7 +399,7 @@ jobs:
             Q="$G/api/v1/$RES?customerId=ci-does-not-matter"
             SHOP=$(curl -s -o /dev/null -w '%{http_code}' "$Q" -H "Authorization: Bearer $TOKEN")
             NONE=$(curl -s -o /dev/null -w '%{http_code}' "$Q")
-            OK=$(curl -s -o /dev/null -w '%{http_code}' "$Q" -H "Authorization: Bearer $OPERATOR")
+            OK=$(curl -s -o /dev/null -w '%{http_code}' "$Q" -H "Authorization: Bearer $SUPPORT")
             echo "$RES -- shopper: $SHOP  anonymous: $NONE  operator: $OK"
             test "$SHOP" = "403"
             test "$NONE" = "401"
@@ -468,7 +485,7 @@ jobs:
           test "$DISPATCH" = "403"
 
           # The operator is unaffected by any of this.
-          OPS=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OPERATOR" "$G/api/v1/payments/order/$ORDER")
+          OPS=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $SUPPORT" "$G/api/v1/payments/order/$ORDER")
           echo "operator reading it:               $OPS"
           test "$OPS" = "200"
 
@@ -485,7 +502,7 @@ jobs:
 
           # The same again in shipping's own database, because the table is per service and a
           # service that forgot to write to it would look exactly like one with nothing to record.
-          SOPS=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $OPERATOR" "$G/api/v1/shipments/order/$ORDER")
+          SOPS=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $SUPPORT" "$G/api/v1/shipments/order/$ORDER")
           test "$SOPS" = "200"
           SAUDIT=$(docker compose exec -T postgres psql -U flashcart -d flashcart_shipping -tAc             "select count(*) from operator_access_log where resource_id = '$ORDER'" | tr -d '[:space:]')
           echo "shipping audit rows for $ORDER:    $SAUDIT"
@@ -565,7 +582,7 @@ jobs:
           # neither.
           G=http://localhost:18080
           SKU=CI-RUSH-$(date +%s)
-          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI rush\"}" > /dev/null
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI rush\"}" > /dev/null
 
           docker run --rm --network flashcart_default             -v "$PWD/load/scripts:/scripts:ro"             -e GATEWAY=http://gateway:8080 -e SKU="$SKU" -e VUS=100 -e ITERATIONS=300 -e TOKEN="$OPERATOR"             grafana/k6:0.56.0 run /scripts/flash-sale.js > /tmp/k6.txt 2>&1 || true
           grep -E 'reservations_(granted|refused|shed|errored)' /tmp/k6.txt || true

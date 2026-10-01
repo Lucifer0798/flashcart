@@ -26,8 +26,17 @@ FAILURES=0
 #
 # The order calls were missed when ADR 0021 landed, so every scenario that places one has been
 # getting 401 since then -- the harness was reporting a broken platform and nobody was running it.
-TOKEN=$("$ROOT/scripts/operator-token.sh")
-AUTH="Authorization: Bearer $TOKEN"
+# Two narrow accounts and deliberately no OPERATOR, since ADR 0039. Each scenario now holds exactly
+# the privileges its work needs, which is the only arrangement in which a rule scoped to the wrong role
+# fails here instead of being masked by OPERATOR satisfying everything.
+#
+# The order calls use the warehouse token rather than a third account because placing and reading your
+# own order needs only a signed-in caller -- the ownership check resolves the token's own subject. A
+# warehouse account is as good a shopper as any, and it cannot touch the catalogue.
+WH_TOKEN=$(OPERATOR_EMAIL="warehouse@flashcart.local" "$ROOT/scripts/operator-token.sh")
+WH_AUTH="Authorization: Bearer $WH_TOKEN"
+CAT_TOKEN=$(OPERATOR_EMAIL="catalog@flashcart.local" "$ROOT/scripts/operator-token.sh")
+CAT_AUTH="Authorization: Bearer $CAT_TOKEN"
 
 say()  { echo ""; echo "=== $* ==="; }
 step() { echo "  -> $*"; }
@@ -46,7 +55,7 @@ seed() { # sku, qty -> stock plus a priced product so orders can be placed
 	# over a sku that does not exist, and the refusals that followed would read as the platform
 	# breaking under chaos. Telling those two apart is the entire point of this harness.
 	code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock \
-		-H 'Content-Type: application/json' -H "$AUTH" \
+		-H 'Content-Type: application/json' -H "$WH_AUTH" \
 		-d "{\"sku\":\"$sku\",\"initialQuantity\":$qty,\"reason\":\"chaos\"}")
 	if [ "$code" != "201" ]; then
 		echo "  FAIL: could not seed $sku (http $code) -- every scenario below would be meaningless" >&2
@@ -63,7 +72,7 @@ seed() { # sku, qty -> stock plus a priced product so orders can be placed
 	# The operator header is not optional since ADR 0036: catalog writes need the role now,
 	# and without it this seed 401s and every scenario below measures the seed, not the platform.
 	code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST $G/api/v1/products \
-		-H 'Content-Type: application/json' -H "$AUTH" \
+		-H 'Content-Type: application/json' -H "$CAT_AUTH" \
 		-d "{\"sku\":\"$sku\",\"name\":\"Chaos probe $sku\",\"categoryId\":\"$cat\",\"basePrice\":19.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}")
 	if [ "$code" != "201" ]; then
 		fail "could not seed a product for $sku (http $code) -- the scenario below would be measuring the seed, not the platform"
@@ -72,12 +81,12 @@ seed() { # sku, qty -> stock plus a priced product so orders can be placed
 }
 
 place() { # sku, qty -> order number
-	curl -s --max-time 15 -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "$AUTH" \
+	curl -s --max-time 15 -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "$WH_AUTH" \
 		-d "{\"idempotencyKey\":\"chaos-$(date +%s%N)\",\"lines\":[{\"sku\":\"$1\",\"quantity\":$2}]}" \
 		| sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p'
 }
 
-status_of() { curl -sf --max-time 10 -H "$AUTH" "$G/api/v1/orders/$1" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
+status_of() { curl -sf --max-time 10 -H "$WH_AUTH" "$G/api/v1/orders/$1" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
 
 settle() { # order, seconds -> final status, or the last one seen
 	local order="$1" limit="${2:-60}" i s
@@ -115,7 +124,7 @@ redis_dies() {
 	seed "$sku" 20
 
 	step "warming the gate with one reservation"
-	curl -sf --max-time 10 -X POST $G/api/v1/inventory/reservations -H 'Content-Type: application/json' -H "$AUTH" \
+	curl -sf --max-time 10 -X POST $G/api/v1/inventory/reservations -H 'Content-Type: application/json' -H "$WH_AUTH" \
 		-d "{\"reservationKey\":\"warm-$sku\",\"customerId\":\"c\",\"ttlSeconds\":900,\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}" > /dev/null
 
 	step "killing redis"
@@ -125,7 +134,7 @@ redis_dies() {
 	local granted=0 refused=0 other=0 code
 	for i in $(seq 1 40); do
 		code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/reservations \
-			-H 'Content-Type: application/json' -H "$AUTH" \
+			-H 'Content-Type: application/json' -H "$WH_AUTH" \
 			-d "{\"reservationKey\":\"nored-$sku-$i\",\"customerId\":\"c$i\",\"ttlSeconds\":900,\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}")
 		case "$code" in 201) granted=$((granted+1));; 409) refused=$((refused+1));; *) other=$((other+1));; esac
 	done
@@ -256,7 +265,7 @@ catalog_dies() {
 	local before; before=$(psql_o "select count(*) from orders")
 	local body code
 	body=$(curl -s --max-time 15 -o /tmp/chaos-cat.json -w '%{http_code}' -X POST $G/api/v1/orders \
-		-H 'Content-Type: application/json' -H "$AUTH" \
+		-H 'Content-Type: application/json' -H "$WH_AUTH" \
 		-d "{\"idempotencyKey\":\"chaos-cat-$(date +%s%N)\",\"lines\":[{\"sku\":\"$sku\",\"quantity\":1}]}")
 	code="$body"
 	echo "     checkout returned $code: $(head -c 120 /tmp/chaos-cat.json)"

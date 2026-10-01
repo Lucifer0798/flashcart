@@ -34,7 +34,7 @@ class SeededOperatorCheckTest {
 	void presentWithoutTheProfile() {
 		when(users.existsById(SeededOperatorCheck.DEVELOPMENT_OPERATOR)).thenReturn(true);
 
-		assertThat(check().isUnexpectedlyPresent()).isTrue();
+		assertThat(check().unexpectedlyPresent()).containsExactly("operator@flashcart.local");
 	}
 
 	@Test
@@ -42,7 +42,7 @@ class SeededOperatorCheckTest {
 	void presentUnderDemoIsExpected() {
 		when(users.existsById(SeededOperatorCheck.DEVELOPMENT_OPERATOR)).thenReturn(true);
 
-		assertThat(check("demo").isUnexpectedlyPresent()).isFalse();
+		assertThat(check("demo").unexpectedlyPresent()).isEmpty();
 	}
 
 	@Test
@@ -50,7 +50,7 @@ class SeededOperatorCheckTest {
 	void demoAmongOthers() {
 		when(users.existsById(SeededOperatorCheck.DEVELOPMENT_OPERATOR)).thenReturn(true);
 
-		assertThat(check("prod", "demo", "metrics").isUnexpectedlyPresent()).isFalse();
+		assertThat(check("prod", "demo", "metrics").unexpectedlyPresent()).isEmpty();
 	}
 
 	@Test
@@ -58,13 +58,38 @@ class SeededOperatorCheckTest {
 	void absentIsFine() {
 		when(users.existsById(SeededOperatorCheck.DEVELOPMENT_OPERATOR)).thenReturn(false);
 
-		assertThat(check().isUnexpectedlyPresent()).isFalse();
+		assertThat(check().unexpectedlyPresent()).isEmpty();
+	}
+
+	@Test
+	@DisplayName("every seeded account is reported, not only the operator")
+	void reportsAllSeededAccounts() {
+		// ADR 0039 added one account per narrow role, carrying the same published password. Keyed on
+		// the operator's id alone, this check would have gone on naming the operator while three more
+		// credentials sat beside it unmentioned -- which is the failure the class exists to prevent.
+		SeededOperatorCheck.SEEDED_ACCOUNTS.keySet().forEach(id ->
+				when(users.existsById(id)).thenReturn(true));
+
+		assertThat(check().unexpectedlyPresent())
+				.containsExactly("catalog@flashcart.local", "operator@flashcart.local",
+						"support@flashcart.local", "warehouse@flashcart.local");
+	}
+
+	@Test
+	@DisplayName("and one of them alone is still a finding")
+	void oneNonOperatorAccountIsEnough() {
+		when(users.existsById(SeededOperatorCheck.DEVELOPMENT_OPERATOR)).thenReturn(false);
+		when(users.existsById(java.util.UUID.fromString("00000000-0000-4000-8000-00000000000a")))
+				.thenReturn(true);
+
+		// The case the old single-id check could not see at all.
+		assertThat(check().unexpectedlyPresent()).containsExactly("warehouse@flashcart.local");
 	}
 
 	@Test
 	@DisplayName("under demo it does not even ask the database")
 	void demoSkipsTheQuery() {
-		check("demo").isUnexpectedlyPresent();
+		check("demo").unexpectedlyPresent();
 
 		// Not an optimisation -- it is why a compose stack cannot trip this on a slow first boot.
 		verify(users, never()).existsById(any());

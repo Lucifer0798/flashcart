@@ -130,3 +130,5 @@ still does everything, which is correct for a development seed and would not be 
   ([ADR 0030](0030-cancelling-a-paid-order.md)); an abandoned refund has no button
   ([ADR 0031](0031-when-nobody-answers.md)); the publisher still stores a hard-coded sampled flag;
   catalog has no `_info` endpoint.
+
+*The split was since exercised by [ADR 0039](0039-nothing-ever-ran-without-operator.md), which seeded an account per role and moved CI and the chaos harness onto them. Until then every check minted its own token and every harness held OPERATOR, so a rule scoped to the wrong role would have been masked by the superset.*
