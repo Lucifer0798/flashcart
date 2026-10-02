@@ -19,6 +19,7 @@ import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.RequestPayment;
 import com.flashcart.common.event.message.ReserveInventory;
+import com.flashcart.common.event.message.ReturnInventory;
 import com.flashcart.common.order.OrderStatus;
 import com.flashcart.common.web.CorrelationId;
 import com.flashcart.order.api.dto.OrderResponse;
@@ -531,6 +532,8 @@ class OrderIT {
 		// The customer has the goods, so the charge stands. A refund here would be a free parcel.
 		assertThat(events.published(RefundPayment.class)).isFalse();
 		assertThat(events.published(OrderCancelled.class)).isFalse();
+		// And the units are in a van, not on a shelf. Returning them here would sell them twice.
+		assertThat(events.published(ReturnInventory.class)).isFalse();
 
 		// The attempt and its reason survive in the history, which is what answers "I cancelled this
 		// and it arrived anyway".
@@ -640,6 +643,8 @@ class OrderIT {
 		// And crucially not yet. Refunding on the request rather than on shipping's answer would pay
 		// out for parcels that turn out to have already left.
 		assertThat(events.published(RefundPayment.class)).isFalse();
+		// Nor the goods, for the same reason: they may be about to leave in a van.
+		assertThat(events.published(ReturnInventory.class)).isFalse();
 	}
 
 	@Test
@@ -659,6 +664,11 @@ class OrderIT {
 		// unique index and invite a provider to read the refund as a repeat of the capture.
 		assertThat(refund.idempotencyKey()).isEqualTo("refund:" + order.id());
 		assertThat(events.published(OrderCancelled.class)).isTrue();
+
+		// And the goods go back on the shelf, keyed exactly as the commit that took them off was.
+		// Before ADR 0040 every cancelled paid order shrank the sale by its quantity for good.
+		assertThat(events.require(ReturnInventory.class).reservationKey())
+				.isEqualTo(order.id().toString());
 	}
 
 	@Test

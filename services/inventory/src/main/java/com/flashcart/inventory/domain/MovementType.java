@@ -20,5 +20,9 @@ public enum MovementType {
 	EXPIRED,
 
 	/** A sale completed. Decreases both on-hand and reserved: the units have physically left. */
-	COMMITTED
+	COMMITTED,
+
+	/** A completed sale was undone before the goods left. Increases on-hand; the exact inverse of
+	 *  COMMITTED except that reserved is untouched, because nothing is held any more. */
+	RETURNED
 }

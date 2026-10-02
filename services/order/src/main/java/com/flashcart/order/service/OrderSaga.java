@@ -20,6 +20,7 @@ import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.RequestPayment;
 import com.flashcart.common.event.message.ReserveInventory;
+import com.flashcart.common.event.message.ReturnInventory;
 import com.flashcart.common.order.OrderStateMachine;
 import com.flashcart.common.order.OrderStatus;
 import com.flashcart.common.web.CorrelationId;
@@ -67,8 +68,8 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <pre>
  * customer cancels a SHIPPED order ─▶ CANCELLATION_REQUESTED ─▶ CancelShipment
- *                     (ShipmentCancelled)          ─▶ RefundPayment ─▶ CANCELLED
- *                     (ShipmentCancellationRefused) ─▶ back to SHIPPED, nothing refunded
+ *                     (ShipmentCancelled)          ─▶ RefundPayment + ReturnInventory ─▶ CANCELLED
+ *                     (ShipmentCancellationRefused) ─▶ DISPATCHED or DELIVERED, nothing refunded
  * </pre>
  *
  * <p>Every other compensation here is started by a service reporting a failure. This one is started
@@ -163,6 +164,17 @@ public class OrderSaga {
 				"refund:" + order.getId()));
 	}
 
+	/**
+	 * Put a cancelled sale's units back on the shelf: on-hand, the sale's allocation and the
+	 * customer's cap, every counter the commit moved. The inverse of {@code CommitInventory}, keyed
+	 * the same way. See ADR 0040.
+	 */
+	public void returnInventory(Order order, String reason) {
+		events.publish(Topics.INVENTORY_COMMANDS, new ReturnInventory(
+				EventMetadata.of(ReturnInventory.TYPE, order.getId()),
+				order.getReservationKey(), reason));
+	}
+
 	public void releaseInventory(Order order, String reason) {
 		events.publish(Topics.INVENTORY_COMMANDS, new ReleaseInventory(
 				EventMetadata.of(ReleaseInventory.TYPE, order.getId()),
@@ -252,13 +264,15 @@ public class OrderSaga {
 			// Refunding on the request rather than on this answer would pay out for parcels that
 			// turned out to have already left.
 			requestRefund(order, "order cancelled after payment");
+			// And the goods, for the same reason and on the same answer. Returning them on the
+			// request would put units on the shelf that were about to be in a van.
+			//
+			// Neither waits for the other. The money and the units are independent facts, and a
+			// refund the provider refuses (ADR 0031 retries it) is no reason to keep goods off a
+			// shelf they are demonstrably sitting on.
+			returnInventory(order, "order cancelled after payment");
 			publishCancelled(order, "CANCELLED_AFTER_PAYMENT");
 		});
-
-		// Note what does not happen here: the committed units are not returned to stock. Putting
-		// them back raises questions this saga is not the place to answer -- whether they rejoin the
-		// flash sale's allocation or general stock, and whether the customer's per-sale cap is
-		// refunded with them. ADR 0030 records that as open rather than guessing at it.
 	}
 
 	@Transactional

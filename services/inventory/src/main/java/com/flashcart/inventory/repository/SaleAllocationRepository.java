@@ -67,4 +67,25 @@ public interface SaleAllocationRepository extends JpaRepository<SaleAllocation, 
 			""", nativeQuery = true)
 	int commitReserved(@Param("flashSaleId") UUID flashSaleId, @Param("sku") String sku,
 			@Param("quantity") int quantity);
+
+	/**
+	 * Give sold units back to the sale they were sold from.
+	 *
+	 * <p>The allocation is a cap on the warehouse's one pool, not a separate bin of stock, so this is
+	 * the only way returned units can be offered at the sale price again. Leaving
+	 * {@code committed_units} alone would let the units back into the warehouse while the sale stayed
+	 * permanently short of what it advertised. See ADR 0040.
+	 */
+	@Modifying
+	@Query(value = """
+			update sale_allocations
+			   set committed_units = committed_units - :quantity,
+			       version         = version + 1,
+			       updated_at      = now()
+			 where flash_sale_id = :flashSaleId
+			   and sku           = :sku
+			   and committed_units >= :quantity
+			""", nativeQuery = true)
+	int returnCommitted(@Param("flashSaleId") UUID flashSaleId, @Param("sku") String sku,
+			@Param("quantity") int quantity);
 }

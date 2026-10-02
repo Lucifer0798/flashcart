@@ -20,6 +20,7 @@ public record ReservationResponse(
 		Instant expiresAt,
 		Instant committedAt,
 		Instant releasedAt,
+		Instant returnedAt,
 		List<Line> lines,
 		Instant createdAt) {
 
@@ -33,6 +34,6 @@ public record ReservationResponse(
 		return new ReservationResponse(reservation.getId(), reservation.getReservationKey(),
 				reservation.getCustomerId(), reservation.getFlashSaleId(), reservation.getStatus(),
 				reservation.getExpiresAt(), reservation.getCommittedAt(), reservation.getReleasedAt(),
-				lines, reservation.getCreatedAt());
+				reservation.getReturnedAt(), lines, reservation.getCreatedAt());
 	}
 }

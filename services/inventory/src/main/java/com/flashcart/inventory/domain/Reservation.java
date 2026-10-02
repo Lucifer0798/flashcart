@@ -60,6 +60,9 @@ public class Reservation {
 	@Column(name = "released_at")
 	private Instant releasedAt;
 
+	@Column(name = "returned_at")
+	private Instant returnedAt;
+
 	@OneToMany(mappedBy = "reservation", cascade = CascadeType.ALL, orphanRemoval = true)
 	private List<ReservationLine> lines = new ArrayList<>();
 
@@ -140,6 +143,14 @@ public class Reservation {
 
 	public void setReleasedAt(Instant releasedAt) {
 		this.releasedAt = releasedAt;
+	}
+
+	public Instant getReturnedAt() {
+		return returnedAt;
+	}
+
+	public void setReturnedAt(Instant returnedAt) {
+		this.returnedAt = returnedAt;
 	}
 
 	public List<ReservationLine> getLines() {

@@ -7,11 +7,14 @@ import java.util.UUID;
 import com.flashcart.common.event.EventMetadata;
 import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
+import com.flashcart.common.event.message.CommitInventory;
 import com.flashcart.common.event.message.InventoryReservationFailed;
+import com.flashcart.common.event.message.InventoryReturned;
 import com.flashcart.common.event.message.InventoryReserved;
 import com.flashcart.common.event.message.OrderLineMessage;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.ReserveInventory;
+import com.flashcart.common.event.message.ReturnInventory;
 import com.flashcart.inventory.api.dto.CreateStockRequest;
 import com.flashcart.inventory.api.dto.StockResponse;
 import org.junit.jupiter.api.DisplayName;
@@ -214,5 +217,76 @@ class InventoryKafkaIT {
 		await().pollDelay(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(10)).untilAsserted(() ->
 				assertThat(rest.getForObject("/api/v1/inventory/stock/" + sku, StockResponse.class)
 						.reserved()).isEqualTo(2));
+	}
+
+	private void reserveAndWait(String sku, UUID orderId, int quantity) {
+		publisher.publish(Topics.INVENTORY_COMMANDS, new ReserveInventory(
+				EventMetadata.of(ReserveInventory.TYPE, orderId),
+				orderId.toString(), "cust-kafka", null,
+				List.of(new OrderLineMessage(sku, quantity))));
+		await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+				assertThat(rest.getForObject("/api/v1/inventory/stock/" + sku, StockResponse.class)
+						.reserved()).isEqualTo(quantity));
+	}
+
+	private int outboxCount(String eventType, UUID orderId) {
+		return jdbc.queryForObject(
+				"select count(*) from outbox_messages where event_type = ? and payload->>'reservationKey' = ?",
+				Integer.class, eventType, orderId.toString());
+	}
+
+	@Test
+	@DisplayName("a return command crosses the broker and puts sold units back on the shelf")
+	void returnRoundTrip() {
+		String sku = stock(6);
+		UUID orderId = UUID.randomUUID();
+		reserveAndWait(sku, orderId, 2);
+
+		publisher.publish(Topics.INVENTORY_COMMANDS, new CommitInventory(
+				EventMetadata.of(CommitInventory.TYPE, orderId), orderId.toString()));
+		await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+				assertThat(rest.getForObject("/api/v1/inventory/stock/" + sku, StockResponse.class)
+						.onHand()).isEqualTo(4));
+
+		publisher.publish(Topics.INVENTORY_COMMANDS, new ReturnInventory(
+				EventMetadata.of(ReturnInventory.TYPE, orderId), orderId.toString(), "cancelled after payment"));
+
+		await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+			StockResponse position = rest.getForObject("/api/v1/inventory/stock/" + sku, StockResponse.class);
+			assertThat(position.onHand()).isEqualTo(6);
+			assertThat(position.available()).isEqualTo(6);
+			assertThat(outboxCount(InventoryReturned.TYPE, orderId)).isEqualTo(1);
+		});
+	}
+
+	@Test
+	@DisplayName("a return that overtakes its commit waits for it rather than being lost")
+	void returnThatOvertakesTheCommitIsRetried() throws InterruptedException {
+		String sku = stock(5);
+		UUID orderId = UUID.randomUUID();
+		reserveAndWait(sku, orderId, 3);
+
+		// The return first. Each command type has its own consumer group, so a lagging commit group
+		// can genuinely let this happen: the order saw the commit sent long ago, inventory has not
+		// yet acted on it. The hold is still HELD, and the return is refused and retried.
+		publisher.publish(Topics.INVENTORY_COMMANDS, new ReturnInventory(
+				EventMetadata.of(ReturnInventory.TYPE, orderId), orderId.toString(), "cancelled after payment"));
+		// Long enough for the first attempt to have been refused, well inside the retry budget.
+		Thread.sleep(1_000);
+		assertThat(rest.getForObject("/api/v1/inventory/stock/" + sku, StockResponse.class).reserved())
+				.as("the early return must leave the hold for the commit").isEqualTo(3);
+
+		publisher.publish(Topics.INVENTORY_COMMANDS, new CommitInventory(
+				EventMetadata.of(CommitInventory.TYPE, orderId), orderId.toString()));
+
+		// Committed (on hand 2) and then returned (back to 5). Had the refused attempt kept its
+		// processed_events claim, the retry would have been skipped as a duplicate and this would
+		// settle at 2 for good.
+		await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+			StockResponse position = rest.getForObject("/api/v1/inventory/stock/" + sku, StockResponse.class);
+			assertThat(position.onHand()).isEqualTo(5);
+			assertThat(position.reserved()).isZero();
+			assertThat(outboxCount(InventoryReturned.TYPE, orderId)).isEqualTo(1);
+		});
 	}
 }

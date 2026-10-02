@@ -624,8 +624,8 @@ place order ─▶ CREATED
    ├─◀ ShipmentCreated            ─▶ SHIPPED
    ├─◀ ShipmentDispatched         ─▶ DISPATCHED (no cancellation edge out)
    ├─◀ ShipmentDelivered          ─▶ DELIVERED  (terminal; the only successful ending)
-   ├─◀ ShipmentCancelled          ─▶ RefundPayment ─▶ CANCELLED
-   └─◀ ShipmentCancellationRefused ─▶ back to SHIPPED, nothing refunded
+   ├─◀ ShipmentCancelled          ─▶ RefundPayment + ReturnInventory ─▶ CANCELLED
+   └─◀ ShipmentCancellationRefused ─▶ DISPATCHED or DELIVERED, nothing refunded
 ```
 
 Two things in that diagram carry most of the weight.

@@ -4,6 +4,7 @@ import com.flashcart.common.event.ConsumerFactories;
 import com.flashcart.common.event.message.CommitInventory;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.ReserveInventory;
+import com.flashcart.common.event.message.ReturnInventory;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
 import org.springframework.context.annotation.Bean;
@@ -21,7 +22,11 @@ import org.springframework.kafka.core.KafkaTemplate;
 @Configuration
 public class InventoryKafkaConfig {
 
-	/** All three listeners share one group, so this service sees each command exactly once. */
+	/**
+	 * The prefix every listener's group is built from. Each listener appends its own suffix: two
+	 * listeners in one group would split the topic's partitions between them, and each would then
+	 * silently skip the other's messages on the partitions it was handed.
+	 */
 	static final String GROUP = "flashcart-inventory";
 
 	@Bean
@@ -43,5 +48,12 @@ public class InventoryKafkaConfig {
 			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
 			KafkaTemplate<String, Object> template) {
 		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, CommitInventory.class, template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, ReturnInventory> returnInventoryFactory(
+			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
+			KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, ReturnInventory.class, template);
 	}
 }

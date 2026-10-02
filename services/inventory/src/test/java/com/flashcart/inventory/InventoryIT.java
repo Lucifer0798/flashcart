@@ -13,7 +13,10 @@ import com.flashcart.inventory.api.dto.ReservationResponse;
 import com.flashcart.inventory.api.dto.ReserveRequest;
 import com.flashcart.inventory.api.dto.StockResponse;
 import com.flashcart.inventory.domain.ReservationStatus;
+import com.flashcart.common.error.ConflictException;
+import com.flashcart.inventory.domain.Reservation;
 import com.flashcart.inventory.service.ReservationExpiryService;
+import com.flashcart.inventory.service.ReservationService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -25,12 +28,16 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** The inventory lifecycle against a real PostgreSQL, driven over real HTTP. */
 class InventoryIT extends AbstractInventoryIT {
 
 	@Autowired
 	private ReservationExpiryService expiryService;
+
+	@Autowired
+	private ReservationService reservationService;
 
 	// --- the happy path --------------------------------------------------------------------------
 
@@ -381,6 +388,136 @@ class InventoryIT extends AbstractInventoryIT {
 		ResponseEntity<Map> third = reserveExpectingFailure(uniqueKey("order"), "cust-1", saleId, sku, 1);
 		assertThat(third.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
 		assertThat(third.getBody()).containsEntry("code", "CUSTOMER_LIMIT_EXCEEDED");
+	}
+
+	// --- undoing a sale ----------------------------------------------------------------------------
+	//
+	// Driven through the service rather than over HTTP: a return has no endpoint. It is the inventory
+	// half of cancelling a paid order, and arrives only as a command from the order saga once shipping
+	// has confirmed the goods never left. See ADR 0040.
+
+	private ReservationResponse commit(ReservationResponse held) {
+		return rest.postForObject("/api/v1/inventory/reservations/" + held.reservationKey() + "/commit",
+				null, ReservationResponse.class);
+	}
+
+	@Test
+	@DisplayName("undoing a sale puts the units back on the shelf, and the ledger says why")
+	void returnPutsUnitsBack() {
+		String sku = uniqueSku("AUD");
+		createStock(sku, 10);
+		ReservationResponse held = reserve(uniqueKey("order"), "cust-1", sku, 3).getBody();
+		commit(held);
+		assertStock(sku, 7, 0);
+
+		Reservation returned = reservationService.returnToStock(held.reservationKey(), "cancelled after payment")
+				.orElseThrow();
+
+		assertThat(returned.getStatus()).isEqualTo(ReservationStatus.RETURNED);
+		assertThat(returned.getReturnedAt()).isNotNull();
+		// Kept, not cleared: the sale did happen, and the record says both that and that it was undone.
+		assertThat(returned.getCommittedAt()).isNotNull();
+		// Available at once. Nothing holds them, so reserved does not move.
+		assertStock(sku, 10, 0);
+
+		@SuppressWarnings("unchecked")
+		List<Map<String, Object>> movements = (List<Map<String, Object>>) rest.getForEntity(
+				"/api/v1/inventory/stock/" + sku + "/movements", Map.class).getBody().get("content");
+		assertThat(movements).extracting(m -> m.get("type"))
+				.containsExactlyInAnyOrder("RECEIVED", "RESERVED", "COMMITTED", "RETURNED");
+		// Still replays to the balance, which is the ledger's whole claim.
+		assertThat(movements.stream().mapToInt(m -> (int) m.get("onHandDelta")).sum()).isEqualTo(10);
+		assertThat(movements.stream().mapToInt(m -> (int) m.get("reservedDelta")).sum()).isZero();
+	}
+
+	@Test
+	@DisplayName("a returned unit rejoins the sale it was sold from, and its buyer may buy again")
+	void returnRestoresTheSaleAndTheCap() {
+		String sku = uniqueSku("AUD");
+		UUID saleId = UUID.randomUUID();
+		createStock(sku, 100);
+		// One unit in the sale and one per customer, so each of the two counters a return must give
+		// back fails with its own code if it does not.
+		allocate(saleId, sku, 1, 1);
+		ReservationResponse bought = reserve(uniqueKey("order"), "cust-1", saleId, sku, 1, null).getBody();
+		commit(bought);
+
+		ResponseEntity<Map> soldOut = reserveExpectingFailure(uniqueKey("order"), "cust-2", saleId, sku, 1);
+		assertThat(soldOut.getBody()).containsEntry("code", "SALE_ALLOCATION_EXHAUSTED");
+
+		reservationService.returnToStock(bought.reservationKey(), "cancelled after payment");
+
+		AllocationResponse allocation = rest.getForObject(
+				"/api/v1/inventory/allocations/" + saleId + "/" + sku, AllocationResponse.class);
+		assertThat(allocation.committedUnits()).isZero();
+		assertThat(allocation.remainingUnits()).isEqualTo(1);
+
+		// The same customer, the same sale, one unit. Refused with SALE_ALLOCATION_EXHAUSTED if the
+		// unit went back to the warehouse but not the sale; with CUSTOMER_LIMIT_EXCEEDED if the cap still
+		// counted a unit they no longer own.
+		// Read as a raw map so a refusal fails this test by naming its code, rather than by failing
+		// to deserialise an error body into a reservation.
+		ResponseEntity<Map> again = reserveExpectingFailure(uniqueKey("order"), "cust-1", saleId, sku, 1);
+		assertThat(again.getStatusCode()).as("refused with %s", again.getBody()).isEqualTo(HttpStatus.CREATED);
+		assertThat(again.getBody()).containsEntry("status", "HELD");
+	}
+
+	@Test
+	@DisplayName("returning twice puts the units back once")
+	void returnIsIdempotent() {
+		String sku = uniqueSku("AUD");
+		UUID saleId = UUID.randomUUID();
+		createStock(sku, 10);
+		allocate(saleId, sku, 5, 5);
+		ReservationResponse held = reserve(uniqueKey("order"), "cust-1", saleId, sku, 2, null).getBody();
+		commit(held);
+
+		reservationService.returnToStock(held.reservationKey(), "first");
+		Reservation second = reservationService.returnToStock(held.reservationKey(), "second").orElseThrow();
+
+		assertThat(second.getStatus()).isEqualTo(ReservationStatus.RETURNED);
+		assertStock(sku, 10, 0);
+		AllocationResponse allocation = rest.getForObject(
+				"/api/v1/inventory/allocations/" + saleId + "/" + sku, AllocationResponse.class);
+		assertThat(allocation.committedUnits()).isZero();
+	}
+
+	@Test
+	@DisplayName("a hold not yet committed is refused, not settled, so the retry can wait for the commit")
+	void returnBeforeCommitIsRefused() {
+		String sku = uniqueSku("AUD");
+		createStock(sku, 10);
+		ReservationResponse held = reserve(uniqueKey("order"), "cust-1", sku, 3).getBody();
+
+		assertThatThrownBy(() -> reservationService.returnToStock(held.reservationKey(), "too early"))
+				.isInstanceOf(ConflictException.class)
+				.extracting("code").isEqualTo("RESERVATION_NOT_COMMITTED");
+
+		// Untouched, so the commit still in flight can land. Releasing here would have made it fail.
+		assertStock(sku, 10, 3);
+		assertThat(commit(held).status()).isEqualTo(ReservationStatus.COMMITTED);
+	}
+
+	@Test
+	@DisplayName("a hold that was released has nothing to return, and returning it invents no stock")
+	void releasedHoldHasNothingToReturn() {
+		String sku = uniqueSku("AUD");
+		createStock(sku, 10);
+		ReservationResponse held = reserve(uniqueKey("order"), "cust-1", sku, 3).getBody();
+		rest.postForObject("/api/v1/inventory/reservations/" + held.reservationKey() + "/release",
+				Map.of("reason", "payment declined"), ReservationResponse.class);
+
+		Reservation after = reservationService.returnToStock(held.reservationKey(), "confused").orElseThrow();
+
+		assertThat(after.getStatus()).isEqualTo(ReservationStatus.RELEASED);
+		// 10, not 13. The units went back when the hold was released.
+		assertStock(sku, 10, 0);
+	}
+
+	@Test
+	@DisplayName("returning a reservation that never existed is an empty answer, not an exception")
+	void unknownReservationReturnsNothing() {
+		assertThat(reservationService.returnToStock(uniqueKey("never"), "no such order")).isEmpty();
 	}
 
 	// --- warehouse operations ----------------------------------------------------------------------

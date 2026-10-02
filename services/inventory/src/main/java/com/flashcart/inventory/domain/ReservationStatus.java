@@ -13,7 +13,13 @@ public enum ReservationStatus {
 	RELEASED,
 
 	/** The timer won. Units went back into circulation without anyone asking. */
-	EXPIRED;
+	EXPIRED,
+
+	/**
+	 * Was {@link #COMMITTED}, and the sale was undone: a paid order was cancelled and shipping
+	 * confirmed the goods never left. The units are back on the shelf. See ADR 0040.
+	 */
+	RETURNED;
 
 	/** True while this reservation is still holding units out of circulation. */
 	public boolean isHolding() {

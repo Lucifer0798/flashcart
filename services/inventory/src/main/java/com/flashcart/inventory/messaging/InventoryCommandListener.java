@@ -14,10 +14,13 @@ import com.flashcart.common.event.message.InventoryCommitted;
 import com.flashcart.common.event.message.InventoryReleased;
 import com.flashcart.common.event.message.InventoryReservationFailed;
 import com.flashcart.common.event.message.InventoryReserved;
+import com.flashcart.common.event.message.InventoryReturned;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.ReserveInventory;
+import com.flashcart.common.event.message.ReturnInventory;
 import com.flashcart.common.event.outbox.IdempotentHandler;
 import com.flashcart.inventory.domain.Reservation;
+import com.flashcart.inventory.domain.ReservationStatus;
 import com.flashcart.inventory.service.ReservationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -125,6 +128,34 @@ public class InventoryCommandListener {
 			events.publish(Topics.INVENTORY_EVENTS, new InventoryCommitted(
 					EventMetadata.of(InventoryCommitted.TYPE, command.aggregateId()),
 					command.reservationKey()));
+		});
+	}
+
+	/**
+	 * Put a cancelled sale's units back on the shelf.
+	 *
+	 * <p>Unlike a release, a missing reservation is <em>not</em> reported as done. Nothing waits on
+	 * this answer -- the order is already {@code CANCELLED} -- so there is no compensation to unblock,
+	 * and announcing units returned that never were would only mislead whoever reads the topic.
+	 *
+	 * <p>A reservation still held throws, deliberately: the commit for this order has not been
+	 * processed yet, and the retry is what waits for it. See {@link ReservationService#returnToStock}.
+	 */
+	@KafkaListener(topics = Topics.INVENTORY_COMMANDS, containerFactory = "returnInventoryFactory",
+			groupId = InventoryKafkaConfig.GROUP + "-return")
+	public void onReturn(ReturnInventory command) {
+		handler.handle(command, CONSUMER, () -> {
+			Reservation reservation = reservations.returnToStock(command.reservationKey(), command.reason())
+					.orElse(null);
+			if (reservation == null) {
+				log.warn("No reservation {} to return stock for", command.reservationKey());
+				return;
+			}
+			if (reservation.getStatus() == ReservationStatus.RETURNED) {
+				events.publish(Topics.INVENTORY_EVENTS, new InventoryReturned(
+						EventMetadata.of(InventoryReturned.TYPE, command.aggregateId()),
+						command.reservationKey(), command.reason()));
+			}
 		});
 	}
 

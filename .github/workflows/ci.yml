@@ -256,6 +256,66 @@ jobs:
           docker compose logs --tail=100 order payment
           exit 1
 
+      - name: A cancelled paid order gives the money and the units back
+        run: |
+          set -e
+          G=http://localhost:18080
+          # The only flow that crosses order -> shipping -> order -> inventory and payment after the
+          # money has moved. Each service's own tests cover its half; nothing else here checks that
+          # the halves meet. See ADR 0040.
+          SKU=CI-RETURN-$(date +%s)
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" \
+            -d "{\"sku\":\"$SKU\",\"initialQuantity\":3,\"reason\":\"CI return\"}" > /dev/null
+          CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+          # 10.00: no cents the simulated provider treats specially, so it is captured and refunded.
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $CATALOG" \
+            -d "{\"sku\":\"$SKU\",\"name\":\"CI Return Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
+
+          curl -s -o /tmp/r.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+            -d "{\"idempotencyKey\":\"ci-return-$(date +%s)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"
+          ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/r.json)
+          echo "placed $ORDER"
+
+          stock() { curl -sf "$G/api/v1/inventory/stock/$SKU" | grep -o "\"$1\":[0-9]*" | cut -d: -f2; }
+          status() { curl -sf -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
+
+          # SHIPPED is the cancellable state, and nothing dispatches in CI, so the order rests there.
+          for i in $(seq 1 60); do
+            STATUS=$(status)
+            if [ "$STATUS" = "SHIPPED" ]; then break; fi
+            sleep 2
+          done
+          test "$STATUS" = "SHIPPED" || { echo "never reached SHIPPED (at $STATUS)"; exit 1; }
+          # Sold: the unit has left on-hand. Polled, because the commit is its own hop.
+          for i in $(seq 1 15); do
+            if [ "$(stock onHand)" = "2" ]; then break; fi
+            sleep 2
+          done
+          test "$(stock onHand)" = "2" || { echo "commit never landed (onHand=$(stock onHand))"; exit 1; }
+
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$G/api/v1/orders/$ORDER/cancel" \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" -d '{"reason":"CI changed its mind"}')
+          echo "cancel: $CODE"
+          test "$CODE" = "200"
+
+          for i in $(seq 1 60); do
+            STATUS=$(status)
+            if [ "$STATUS" = "CANCELLED" ]; then break; fi
+            sleep 2
+          done
+          test "$STATUS" = "CANCELLED" || { echo "never reached CANCELLED (at $STATUS)"; curl -s -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER/history"; exit 1; }
+
+          # The point of the step. Before ADR 0040 this stayed at 2 for good: refunded, on the
+          # shelf, and counted as sold.
+          for i in $(seq 1 15); do
+            ON_HAND=$(stock onHand); RESERVED=$(stock reserved)
+            if [ "$ON_HAND" = "3" ] && [ "$RESERVED" = "0" ]; then echo "units returned"; exit 0; fi
+            sleep 2
+          done
+          echo "cancelled paid order never returned its unit (onHand=$ON_HAND reserved=$RESERVED)"
+          docker compose logs --tail=100 inventory order shipping
+          exit 1
+
       - name: The shared error envelope survives every hop
         run: |
           set -e

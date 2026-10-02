@@ -67,7 +67,8 @@ public enum OrderStatus {
 	 *
 	 * <p>What that means depends on how the order got here. Before payment, the hold has been given
 	 * back to inventory. After payment, the consignment was cancelled before dispatch and the capture
-	 * has been refunded. The units themselves are <em>not</em> returned to stock; ADR 0030 says why.
+	 * has been refunded and the units returned to stock, to the sale they were sold from and to the
+	 * customer's cap. ADR 0040.
 	 */
 	CANCELLED(true);
 
