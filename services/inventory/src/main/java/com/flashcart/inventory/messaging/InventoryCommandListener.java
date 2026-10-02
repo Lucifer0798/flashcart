@@ -101,13 +101,15 @@ public class InventoryCommandListener {
 			groupId = InventoryKafkaConfig.GROUP + "-release")
 	public void onRelease(ReleaseInventory command) {
 		handler.handle(command, CONSUMER, () -> {
-			try {
-				reservations.release(command.reservationKey(), command.reason());
-			}
-			catch (ResourceNotFoundException ex) {
+			if (reservations.release(command.reservationKey(), command.reason()).isEmpty()) {
 				// Nothing to release. Reported as released anyway: the order service's compensation
 				// must be able to complete, and "there was never a hold" satisfies "there is no hold
 				// now" just as well as an actual release does.
+				//
+				// An Optional rather than a caught ResourceNotFoundException, deliberately. This runs
+				// inside the claim's transaction, and an exception leaving release()'s proxy marks
+				// that transaction rollback-only however it is caught here -- so this publish was
+				// discarded and the command dead-lettered.
 				log.info("No reservation {} to release; reporting it released anyway",
 						command.reservationKey());
 			}
