@@ -35,7 +35,7 @@ when someone revisits it in six months.
 | [0027](0027-the-outbox-hop-is-a-span.md) | The outbox hop is a span | Accepted |
 | [0028](0028-looking-is-not-acting.md) | Looking is not acting | Accepted |
 | [0029](0029-an-operator-read-was-a-silence.md) | An operator read was a silence | Accepted |
-| [0030](0030-cancelling-a-paid-order.md) | Cancelling a paid order | Accepted, amended by 0033 |
+| [0030](0030-cancelling-a-paid-order.md) | Cancelling a paid order | Accepted, amended by 0033 and 0040 |
 | [0031](0031-when-nobody-answers.md) | When nobody answers | Accepted |
 | [0032](0032-an-order-that-can-finish.md) | An order that can finish | Accepted |
 | [0033](0033-shipped-did-not-mean-shipped.md) | SHIPPED did not mean shipped | Accepted |
@@ -45,3 +45,4 @@ when someone revisits it in six months.
 | [0037](0037-the-last-one-unargued.md) | The last one unargued | Accepted |
 | [0038](0038-one-role-did-too-much.md) | One role did too much | Accepted |
 | [0039](0039-nothing-ever-ran-without-operator.md) | Nothing ever ran without OPERATOR | Accepted |
+| [0040](0040-a-cancelled-sale-gives-the-units-back.md) | A cancelled sale gives the units back | Accepted |

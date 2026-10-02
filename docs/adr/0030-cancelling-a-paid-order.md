@@ -1,6 +1,6 @@
 # 0030 — Cancelling a paid order
 
-**Status:** Accepted · **Date:** 2026-09-21 · **Phase:** post-roadmap · **Amended by [ADR 0033](0033-shipped-did-not-mean-shipped.md)**
+**Status:** Accepted · **Date:** 2026-09-21 · **Phase:** post-roadmap · **Amended by [ADR 0033](0033-shipped-did-not-mean-shipped.md) and [ADR 0040](0040-a-cancelled-sale-gives-the-units-back.md)**
 
 ## Context
 
@@ -117,6 +117,8 @@ This is a real cost and it is named here rather than hidden: a cancelled paid or
 consumes a unit that is neither sold nor available. In a flash sale, where the sale is usually over
 by the time anyone cancels, that is tolerable. It would not be in general commerce.
 
+*Reversed by [ADR 0040](0040-a-cancelled-sale-gives-the-units-back.md), which returns the units on the same answer from shipping that triggers the refund. The first question turned out not to be a choice — an allocation is a cap on the one on-hand pool rather than a bin of its own, so undoing the commit returns the units to both — and the cap is restored. The premise that the sale is usually over was also wrong: `SHIPPED`, the cancellable state, is reached seconds after payment.*
+
 ## Alternatives considered
 
 **Leave the edges and add a refund behind them.** The obvious reading of "add refunds", and wrong.
@@ -175,3 +177,5 @@ by [ADR 0033](0033-shipped-did-not-mean-shipped.md). The stock, the ports, the s
 missing audit reader all still stand.*
 
 *The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*
+
+*The stock was since returned by [ADR 0040](0040-a-cancelled-sale-gives-the-units-back.md).*

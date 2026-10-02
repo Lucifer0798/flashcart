@@ -286,6 +286,89 @@ public class ReservationService {
 		return Optional.of(reservation);
 	}
 
+	/**
+	 * Undo a sale whose goods never left: a paid order was cancelled and shipping stopped the parcel.
+	 *
+	 * <p>The exact inverse of {@link #commit}, plus the cap. Every counter a commit moved goes back:
+	 *
+	 * <ul>
+	 *   <li><strong>on-hand</strong> rises by the quantity, so the units are available to the next
+	 *       buyer at once</li>
+	 *   <li><strong>the sale's allocation</strong> gives them back, because an allocation is a cap on
+	 *       this one pool rather than a separate bin. Returning them to "general stock" instead would
+	 *       be the same units on the same shelf with the sale left permanently short of what it
+	 *       advertised</li>
+	 *   <li><strong>the customer's cap</strong> is restored. {@code consumed_units} counts units held
+	 *       or bought, and a cancelled, refunded unit is neither — the customer owns nothing, so
+	 *       counting it would make "one per customer" mean "one attempt per customer"</li>
+	 * </ul>
+	 *
+	 * <p>Idempotent: a reservation already {@code RETURNED} is handed back unchanged. One that was
+	 * released or expired is too, with a warning — its units went back long ago and returning them
+	 * again would invent stock.
+	 *
+	 * <p>A reservation still {@code HELD} is refused rather than settled. That can only mean the
+	 * commit for this order has not been processed yet: commands for one order travel on one
+	 * partition, but each command type has its own consumer group, and groups do not wait for each
+	 * other. Refusing lets the listener retry until the commit lands, after which this succeeds;
+	 * releasing instead would make that commit fail and dead-letter.
+	 *
+	 * @return empty when there is no such reservation. Not a {@link ResourceNotFoundException}: this
+	 *         runs inside the Kafka listener's transaction, and an exception escaping a joined
+	 *         {@code @Transactional} method marks that whole transaction rollback-only even when the
+	 *         caller catches it
+	 * @throws ConflictException when the reservation is still held
+	 */
+	@Transactional
+	public Optional<Reservation> returnToStock(String reservationKey, String reason) {
+		Reservation reservation = reservations.findByReservationKey(reservationKey).orElse(null);
+		if (reservation == null) {
+			return Optional.empty();
+		}
+
+		switch (reservation.getStatus()) {
+			case RETURNED -> {
+				return Optional.of(reservation);
+			}
+			case RELEASED, EXPIRED -> {
+				log.warn("Reservation {} is {}, so its units are already back; nothing to return",
+						reservationKey, reservation.getStatus());
+				return Optional.of(reservation);
+			}
+			case HELD -> throw new ConflictException("RESERVATION_NOT_COMMITTED",
+					"Reservation %s has not been committed yet, so there is no sale to undo"
+							.formatted(reservationKey));
+			case COMMITTED -> {
+				// The only case that moves anything; handled below.
+			}
+		}
+
+		for (ReservationLine line : reservation.getLines()) {
+			// Zero rows here would mean the counters no longer describe the sale that was made. Throw
+			// so the whole return rolls back, rather than putting some lines back and not others.
+			if (stockItems.returnCommitted(line.getSku(), line.getQuantity()) == 0) {
+				throw new IllegalStateException("No stock row for %s to return %d units to"
+						.formatted(line.getSku(), line.getQuantity()));
+			}
+			if (reservation.getFlashSaleId() != null) {
+				if (allocations.returnCommitted(reservation.getFlashSaleId(), line.getSku(),
+						line.getQuantity()) == 0) {
+					throw new IllegalStateException("Sale %s has fewer than %d committed units of %s"
+							.formatted(reservation.getFlashSaleId(), line.getQuantity(), line.getSku()));
+				}
+				customerLimits.release(reservation.getCustomerId(), reservation.getFlashSaleId(),
+						line.getSku(), line.getQuantity());
+			}
+			gate.release(line.getSku(), line.getQuantity());
+			movements.returned(line.getSku(), line.getQuantity(), reservation.getId(),
+					reservation.getFlashSaleId(), reason);
+		}
+
+		reservation.setStatus(ReservationStatus.RETURNED);
+		reservation.setReturnedAt(clock.instant());
+		return Optional.of(reservation);
+	}
+
 	@Transactional(readOnly = true)
 	public Reservation get(String reservationKey) {
 		return require(reservationKey);

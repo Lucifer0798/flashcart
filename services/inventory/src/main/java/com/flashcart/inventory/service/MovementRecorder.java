@@ -46,4 +46,8 @@ public class MovementRecorder {
 	public void committed(String sku, int quantity, UUID reservationId, UUID flashSaleId) {
 		record(sku, MovementType.COMMITTED, -quantity, -quantity, reservationId, flashSaleId, null);
 	}
+
+	public void returned(String sku, int quantity, UUID reservationId, UUID flashSaleId, String reason) {
+		record(sku, MovementType.RETURNED, quantity, 0, reservationId, flashSaleId, reason);
+	}
 }

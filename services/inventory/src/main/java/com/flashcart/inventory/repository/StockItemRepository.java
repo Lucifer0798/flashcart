@@ -89,6 +89,24 @@ public interface StockItemRepository extends JpaRepository<StockItem, UUID> {
 	int commitReserved(@Param("sku") String sku, @Param("quantity") int quantity);
 
 	/**
+	 * Undo a commit: the units never left after all, so they are back on the shelf.
+	 *
+	 * <p>Only {@code on_hand} moves. Nothing is held for these units any more, so {@code reserved} is
+	 * untouched, and they become available to the next buyer the moment this commits. Unguarded,
+	 * because adding to on-hand cannot violate anything; it is the caller's reservation state that
+	 * stops this running twice.
+	 */
+	@Modifying
+	@Query(value = """
+			update stock_items
+			   set on_hand    = on_hand + :quantity,
+			       version    = version + 1,
+			       updated_at = now()
+			 where sku = :sku
+			""", nativeQuery = true)
+	int returnCommitted(@Param("sku") String sku, @Param("quantity") int quantity);
+
+	/**
 	 * The pessimistic alternative to {@link #tryReserve}, kept for the comparison Phase 10 will draw.
 	 *
 	 * <p>{@code SELECT ... FOR UPDATE} serialises every buyer of this SKU behind one row lock held
