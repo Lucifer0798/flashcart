@@ -178,6 +178,18 @@ class InventoryIT extends AbstractInventoryIT {
 		assertStock(sku, 10, 0);
 	}
 
+	@Test
+	@DisplayName("releasing a reservation that does not exist is a 404 over HTTP")
+	void releaseOfUnknownReservationIsNotFound() {
+		// The Kafka listener reports the same case as released; the HTTP caller is told the truth.
+		ResponseEntity<Map> response = rest.postForEntity(
+				"/api/v1/inventory/reservations/" + uniqueKey("ghost") + "/release",
+				Map.of("reason", "never held"), Map.class);
+
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		assertThat(response.getBody()).containsEntry("code", "NOT_FOUND");
+	}
+
 	// --- expiry ----------------------------------------------------------------------------------
 
 	@Test

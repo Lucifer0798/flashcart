@@ -8,6 +8,7 @@ import com.flashcart.common.event.EventMetadata;
 import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
 import com.flashcart.common.event.message.CommitInventory;
+import com.flashcart.common.event.message.InventoryReleased;
 import com.flashcart.common.event.message.InventoryReservationFailed;
 import com.flashcart.common.event.message.InventoryReturned;
 import com.flashcart.common.event.message.InventoryReserved;
@@ -193,6 +194,33 @@ class InventoryKafkaIT {
 			assertThat(position.reserved()).isZero();
 			assertThat(position.available()).isEqualTo(4);
 		});
+	}
+
+	@Test
+	@DisplayName("releasing a reservation that never existed is still answered as released")
+	void releaseOfUnknownReservationIsAnswered() {
+		UUID orderId = UUID.randomUUID();
+		ReleaseInventory command = new ReleaseInventory(
+				EventMetadata.of(ReleaseInventory.TYPE, orderId),
+				orderId.toString(), "never reserved");
+
+		publisher.publish(Topics.INVENTORY_COMMANDS, command);
+
+		// The order service's compensation waits on this answer. The listener meant to give it all
+		// along, but the missing hold used to be signalled by an exception thrown inside the claim's
+		// transaction: catching it did not stop it marking that transaction rollback-only, so the
+		// publish was discarded, the commit failed, and the command dead-lettered after its retries.
+		await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+				assertThat(jdbc.queryForObject(
+						"select count(*) from outbox_messages where event_type = ? and payload->>'reservationKey' = ?",
+						Integer.class, InventoryReleased.TYPE, orderId.toString()))
+						.isEqualTo(1));
+
+		// The claim committed with it -- the same transaction -- so a redelivery is skipped.
+		assertThat(jdbc.queryForObject(
+				"select count(*) from processed_events where event_id = ? and consumer = ?",
+				Integer.class, command.eventId(), "inventory-commands"))
+				.isEqualTo(1);
 	}
 
 	@Test

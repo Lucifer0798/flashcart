@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 
+import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.inventory.api.dto.ReleaseRequest;
 import com.flashcart.inventory.api.dto.ReservationResponse;
 import com.flashcart.inventory.api.dto.ReserveRequest;
@@ -88,7 +89,10 @@ public class ReservationController {
 					+ "a no-op on a hold that already expired on its own.")
 	public ReservationResponse release(@PathVariable String reservationKey,
 			@Valid @RequestBody(required = false) ReleaseRequest request) {
+		// 404 here, unlike the Kafka path, which reports a missing hold as released: a caller naming a
+		// key nobody holds has most likely mistyped it, and nothing is waiting on this to complete.
 		return ReservationResponse.from(
-				reservations.release(reservationKey, request == null ? null : request.reason()));
+				reservations.release(reservationKey, request == null ? null : request.reason())
+						.orElseThrow(() -> ResourceNotFoundException.of("Reservation", reservationKey)));
 	}
 }

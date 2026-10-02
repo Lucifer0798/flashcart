@@ -103,7 +103,8 @@ stay committed. That is today's behaviour before this change, visible rather tha
 joined `@Transactional` method marks the whole transaction rollback-only even when the caller catches
 it. Writing the broker test for this exposed the existing release path doing exactly that: a
 `ReleaseInventory` for a key that never existed is retried and dead-lettered rather than reported
-released, as its comment intends. That is a separate defect and is not fixed here.
+released, as its comment intends. That was fixed separately, by giving `release` the same
+`Optional` shape.
 
 ## Verified
 
@@ -148,8 +149,6 @@ customer who handed it back may buy again.
 
 **Still open.**
 
-- `ReleaseInventory` for a reservation that does not exist dead-letters instead of being reported
-  released (found above).
 - Production accounts still get `OPERATOR`; the load harness still signs in as the operator.
 - Whether a customer may read their own access log, and the operator-scoped view
   ([ADR 0034](0034-who-read-my-data.md)).

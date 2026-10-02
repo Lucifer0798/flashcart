@@ -249,14 +249,23 @@ public class ReservationService {
 	/**
 	 * Give a hold back before its timer runs out — an abandoned basket, a declined card, a cancelled
 	 * order. Idempotent, and a no-op on a hold that already expired on its own.
+	 *
+	 * @return empty when there is no such reservation. Not a {@link ResourceNotFoundException}: the
+	 *         Kafka listener calls this inside its claim's transaction and treats a missing hold as
+	 *         released, and an exception escaping a joined {@code @Transactional} method marks that
+	 *         whole transaction rollback-only even when the caller catches it. The listener's
+	 *         {@code InventoryReleased} would be discarded with it and the command dead-lettered
 	 */
 	@Transactional
-	public Reservation release(String reservationKey, String reason) {
-		Reservation reservation = require(reservationKey);
+	public Optional<Reservation> release(String reservationKey, String reason) {
+		Reservation reservation = reservations.findByReservationKey(reservationKey).orElse(null);
+		if (reservation == null) {
+			return Optional.empty();
+		}
 
 		if (reservation.getStatus() != ReservationStatus.HELD) {
 			// Already settled, one way or another. Releasing again would return the units twice.
-			return reservation;
+			return Optional.of(reservation);
 		}
 
 		for (ReservationLine line : reservation.getLines()) {
@@ -274,7 +283,7 @@ public class ReservationService {
 
 		reservation.setStatus(ReservationStatus.RELEASED);
 		reservation.setReleasedAt(clock.instant());
-		return reservation;
+		return Optional.of(reservation);
 	}
 
 	/**
