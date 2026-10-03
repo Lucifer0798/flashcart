@@ -69,6 +69,10 @@ public class Payment {
 	@Column(name = "refund_attempts", nullable = false)
 	private int refundAttempts;
 
+	/** Who recorded a refund made outside the platform. Null for every other payment. */
+	@Column(name = "refund_settled_by", length = 100)
+	private String refundSettledBy;
+
 	@Version
 	private Long version;
 
@@ -204,6 +208,10 @@ public class Payment {
 
 	public String getRefundReference() {
 		return refundReference;
+	}
+
+	public String getRefundSettledBy() {
+		return refundSettledBy;
 	}
 
 	public int getRefundAttempts() {

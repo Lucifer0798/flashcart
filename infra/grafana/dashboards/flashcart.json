@@ -302,7 +302,7 @@
     {
       "type": "timeseries",
       "title": "Refunds given up on — money owed, nothing trying",
-      "description": "The escalation of the panel beside it. The retry job (ADR 0031) hit its attempt cap, so nothing will attempt this refund again on its own. The payment is still REFUND_FAILED and still refundable — giving up on retrying is not deciding the money is not owed. Pages, unlike the refusal count, because no further automatic step exists.",
+      "description": "The escalation of the panel beside it. The retry job (ADR 0031) hit its attempt cap, so nothing will attempt this refund again on its own. The payment is still REFUND_FAILED and still refundable — giving up on retrying is not deciding the money is not owed. Pages, unlike the refusal count, because no further automatic step exists. 'Still owed now' is what the alert watches: it falls only when an operator records the refund as paid outside the platform (ADR 0041).",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -313,6 +313,10 @@
         {
           "expr": "sum (increase(flashcart_payment_refunds_abandoned_total[1h]))",
           "legendFormat": "abandoned (1h)"
+        },
+        {
+          "expr": "max (flashcart_payment_refunds_abandoned_outstanding)",
+          "legendFormat": "still owed now"
         }
       ]
     },

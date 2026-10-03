@@ -243,6 +243,10 @@ public class PaymentService {
 			// already cancelled and would ignore it.
 			case REFUND_FAILED -> log.warn("Payment {} is REFUND_FAILED; money is still held",
 					payment.getId());
+			// Paid outside the platform and recorded by hand. Nothing consumes a refund event today,
+			// and PaymentRefunded would claim the provider reversed the capture, which it did not.
+			case REFUNDED_OUTSIDE -> log.debug("Payment {} was refunded outside the platform",
+					payment.getId());
 		}
 	}
 
