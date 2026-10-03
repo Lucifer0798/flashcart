@@ -35,7 +35,17 @@ public enum PaymentStatus {
 	 * has been made whole, and only this row disagrees. Folding it into {@code FAILED} would hide money
 	 * the platform owes among charges that never happened.
 	 */
-	REFUND_FAILED;
+	REFUND_FAILED,
+
+	/**
+	 * The money went back, but not through the provider: the retry job gave up, somebody refunded the
+	 * customer outside the platform, and an operator recorded it. Terminal, like {@link #REFUNDED}.
+	 *
+	 * <p>Not folded into {@code REFUNDED}, because the two are reconciled against different things.
+	 * A provider refund appears on the provider's statement under the provider's reference; this one
+	 * appears wherever it was actually paid from, under a reference a person typed. See ADR 0041.
+	 */
+	REFUNDED_OUTSIDE;
 
 	public boolean isSettled() {
 		return this == COMPLETED || this == FAILED;

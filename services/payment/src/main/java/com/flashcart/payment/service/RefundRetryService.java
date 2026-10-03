@@ -44,6 +44,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * has no HTTP endpoint that moves money — "how could this customer have been charged" has a
  * one-word answer, and adding a way to send money out by request would spend that property on a
  * convenience. This job reaches {@code PaymentService.refund} by the same path a command does.
+ *
+ * <p>What happens after it gives up is {@link AbandonedRefunds}: the customer is refunded outside the
+ * platform and an operator records it, which moves no money either. See ADR 0041.
  */
 @Service
 public class RefundRetryService {

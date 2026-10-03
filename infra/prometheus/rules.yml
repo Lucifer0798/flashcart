@@ -77,8 +77,8 @@ groups:
         # not: how many customers cancelled today is a business fact. This one is wrong on its own
         # terms. The provider would not reverse a capture for an order the platform has already told
         # the customer is cancelled, so every other part of the system believes they have been made
-        # whole and only the payments row disagrees. Nothing retries it yet -- ADR 0030 -- so this
-        # alert is currently the only thing that will ever notice.
+        # whole and only the payments row disagrees. The retry job (ADR 0031) tries again; this
+        # warns while it does, and RefundAbandoned below takes over if it gives up.
         expr: increase(flashcart_payment_refunds_total{outcome="refused"}[15m]) > 0
         # No `for`, unlike the alert above. That one waits to distinguish a blip from a broken table;
         # here a single occurrence is already the whole fault, and waiting would only delay it.
@@ -98,15 +98,24 @@ groups:
         # return money it still owes for an order the customer was told is cancelled. Wrong on its
         # own terms in the strongest sense available here: every other part of the system believes
         # this customer has been made whole.
-        expr: increase(flashcart_payment_refunds_abandoned_total[30m]) > 0
+        #
+        # On the outstanding gauge, not on the abandon counter. It used to be
+        # increase(abandoned_total[30m]) > 0, which resolved thirty minutes after giving up whether or
+        # not anybody had paid the customer -- indistinguishable, on the dashboard, from an alert that
+        # cleared because somebody dealt with it. This one resolves when the money is settled and not
+        # before. max(), because every payment instance counts the same table. See ADR 0041.
+        expr: max(flashcart_payment_refunds_abandoned_outstanding) > 0
         for: 0m
         labels: { severity: critical }
         annotations:
-          summary: "payment: gave up refunding a customer; the money is still owed"
+          summary: "payment: {{ $value }} refund(s) given up on; the money is still owed"
           description: >
-            A refund was refused on every attempt up to the cap. Nothing will retry it again, and the
-            payment is still REFUND_FAILED and still refundable -- giving up on retrying is not a
-            decision that the money is not owed. This needs somebody to talk to the provider.
+            A refund was refused on every attempt up to the cap, and nothing will retry it again. The
+            payment is still REFUND_FAILED -- giving up on retrying is not deciding the money is not
+            owed. Refund the customer outside the platform (the provider's console, or a transfer),
+            then record it, which is what resolves this alert:
+            POST /api/v1/payment/_refunds/{orderNumber}/settled-outside {"reference": "..."} as an
+            operator. Find them with:
             select order_number, amount, currency, customer_id, refund_attempts, failure_reason
               from payments where status = 'REFUND_FAILED' order by updated_at desc;
 

@@ -1,6 +1,6 @@
 # 0031 — When nobody answers
 
-**Status:** Accepted · **Date:** 2026-09-22 · **Phase:** post-roadmap · **Finishes work left open by [ADR 0030](0030-cancelling-a-paid-order.md)**
+**Status:** Accepted · **Date:** 2026-09-22 · **Phase:** post-roadmap · **Finishes work left open by [ADR 0030](0030-cancelling-a-paid-order.md)** · **Amended by [ADR 0041](0041-the-alert-that-forgot.md)**
 
 ## Context
 
@@ -94,6 +94,8 @@ The last one is counted at the moment the cap is reached, not every time a cappe
 which is why the claim query excludes them. It has to mean "the platform gave up on another one", not
 "the platform is still holding some".
 
+*The critical alert no longer fires on this counter. Alerting on `increase(...[30m])` meant it resolved thirty minutes after giving up whether or not the customer had been paid; [ADR 0041](0041-the-alert-that-forgot.md) moved it onto a gauge of refunds still owed, which resolves only when they are recorded as settled. The counter remains, as a panel.*
+
 ## Alternatives considered
 
 **Time a stalled cancellation out to `CANCELLED`.** The intuitive reading of "sweep up stuck
@@ -139,3 +141,5 @@ built to make that *visible* rather than to solve it, which is the same position
 refund still has no button, and the rest of that list stands.*
 
 *The audit reader was since built by [ADR 0034](0034-who-read-my-data.md): each service exposes its own, since each has its own table.*
+
+*Abandoned refunds can now be recorded as settled outside the platform, by [ADR 0041](0041-the-alert-that-forgot.md). There is still no button that moves money: the decision above stands.*
