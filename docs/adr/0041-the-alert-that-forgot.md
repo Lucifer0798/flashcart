@@ -147,3 +147,5 @@ being true. Resolving it leaves a record naming who, when and against what refer
   ([ADR 0034](0034-who-read-my-data.md)).
 - The publisher still stores a hard-coded sampled flag; catalog has no `_info` endpoint.
 - No alert rule has a test in CI. The ones above were run by hand.
+
+*Every rule now has tests in CI, and an alert for a service that stops being scraped, by [ADR 0042](0042-every-alert-went-quiet-together.md). That record also found this alert still resolved while the money was owed, whenever payment itself was down.*

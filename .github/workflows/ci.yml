@@ -50,6 +50,31 @@ jobs:
           retention-days: 7
 
   # --------------------------------------------------------------------------------------------
+  # Alert rules, tested the way the services are. Its own job because it needs Docker for promtool
+  # and the unit tier deliberately does not; it takes seconds either way.
+  #
+  # Every rule has a case that must fire and a healthy case that must not. ADR 0041 found the
+  # critical refund alert had been resolving itself for as long as it existed, and ADR 0042 found
+  # that every alert went quiet when its service stopped. Neither was visible to any test, because
+  # until this job there were none.
+  # --------------------------------------------------------------------------------------------
+  alert-rules:
+    name: Alert rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: PyYAML, to strip annotations from the copy under test
+        run: pip install --quiet pyyaml
+
+      - name: promtool check and test
+        run: infra/prometheus/test-rules.sh
+
+  # --------------------------------------------------------------------------------------------
   # Tier 2: real PostgreSQL and a real broker, per module and in parallel.
   #
   # Split by module rather than run as one job so a failure names the service immediately, and so
