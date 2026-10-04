@@ -695,6 +695,11 @@ outbox row two minutes old, a sustained `UNKNOWN` rate, a declined transition no
 duplicates impossible at that guard. None fires on a metric merely being high, because a threshold
 nobody can justify is a threshold that gets silenced.
 
+Every one of those alerts reads a metric its own service exposes, so a service that stops being
+scraped takes its alerts with it: they resolve because the evidence vanished, not because the fault
+was fixed. `ServiceDown` (`up == 0` for a minute) is the rule the others depend on, and every rule is
+unit-tested with `promtool` in CI — see [ADR 0042](adr/0042-every-alert-went-quiet-together.md).
+
 CI asserts that all seven targets are actually **scraped**, not merely that the endpoints exist. That
 distinction is the entire lesson of this phase: `prometheus` sat in every service's actuator exposure
 list from Phase 1 to Phase 8 while the endpoint returned 404, because no registry was on the

@@ -5,6 +5,26 @@
 groups:
   - name: flashcart
     rules:
+      - alert: ServiceDown
+        # The rule every other rule depends on. Each alert below reads a metric the service itself
+        # exposes, so when a service stops being scraped its series go stale and every alert about it
+        # resolves -- not because the fault was fixed but because the evidence disappeared. Stopping
+        # payment with a refund still owed made RefundAbandoned resolve in thirty seconds while nothing
+        # else fired at all. This is what turns that silence into a page. See ADR 0042.
+        #
+        # One minute, because a container restart takes about that long and is not an outage; longer
+        # would leave every other alert for that service blind for longer still.
+        expr: up{job="flashcart"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.service }}: not being scraped, so none of its alerts can fire"
+          description: >
+            Prometheus cannot read {{ $labels.instance }}. Every other alert for this service is now
+            blind: a stalled outbox or a refund still owed will read as resolved until it is back.
+            Check `docker compose ps` and the service's logs. When it returns, expect the alerts it was
+            hiding to fire again if their causes are still there.
+
       - alert: OutboxStalled
         # Depth alone cannot distinguish a busy relay from a dead one: under a flash sale a deep
         # queue is correct. An *old* row is never correct. Two minutes is far beyond the 1s poll.

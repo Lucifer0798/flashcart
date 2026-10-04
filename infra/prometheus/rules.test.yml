@@ -1,0 +1,248 @@
+# Unit tests for rules.yml, run by `promtool test rules` through test-rules.sh. See ADR 0042.
+#
+# Each rule gets at least two cases: the fault it exists for, which must fire, and a healthy input of
+# the same shape, which must not. A rule tested only for firing is satisfied by `vector(1)`.
+#
+# Annotations are not compared. promtool matches them exactly, which would turn every reworded
+# description into a failing test; test-rules.sh strips them from a copy of the rules first, and
+# `promtool check rules` still validates their templates against the real file.
+rule_files:
+  - rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # --- ServiceDown ----------------------------------------------------------------------------------
+
+  - name: a service that stops answering scrapes pages, after a restart's grace
+    interval: 1m
+    input_series:
+      - series: 'up{job="flashcart", instance="payment:8084", service="payment"}'
+        values: '1 1 1 0 0 0 0 0'
+      - series: 'up{job="flashcart", instance="order:8082", service="order"}'
+        values: '1x7'
+    alert_rule_test:
+      # Down since 3m; one minute is a restart, not an outage.
+      - eval_time: 3m
+        alertname: ServiceDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: flashcart, instance: "payment:8084", service: payment }
+
+  # The case that motivated ServiceDown. Payment is stopped with a refund still owed: the gauge goes
+  # stale, RefundAbandoned resolves, and ServiceDown is the only thing left saying anything.
+  - name: when payment stops, the refund alert goes quiet and ServiceDown is what remains
+    interval: 1m
+    input_series:
+      - series: 'flashcart_payment_refunds_abandoned_outstanding{instance="payment:8084", service="payment"}'
+        values: '1 1 1 1 1 stale'
+      - series: 'up{job="flashcart", instance="payment:8084", service="payment"}'
+        values: '1 1 1 1 1 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: RefundAbandoned
+        exp_alerts:
+          - exp_labels: { severity: critical }
+      - eval_time: 8m
+        alertname: RefundAbandoned
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: flashcart, instance: "payment:8084", service: payment }
+
+  # --- OutboxStalled --------------------------------------------------------------------------------
+
+  - name: an outbox row older than two minutes is a stalled relay
+    interval: 1m
+    input_series:
+      - series: 'flashcart_outbox_oldest_age_seconds{service="order"}'
+        values: '0 30 300 300 300 300'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: OutboxStalled
+        exp_alerts:
+          - exp_labels: { severity: critical, service: order }
+
+  # Ninety seconds old and staying there: a relay under load, keeping up but behind. Held for longer
+  # than the rule's `for`, so a threshold set lower than this would fire.
+  - name: a deep but young outbox is a busy relay, not a dead one
+    interval: 1m
+    input_series:
+      - series: 'flashcart_outbox_oldest_age_seconds{service="order"}'
+        values: '90x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: OutboxStalled
+        exp_alerts: []
+
+  # --- OutboxSendFailing ----------------------------------------------------------------------------
+
+  - name: sends failing every minute
+    interval: 1m
+    input_series:
+      - series: 'flashcart_outbox_send_failures_total{service="inventory"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: OutboxSendFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, service: inventory }
+
+  - name: a failure counter that stopped climbing
+    interval: 1m
+    input_series:
+      - series: 'flashcart_outbox_send_failures_total{service="inventory"}'
+        values: '3x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: OutboxSendFailing
+        exp_alerts: []
+
+  # --- AvailabilityGateBlind ------------------------------------------------------------------------
+
+  - name: the gate answering "unknown" twice a second for five minutes
+    interval: 1m
+    input_series:
+      - series: 'flashcart_gate_decisions_total{service="inventory", decision="unknown"}'
+        values: '0+120x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AvailabilityGateBlind
+        exp_alerts:
+          - exp_labels: { severity: warning, service: inventory, decision: unknown }
+
+  - name: occasional unknowns, and plenty of decided answers, are a working gate
+    interval: 1m
+    input_series:
+      - series: 'flashcart_gate_decisions_total{service="inventory", decision="unknown"}'
+        values: '0+30x15'
+      - series: 'flashcart_gate_decisions_total{service="inventory", decision="refused"}'
+        values: '0+600x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AvailabilityGateBlind
+        exp_alerts: []
+
+  # --- SagaTransitionsDeclined ----------------------------------------------------------------------
+
+  - name: the saga declining transitions for five minutes
+    interval: 1m
+    input_series:
+      - series: 'flashcart_saga_transitions_declined_total{service="order"}'
+        values: '0+2x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: SagaTransitionsDeclined
+        exp_alerts:
+          - exp_labels: { severity: warning, service: order }
+
+  - name: no declined transitions
+    interval: 1m
+    input_series:
+      - series: 'flashcart_saga_transitions_declined_total{service="order"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: SagaTransitionsDeclined
+        exp_alerts: []
+
+  # --- OperatorReadsUnrecordable --------------------------------------------------------------------
+
+  - name: operator reads that cannot be recorded
+    interval: 1m
+    input_series:
+      - series: 'flashcart_operator_read_record_failures_total{service="payment"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: OperatorReadsUnrecordable
+        exp_alerts:
+          - exp_labels: { severity: warning, service: payment }
+
+  - name: every operator read recorded
+    interval: 1m
+    input_series:
+      - series: 'flashcart_operator_read_record_failures_total{service="payment"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: OperatorReadsUnrecordable
+        exp_alerts: []
+
+  # --- RefundRefused --------------------------------------------------------------------------------
+
+  - name: a refused refund warns at once, and a completed one does not
+    interval: 1m
+    input_series:
+      - series: 'flashcart_payment_refunds_total{service="payment", outcome="refused"}'
+        values: '0 0 1 1 1'
+      - series: 'flashcart_payment_refunds_total{service="payment", outcome="completed"}'
+        values: '0 5 10 15 20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RefundRefused
+        exp_alerts:
+          - exp_labels: { severity: warning, service: payment, outcome: refused }
+
+  - name: refunds that all go through
+    interval: 1m
+    input_series:
+      - series: 'flashcart_payment_refunds_total{service="payment", outcome="completed"}'
+        values: '0+5x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RefundRefused
+        exp_alerts: []
+
+  # --- RefundAbandoned ------------------------------------------------------------------------------
+
+  # ADR 0041's case, kept: the old rule went quiet at 115 minutes with the money still owed.
+  - name: an abandoned refund pages until it is settled, and no longer
+    interval: 1m
+    input_series:
+      - series: 'flashcart_payment_refunds_abandoned_outstanding{instance="payment:8084", service="payment"}'
+        values: '0 1x120 0x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RefundAbandoned
+        exp_alerts:
+          - exp_labels: { severity: critical }
+      - eval_time: 115m
+        alertname: RefundAbandoned
+        exp_alerts:
+          - exp_labels: { severity: critical }
+      - eval_time: 140m
+        alertname: RefundAbandoned
+        exp_alerts: []
+
+  # --- CancellationsUnanswered ----------------------------------------------------------------------
+
+  - name: cancellations re-asked for ten minutes and never answered
+    interval: 1m
+    input_series:
+      - series: 'flashcart_order_cancellations_unanswered_total{service="order"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CancellationsUnanswered
+        exp_alerts:
+          - exp_labels: { severity: warning, service: order }
+
+  # One lost message, re-asked once: the backstop doing its job, not a fault. The re-ask at 2m is
+  # inside the rate window until about 10m (ranges exclude their left edge), so 6m is when it is most
+  # visible: pending under the rule's ten-minute `for`, and firing if that `for` were ever dropped.
+  - name: a single re-ask does not page
+    interval: 1m
+    input_series:
+      - series: 'flashcart_order_cancellations_unanswered_total{service="order"}'
+        values: '0 0 1x24'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CancellationsUnanswered
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: CancellationsUnanswered
+        exp_alerts: []

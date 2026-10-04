@@ -534,7 +534,8 @@ gone, and the platform stays perfectly correct while doing it.
 
 The alert rules in `infra/prometheus/rules.yml` follow the same rule: each one describes a state that
 is wrong on its own terms, never a metric merely being high. A threshold nobody can justify is a
-threshold that gets silenced.
+threshold that gets silenced. Each also has a test — a case that must fire and a healthy one that must
+not — run by `infra/prometheus/test-rules.sh` in CI ([ADR 0042](docs/adr/0042-every-alert-went-quiet-together.md)).
 
 There is deliberately **no tracing yet**. Correlation IDs already stitch a checkout together in the
 logs, and a tracing backend earns its container once Phase 11 is injecting failures worth tracing —
