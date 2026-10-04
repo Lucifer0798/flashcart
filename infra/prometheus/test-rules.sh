@@ -49,6 +49,11 @@ with open(target, "w", encoding="utf-8") as f:
     yaml.safe_dump(rules, f, sort_keys=False)
 PYEOF
 cp "$here/rules.test.yml" "$work/rules.test.yml"
+# mktemp makes the directory 0700 and the files are the runner's. The prometheus image runs promtool
+# as `nobody`, which on Linux then cannot read either -- "stat rules.test.yml: permission denied", seen
+# on the first CI run. Docker Desktop on Windows ignores the modes, so it never showed locally.
+chmod 755 "$work"
+chmod 644 "$work"/*.yml
 
 # Git Bash on Windows rewrites /src-style arguments into Windows paths unless told not to, and Docker
 # Desktop needs the host side of a mount as a Windows path. Both are no-ops on Linux.
