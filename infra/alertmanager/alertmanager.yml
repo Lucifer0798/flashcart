@@ -1,0 +1,51 @@
+# Where a firing alert goes. See ADR 0043.
+#
+# Until this file, the nine rules in infra/prometheus/rules.yml fired into Prometheus's own UI and
+# nowhere else. ADRs 0041 and 0042 made them correct; a correct alert nobody receives is still silence.
+#
+# Every receiver here is the local alert-sink, because this is a laptop stack and there is no pager to
+# wake. What the file does decide is real, and is what a deployment would keep while swapping the URLs:
+# which alerts page, which wait for working hours, and how the pipeline proves it is alive.
+route:
+  # The default is the quiet one. An alert has to say it is critical to page anybody.
+  receiver: ticket
+  group_by: [alertname, service]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    # The heartbeat. Watchdog always fires, and arrives every minute; the sink treats its absence as
+    # the fault. First, and with continue unset, so it never also lands in a human's queue.
+    - matchers: [alertname = "Watchdog"]
+      receiver: heartbeat
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 1m
+
+    - matchers: [severity = "critical"]
+      receiver: page
+      # Re-sent hourly while it lasts. The refund alert in particular stays firing until somebody
+      # records a settlement, and an hour is the longest a page about owed money should go unrepeated.
+      repeat_interval: 1h
+
+receivers:
+  - name: page
+    webhook_configs:
+      - url: http://alert-sink:8080/alerts/page
+        send_resolved: true
+  - name: ticket
+    webhook_configs:
+      - url: http://alert-sink:8080/alerts/ticket
+        send_resolved: true
+  - name: heartbeat
+    webhook_configs:
+      - url: http://alert-sink:8080/heartbeat
+        send_resolved: false
+
+inhibit_rules:
+  # A service that cannot be scraped has no trustworthy alerts of its own (ADR 0042). Its other alerts
+  # resolve on their own when its series go stale; this covers the minute before they do, so the page
+  # says "payment is down" once rather than that and a stale symptom of it.
+  - source_matchers: [alertname = "ServiceDown"]
+    target_matchers: [alertname != "ServiceDown"]
+    equal: [service]

@@ -5,6 +5,19 @@
 groups:
   - name: flashcart
     rules:
+      - alert: Watchdog
+        # Always firing, on purpose. It is the heartbeat of the alerting pipeline itself: Alertmanager
+        # forwards it to the sink every minute, and the sink turns unhealthy when it stops. Every other
+        # rule can only report a fault Prometheus is alive to evaluate; this is how a dead Prometheus,
+        # a broken rules file or a stopped Alertmanager becomes visible. See ADR 0043.
+        expr: vector(1)
+        labels: { severity: none }
+        annotations:
+          summary: "the alerting pipeline is alive"
+          description: >
+            Always firing. If this stops reaching its receiver, it is not that nothing is wrong: it is
+            that nothing can say so. Check Prometheus, then Alertmanager.
+
       - alert: ServiceDown
         # The rule every other rule depends on. Each alert below reads a metric the service itself
         # exposes, so when a service stops being scraped its series go stale and every alert about it

@@ -48,3 +48,4 @@ when someone revisits it in six months.
 | [0040](0040-a-cancelled-sale-gives-the-units-back.md) | A cancelled sale gives the units back | Accepted |
 | [0041](0041-the-alert-that-forgot.md) | The alert that forgot | Accepted |
 | [0042](0042-every-alert-went-quiet-together.md) | Every alert went quiet together | Accepted |
+| [0043](0043-an-alert-nobody-receives.md) | An alert nobody receives | Accepted |

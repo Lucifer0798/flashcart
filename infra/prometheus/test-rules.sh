@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Validate and unit-test the alerting rules with promtool. Run by CI; runs locally with Docker.
+# Validate and unit-test the alerting rules with promtool, and the routing with amtool. Run by CI;
+# runs locally with Docker.
 #
 #   infra/prometheus/test-rules.sh
 #
@@ -69,3 +70,35 @@ docker run --rm -v "$(mount "$here"):/src:ro" --entrypoint promtool "$image" \
 echo "== promtool test rules"
 docker run --rm -v "$(mount "$work"):/t:ro" -w /t --entrypoint promtool "$image" \
   test rules rules.test.yml
+
+# --- routing: where each kind of alert ends up (ADR 0043) ------------------------------------------
+
+am_image="$(sed -n 's/^ *image: *\(prom\/alertmanager:[^ ]*\).*/\1/p' "$here/../../compose.yaml" | head -1)"
+if [ -z "$am_image" ]; then
+  echo "could not find the alertmanager image in compose.yaml" >&2
+  exit 1
+fi
+am_dir="$(cd "$here/../alertmanager" && pwd)"
+
+amtool() {
+  docker run --rm -v "$(mount "$am_dir"):/am:ro" --entrypoint amtool "$am_image" "$@"
+}
+
+echo "== amtool check-config ($am_image)"
+amtool check-config /am/alertmanager.yml
+
+# Each case names the receiver it must reach. --verify.receivers makes amtool exit non-zero on a
+# mismatch rather than just printing the receiver it found.
+route() {
+  local expected="$1"; shift
+  printf '== route %-45s -> %s
+' "$*" "$expected"
+  amtool config routes test --config.file=/am/alertmanager.yml --verify.receivers="$expected" "$@"
+}
+route page      alertname=ServiceDown severity=critical service=payment
+route page      alertname=RefundAbandoned severity=critical
+route ticket    alertname=RefundRefused severity=warning service=payment
+# A rule that forgets its severity label must still reach somebody, and the quiet queue is the honest
+# default: nothing pages unless it says it should.
+route ticket    alertname=SomethingNew
+route heartbeat alertname=Watchdog severity=none

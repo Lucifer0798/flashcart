@@ -12,6 +12,22 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  # --- Watchdog -------------------------------------------------------------------------------------
+
+  # The heartbeat must fire with no input at all; a Watchdog that depended on a metric would go quiet
+  # exactly when the thing producing that metric did, which is the failure it exists to expose.
+  - name: the watchdog fires with nothing to go on
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: { severity: none }
+      - eval_time: 3h
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: { severity: none }
+
   # --- ServiceDown ----------------------------------------------------------------------------------
 
   - name: a service that stops answering scrapes pages, after a restart's grace

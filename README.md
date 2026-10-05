@@ -63,7 +63,8 @@ somewhere the sketch did not expect, which is the sort of thing a diagram drawn 
 for.
 
 Observability rides alongside: every service exposes `/actuator/prometheus`, scraped by **Prometheus**
-:19090 and drawn by **Grafana** :13000, with traces going to **Zipkin** :19411.
+:19090 and drawn by **Grafana** :13000, with traces going to **Zipkin** :19411. Firing alerts go through
+**Alertmanager** :19093 to a local **alert sink** :19095.
 
 Every host port sits in the 15000–19000 range so the whole stack coexists with anything already
 listening on 5432, 6379 or 8080.
@@ -143,6 +144,8 @@ Each service's `application.yml` already defaults to the published host ports.
 | Grafana                 | http://localhost:13000                         |
 | Zipkin                  | http://localhost:19411                         |
 | Prometheus              | http://localhost:19090                         |
+| Alertmanager            | http://localhost:19093                         |
+| Alert sink (the inbox)  | http://localhost:19095/alerts                  |
 
 ---
 
@@ -516,6 +519,10 @@ with the dashboard and the alert rules provisioned from `infra/` rather than cli
 
 - **Grafana** — <http://localhost:13000> (no login; it is a laptop stack on a local port binding)
 - **Prometheus** — <http://localhost:19090>
+- **Alerts** — <http://localhost:19095/alerts>, newest first, or `docker compose logs alert-sink`.
+  Critical alerts arrive on the `page` route, warnings on `ticket`. The sink also turns unhealthy when
+  the always-firing `Watchdog` heartbeat stops, which is how a dead Prometheus or Alertmanager shows up
+  ([ADR 0043](docs/adr/0043-an-alert-nobody-receives.md)).
 
 The hand-written metrics all exist for one reason: **this platform's dangerous failures are silent by
 design, and health checks answer a question nobody was asking.** The relay swallows its exceptions so

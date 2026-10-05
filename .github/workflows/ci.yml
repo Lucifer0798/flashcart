@@ -654,6 +654,27 @@ jobs:
           docker compose exec -T grafana wget -qO- http://localhost:3000/api/dashboards/uid/flashcart-overview | grep -q '"title"' 
           echo "grafana dashboard provisioned"
 
+      - name: Alerts reach a receiver
+        run: |
+          set -e
+          # Rules that fire into Prometheus's own UI reach nobody. The Watchdog alert always fires, so
+          # a heartbeat arriving at the sink proves the whole path -- rules evaluated, sent to
+          # Alertmanager, routed, delivered -- rather than any one piece of it. See ADR 0043.
+          for i in $(seq 1 24); do
+            HEALTH=$(curl -s localhost:19095/health)
+            BEATS=$(echo "$HEALTH" | grep -o '"heartbeats": [0-9]*' | grep -o '[0-9]*$')
+            echo "  sink: ${HEALTH//[$'\n ']/}"
+            if [ "${BEATS:-0}" -ge 1 ]; then break; fi
+            sleep 5
+          done
+          test "${BEATS:-0}" -ge 1 || { echo "no Watchdog heartbeat reached the sink"; docker compose logs --tail=50 alertmanager alert-sink; exit 1; }
+
+          # Alertmanager must also know its receivers and have Prometheus sending to it, or the
+          # heartbeat above could only have come from somewhere else.
+          docker compose exec -T prometheus wget -qO- 'http://localhost:9090/api/v1/alertmanagers' \
+            | grep -q 'alertmanager:9093' || { echo "prometheus has no alertmanager"; exit 1; }
+          echo "Watchdog reached the sink; prometheus is sending to alertmanager"
+
       - name: The anti-oversell invariant holds under concurrency
         run: |
           set -e

@@ -700,6 +700,12 @@ scraped takes its alerts with it: they resolve because the evidence vanished, no
 was fixed. `ServiceDown` (`up == 0` for a minute) is the rule the others depend on, and every rule is
 unit-tested with `promtool` in CI — see [ADR 0042](adr/0042-every-alert-went-quiet-together.md).
 
+Firing alerts are routed by Alertmanager — critical to a `page` receiver, everything else to `ticket`
+— and delivered to a local sink that stands in for a pager. An always-firing `Watchdog` alert reaches
+the sink every minute as a heartbeat; the sink turns unhealthy when it stops, which is the only way a
+dead Prometheus or Alertmanager can be noticed, since neither can alert about itself. See
+[ADR 0043](adr/0043-an-alert-nobody-receives.md).
+
 CI asserts that all seven targets are actually **scraped**, not merely that the endpoints exist. That
 distinction is the entire lesson of this phase: `prometheus` sat in every service's actuator exposure
 list from Phase 1 to Phase 8 while the endpoint returned 404, because no registry was on the
