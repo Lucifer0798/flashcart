@@ -396,6 +396,43 @@ services:
       prometheus:
         condition: service_healthy
 
+  # Where alerts go (ADR 0043). Before this, every rule fired into Prometheus's own UI and nowhere else.
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "19093:9093"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9093/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # The local pager: logs and lists what Alertmanager sends, and turns unhealthy when the Watchdog
+  # heartbeat stops arriving -- the failure of Prometheus or Alertmanager themselves, which no rule can
+  # report. `curl localhost:19095/alerts` is the inbox. Standard library Python, mounted, not built.
+  alert-sink:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/sink/sink.py", "8080"]
+    environment:
+      WATCHDOG_MAX_AGE: "180"
+    volumes:
+      - ./infra/alert-sink:/sink:ro
+    ports:
+      - "19095:8080"
+    healthcheck:
+      # 127.0.0.1, not localhost: in Alpine localhost resolves to ::1 first and the sink listens on
+      # IPv4, so the probe was refused on every attempt and the switch read unhealthy from the start --
+      # which is how a dead man's switch gets ignored.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
   # Tracing (Phase 11). One container, in-memory storage, no separate collector: Phase 9 deferred
   # this on memory grounds and it is added now on the same grounds -- Zipkin is the cheapest thing
   # that can answer "where did this checkout actually go", which is the question failure injection

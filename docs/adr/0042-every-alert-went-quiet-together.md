@@ -117,6 +117,8 @@ that breaks either fails CI.
 
 - No Alertmanager: firing alerts are visible only in Prometheus.
 - If Prometheus itself is down, nothing fires; nothing watches the watcher.
+
+*Both were since closed by [ADR 0043](0043-an-alert-nobody-receives.md): alerts are routed to a receiver, and an always-firing heartbeat makes a dead Prometheus or Alertmanager visible.*
 - Production accounts still get `OPERATOR`; the load harness still signs in as the operator.
 - Whether a customer may read their own access log ([ADR 0034](0034-who-read-my-data.md)).
 - The publisher still stores a hard-coded sampled flag; catalog has no `_info` endpoint.

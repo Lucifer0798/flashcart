@@ -16,6 +16,12 @@ global:
 rule_files:
   - /etc/prometheus/rules.yml
 
+# Without this, every rule above fired into this server's own UI and nowhere else. See ADR 0043.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: flashcart
     metrics_path: /actuator/prometheus
