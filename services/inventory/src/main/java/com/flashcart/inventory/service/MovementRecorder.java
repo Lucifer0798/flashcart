@@ -20,15 +20,26 @@ import org.springframework.stereotype.Component;
 public class MovementRecorder {
 
 	private final StockMovementRepository movements;
+	private final WaitlistService waitlist;
 
-	public MovementRecorder(StockMovementRepository movements) {
+	public MovementRecorder(StockMovementRepository movements, WaitlistService waitlist) {
 		this.movements = movements;
+		this.waitlist = waitlist;
 	}
 
 	public void record(String sku, MovementType type, int onHandDelta, int reservedDelta,
 			UUID reservationId, UUID flashSaleId, String reason) {
 		movements.save(new StockMovement(UUID.randomUUID(), sku, type, onHandDelta, reservedDelta,
 				reservationId, flashSaleId, reason, CorrelationId.current()));
+
+		// Available is on-hand minus reserved, so this is exactly how many units this movement put back
+		// in front of buyers: received, adjusted up, released, expired, returned. A reserve or a commit
+		// comes out at zero or below and tells nobody. Here rather than in each of those paths, because
+		// this is the one place a new path cannot forget to come through. See ADR 0044.
+		int becameAvailable = onHandDelta - reservedDelta;
+		if (becameAvailable > 0) {
+			waitlist.unitsAvailable(sku, becameAvailable);
+		}
 	}
 
 	public void reserved(String sku, int quantity, UUID reservationId, UUID flashSaleId) {

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.flashcart.common.security.AccessTokens;
+import com.flashcart.common.security.CallerIdentity;
 import com.flashcart.common.security.OperatorFilter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -35,6 +36,11 @@ public class InventorySecurityConfig {
 	}
 
 	@Bean
+	public CallerIdentity callerIdentity(AccessTokens tokens) {
+		return new CallerIdentity(tokens);
+	}
+
+	@Bean
 	public FilterRegistrationBean<OperatorFilter> operatorFilter(AccessTokens tokens) {
 		FilterRegistrationBean<OperatorFilter> registration = new FilterRegistrationBean<>(
 				new OperatorFilter(tokens, List.of(
@@ -45,9 +51,15 @@ public class InventorySecurityConfig {
 						// creating stock, receiving, adjusting, the ledger, reservations -- either moves
 						// quantities or reveals the whole catalogue's position, and needs an operator.
 						"GET /api/v1/inventory/stock/*"),
-						List.of(),
-						// All fifteen. Nothing this service exposes beyond public availability is anything but
-						// warehouse work, so the whole of it is one role's -- which is why /** is honest here
+						// The waitlist, and only the waitlist: the one thing here a shopper does. Each acts as
+						// the token's subject -- there is no customer id to supply -- so a valid token is the
+						// whole check the handler needs. See ADR 0044.
+						List.of(
+								"POST /api/v1/inventory/waitlist",
+								"GET /api/v1/inventory/waitlist/mine",
+								"DELETE /api/v1/inventory/waitlist/*"),
+						// All fifteen. Nothing else this service exposes beyond public availability is anything
+						// but warehouse work, so the whole of it is one role's -- which is why /** is honest here
 						// and would not be anywhere else. See ADR 0038.
 						Map.of(AccessTokens.WAREHOUSE, List.of("/api/v1/inventory/**"))));
 		registration.addUrlPatterns("/*");

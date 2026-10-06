@@ -294,6 +294,23 @@ The concurrency test that proves the platform cannot oversell runs **with the ga
 an optimisation that is only safe when disabled is not safe. See
 [ADR 0016](docs/adr/0016-the-gate-may-only-refuse.md).
 
+### The waitlist
+
+A shopper who finds a SKU sold out can queue for it — the only part of inventory a shopper calls.
+
+```bash
+# 201, with "ahead": how many are in front of you
+curl -X POST localhost:18080/api/v1/inventory/waitlist -H "Authorization: Bearer $TOKEN" \
+     -H 'Content-Type: application/json' -d '{"sku":"AUD-HP-001"}'
+
+curl localhost:18080/api/v1/inventory/waitlist/mine -H "Authorization: Bearer $TOKEN"
+```
+
+When `n` units come back — received, released, **expired**, or returned from a cancelled order — the
+`n` oldest waiters are told, each once, and a `BackInStock` event is published for a notifier to send.
+No unit is held for them, so being told is a head start rather than a guarantee. See
+[ADR 0044](docs/adr/0044-a-queue-for-what-is-gone.md).
+
 ## The order API
 
 Where a checkout actually happens. Order calls catalog for prices and inventory for stock; it
