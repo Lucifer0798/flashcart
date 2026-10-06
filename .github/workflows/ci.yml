@@ -341,6 +341,37 @@ jobs:
           docker compose logs --tail=100 inventory order shipping
           exit 1
 
+      - name: A sold-out SKU's queue hears when stock comes back
+        run: |
+          set -e
+          G=http://localhost:18080
+          # Through the gateway and the real filter, as a shopper: the integration tests cover the
+          # queue's rules, this covers that a shopper can reach it at all. See ADR 0044.
+          SKU=CI-WAIT-$(date +%s)
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" \
+            -d "{\"sku\":\"$SKU\",\"initialQuantity\":0,\"reason\":\"CI waitlist\"}" > /dev/null
+
+          CODE=$(curl -s -o /tmp/w.json -w '%{http_code}' -X POST $G/api/v1/inventory/waitlist \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" -d "{\"sku\":\"$SKU\"}")
+          echo "join: $CODE $(cat /tmp/w.json)"
+          test "$CODE" = "201"
+          grep -q '"status":"WAITING"' /tmp/w.json
+
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock/$SKU/receive \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" -d '{"quantity":1,"reason":"CI restock"}')
+          test "$CODE" = "200"
+
+          # The notice is written in the receive's own transaction, so it is there as soon as the
+          # receive has answered -- no polling, and a poll here would hide a notice that came late.
+          MINE=$(curl -s -H "Authorization: Bearer $TOKEN" $G/api/v1/inventory/waitlist/mine)
+          echo "mine: $MINE"
+          echo "$MINE" | python3 -c "
+          import json, sys
+          entry = [e for e in json.load(sys.stdin) if e['sku'] == '$SKU']
+          assert entry and entry[0]['status'] == 'NOTIFIED', entry
+          print('notified at', entry[0]['notifiedAt'])
+          "
+
       - name: The shared error envelope survives every hop
         run: |
           set -e
