@@ -19,7 +19,14 @@ public enum ReservationStatus {
 	 * Was {@link #COMMITTED}, and the sale was undone: a paid order was cancelled and shipping
 	 * confirmed the goods never left. The units are back on the shelf. See ADR 0040.
 	 */
-	RETURNED;
+	RETURNED,
+
+	/**
+	 * A waitlist hold that the customer's own checkout took over: the unit held for them became part of
+	 * their order's reservation. Terminal, and distinct from {@link #RELEASED} because nothing came back
+	 * into circulation. See ADR 0045.
+	 */
+	ADOPTED;
 
 	/** True while this reservation is still holding units out of circulation. */
 	public boolean isHolding() {

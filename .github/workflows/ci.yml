@@ -341,36 +341,68 @@ jobs:
           docker compose logs --tail=100 inventory order shipping
           exit 1
 
-      - name: A sold-out SKU's queue hears when stock comes back
+      - name: A sold-out SKU's queue hears when stock comes back, and gets the unit
         run: |
           set -e
           G=http://localhost:18080
-          # Through the gateway and the real filter, as a shopper: the integration tests cover the
-          # queue's rules, this covers that a shopper can reach it at all. See ADR 0044.
+          # Through the gateway, the real filter and the real saga. The integration tests cover the
+          # queue's rules; this covers a shopper reaching it, and the held unit surviving a stranger's
+          # checkout across order -> Kafka -> inventory. See ADRs 0044 and 0045.
           SKU=CI-WAIT-$(date +%s)
           curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" \
             -d "{\"sku\":\"$SKU\",\"initialQuantity\":0,\"reason\":\"CI waitlist\"}" > /dev/null
+          CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $CATALOG" \
+            -d "{\"sku\":\"$SKU\",\"name\":\"CI Waitlist Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
           CODE=$(curl -s -o /tmp/w.json -w '%{http_code}' -X POST $G/api/v1/inventory/waitlist \
             -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" -d "{\"sku\":\"$SKU\"}")
           echo "join: $CODE $(cat /tmp/w.json)"
           test "$CODE" = "201"
-          grep -q '"status":"WAITING"' /tmp/w.json
 
           CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock/$SKU/receive \
             -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" -d '{"quantity":1,"reason":"CI restock"}')
           test "$CODE" = "200"
 
-          # The notice is written in the receive's own transaction, so it is there as soon as the
-          # receive has answered -- no polling, and a poll here would hide a notice that came late.
+          # Told and held, in the restock's own transaction: read once, no polling.
           MINE=$(curl -s -H "Authorization: Bearer $TOKEN" $G/api/v1/inventory/waitlist/mine)
           echo "mine: $MINE"
           echo "$MINE" | python3 -c "
           import json, sys
           entry = [e for e in json.load(sys.stdin) if e['sku'] == '$SKU']
-          assert entry and entry[0]['status'] == 'NOTIFIED', entry
-          print('notified at', entry[0]['notifiedAt'])
+          assert entry and entry[0]['status'] == 'NOTIFIED' and entry[0]['heldUntil'], entry
+          print('notified, held until', entry[0]['heldUntil'])
           "
+
+          # A stranger who never queued checks out first. The one unit is held, so they get nothing.
+          SEMAIL="ci-stranger-$(date +%s)@example.test"
+          curl -sf -o /dev/null -X POST $G/api/v1/users -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$SEMAIL\",\"password\":\"a-sufficiently-long-password\",\"displayName\":\"CI Stranger\"}"
+          STRANGER=$(curl -s -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$SEMAIL\",\"password\":\"a-sufficiently-long-password\"}" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+          order() {
+            curl -s -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $1" \
+              -d "{\"idempotencyKey\":\"ci-wait-$2-$(date +%s%N)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}" \
+              | sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p'
+          }
+          settle() {
+            for i in $(seq 1 60); do
+              S=$(curl -sf -H "Authorization: Bearer $1" "$G/api/v1/orders/$2" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')
+              case "$S" in CANCELLED|FULFILLING|SHIPPED) echo "$S"; return ;; esac
+              sleep 2
+            done
+            echo "STUCK:$S"
+          }
+          SORDER=$(order "$STRANGER" stranger)
+          SSTATUS=$(settle "$STRANGER" "$SORDER")
+          echo "stranger's order $SORDER: $SSTATUS"
+          test "$SSTATUS" = "CANCELLED"
+
+          # The shopper who waited checks out, and their order adopts the held unit.
+          WORDER=$(order "$TOKEN" waiter)
+          WSTATUS=$(settle "$TOKEN" "$WORDER")
+          echo "waiting shopper's order $WORDER: $WSTATUS"
+          case "$WSTATUS" in FULFILLING|SHIPPED) ;; *) docker compose logs --tail=80 inventory order; exit 1 ;; esac
 
       - name: The shared error envelope survives every hop
         run: |

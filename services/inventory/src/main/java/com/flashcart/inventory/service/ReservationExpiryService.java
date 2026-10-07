@@ -169,9 +169,15 @@ public class ReservationExpiryService {
 
 		// Tell the order service rather than leaving it to notice. Its own reconciler mirrors the
 		// expiry time and would eventually catch up, but that is the backstop; this is the signal.
-		events.publish(Topics.INVENTORY_EVENTS, new ReservationExpired(
-				EventMetadata.of(ReservationExpired.TYPE, reservation.getReservationKey()),
-				reservation.getReservationKey()));
+		//
+		// Not for a waitlist hold, which belongs to no order. The order service reads the key as an
+		// order id, so announcing one would fail to parse there, be retried and dead-letter. Its units
+		// coming back is already told to the next waiter, through the ledger. See ADR 0045.
+		if (!WaitlistService.isHold(reservation.getReservationKey())) {
+			events.publish(Topics.INVENTORY_EVENTS, new ReservationExpired(
+					EventMetadata.of(ReservationExpired.TYPE, reservation.getReservationKey()),
+					reservation.getReservationKey()));
+		}
 
 		log.debug("Expired reservation {} via {}", reservation.getReservationKey(), source);
 		return true;

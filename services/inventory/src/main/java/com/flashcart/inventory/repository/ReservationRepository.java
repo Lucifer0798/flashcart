@@ -1,5 +1,6 @@
 package com.flashcart.inventory.repository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -61,4 +62,26 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
 	List<UUID> claimExpired(@Param("maxRows") int maxRows);
 
 	long countByStatus(ReservationStatus status);
+
+	/**
+	 * This customer's live waitlist holds on this SKU, soonest to expire first, locked for adoption.
+	 *
+	 * <p>Locked and skipped rather than read, so two checkouts by the same customer at once cannot both
+	 * adopt the same held unit. See ADR 0045.
+	 */
+	@Query(value = """
+			select r.id
+			  from reservations r
+			  join reservation_lines l on l.reservation_id = r.id
+			 where r.customer_id = :customerId
+			   and r.status = 'HELD'
+			   and r.reservation_key like 'waitlist:%'
+			   and r.expires_at > :now
+			   and l.sku = :sku
+			 order by r.expires_at, r.id
+			 limit :maxRows
+			   for update of r skip locked
+			""", nativeQuery = true)
+	List<UUID> claimWaitlistHolds(@Param("customerId") String customerId, @Param("sku") String sku,
+			@Param("now") Instant now, @Param("maxRows") int maxRows);
 }

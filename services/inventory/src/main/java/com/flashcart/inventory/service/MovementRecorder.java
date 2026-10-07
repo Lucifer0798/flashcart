@@ -58,6 +58,12 @@ public class MovementRecorder {
 		record(sku, MovementType.COMMITTED, -quantity, -quantity, reservationId, flashSaleId, null);
 	}
 
+	/** Zero deltas, so the ledger still replays and an adoption is never mistaken for units coming back. */
+	public void adopted(String sku, int quantity, UUID reservationId, UUID flashSaleId, String holdKey) {
+		record(sku, MovementType.ADOPTED, 0, 0, reservationId, flashSaleId,
+				"adopted %d unit(s) held by %s".formatted(quantity, holdKey));
+	}
+
 	public void returned(String sku, int quantity, UUID reservationId, UUID flashSaleId, String reason) {
 		record(sku, MovementType.RETURNED, quantity, 0, reservationId, flashSaleId, reason);
 	}

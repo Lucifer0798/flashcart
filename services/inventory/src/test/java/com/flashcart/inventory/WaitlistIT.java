@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -13,7 +14,10 @@ import java.util.concurrent.TimeUnit;
 
 import com.flashcart.common.event.message.BackInStock;
 import com.flashcart.inventory.api.dto.ReceiveStockRequest;
+import com.flashcart.inventory.api.dto.AllocationResponse;
 import com.flashcart.inventory.api.dto.ReservationResponse;
+import com.flashcart.inventory.api.dto.StockResponse;
+import com.flashcart.inventory.domain.ReservationStatus;
 import com.flashcart.inventory.service.ReservationExpiryService;
 import com.flashcart.inventory.service.ReservationService;
 import org.junit.jupiter.api.DisplayName;
@@ -307,23 +311,184 @@ class WaitlistIT extends AbstractInventoryIT {
 	}
 
 	@Test
-	@DisplayName("a shopper told and too late joins again at the back, behind those still waiting")
+	@DisplayName("a shopper whose held unit lapsed joins again at the back, behind those still waiting")
 	void rejoiningGoesToTheBack() {
 		String sku = soldOut();
 		join("shopper-a", sku);
 		join("shopper-b", sku);
+		join("shopper-c", sku);
 		receive(sku, 1);
 		assertThat(statusOf("shopper-a", sku)).isEqualTo("NOTIFIED");
 
-		// The unit went to somebody else in the meantime.
-		reserve(uniqueKey("order"), "faster-buyer", sku, 1);
+		// A never checked out. The unit passes down the queue to B, and A starts again behind C.
+		lapseHoldOf("shopper-a", sku);
+		assertThat(statusOf("shopper-b", sku)).isEqualTo("NOTIFIED");
 		ResponseEntity<Map> rejoined = join("shopper-a", sku);
 
 		assertThat(rejoined.getStatusCode()).isEqualTo(HttpStatus.CREATED);
 		assertThat(rejoined.getBody()).containsEntry("ahead", 1);
 	}
 
+	// --- the held unit (ADR 0045) -------------------------------------------------------------------
+
+	@Test
+	@DisplayName("being told holds a unit: the shopper told has it, and a faster stranger does not")
+	void toldMeansHeld() {
+		String sku = soldOut();
+		join("shopper-a", sku);
+
+		StockResponse afterReceive = rest.postForObject("/api/v1/inventory/stock/" + sku + "/receive",
+				new ReceiveStockRequest(1, "back"), StockResponse.class);
+
+		// The receive's own answer already shows the unit held, not free -- it is re-read after the
+		// hold is made through an UPDATE the entity never saw.
+		assertThat(afterReceive.reserved()).isEqualTo(1);
+		assertThat(afterReceive.available()).isZero();
+		assertThat(entryOf("shopper-a", sku).get("heldUntil")).isNotNull();
+
+		// Somebody who never queued is refused. Before ADR 0045 they won this race.
+		ResponseEntity<Map> stranger = reserveExpectingFailure(uniqueKey("order"), "stranger", null, sku, 1);
+		assertThat(stranger.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(stranger.getBody()).containsEntry("code", "INSUFFICIENT_STOCK");
+	}
+
+	@Test
+	@DisplayName("the shopper's checkout adopts the held unit instead of taking another")
+	void checkoutAdoptsTheHold() {
+		String sku = soldOut();
+		join("shopper-a", sku);
+		receive(sku, 1);
+		String holdKey = "waitlist:" + entryOf("shopper-a", sku).get("id");
+
+		ResponseEntity<ReservationResponse> order = reserve(uniqueKey("order"), "shopper-a", sku, 1);
+
+		assertThat(order.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+		assertThat(order.getBody().status()).isEqualTo(ReservationStatus.HELD);
+		// Still one unit reserved, not two: the order took over the hold rather than adding to it.
+		assertStock(sku, 1, 1);
+		assertThat(reservationStatus(holdKey)).isEqualTo("ADOPTED");
+		// And the hold is no longer offered: the shopper has their unit, inside their order.
+		assertThat(entryOf("shopper-a", sku).get("heldUntil")).isNull();
+
+		// The ledger still replays to the balance through hold, adoption and sale.
+		rest.postForObject("/api/v1/inventory/reservations/" + order.getBody().reservationKey() + "/commit",
+				null, ReservationResponse.class);
+		assertStock(sku, 0, 0);
+		assertThat(ledgerSum(sku, "on_hand_delta")).isZero();
+		assertThat(ledgerSum(sku, "reserved_delta")).isZero();
+	}
+
+	@Test
+	@DisplayName("adopting moves nothing, so it tells nobody else in the queue")
+	void adoptionIsNotUnitsComingBack() {
+		String sku = soldOut();
+		join("shopper-a", sku);
+		join("shopper-b", sku);
+		receive(sku, 1);
+
+		reserve(uniqueKey("order"), "shopper-a", sku, 1);
+
+		// Had adoption been written as a release and a reserve, the release would have told B about a
+		// unit that never left A's hands.
+		assertThat(statusOf("shopper-b", sku)).isEqualTo("WAITING");
+		assertThat(noticesFor(sku)).containsExactly("shopper-a");
+	}
+
+	@Test
+	@DisplayName("ordering more than is held adopts the held unit and takes the rest from stock")
+	void adoptionCoversPartOfALine() {
+		String sku = soldOut();
+		join("shopper-a", sku);
+		receive(sku, 3);
+		assertStock(sku, 3, 1);
+
+		reserve(uniqueKey("order"), "shopper-a", sku, 2);
+
+		// One adopted, one fresh: two reserved in all, not three.
+		assertStock(sku, 3, 2);
+	}
+
+	@Test
+	@DisplayName("an unused hold lapses, the unit passes to the next in line, and the order service is not told")
+	void lapsedHoldPassesDownTheQueue() {
+		String sku = soldOut();
+		join("shopper-a", sku);
+		join("shopper-b", sku);
+		receive(sku, 1);
+		String holdKey = "waitlist:" + entryOf("shopper-a", sku).get("id");
+
+		lapseHoldOf("shopper-a", sku);
+
+		assertThat(reservationStatus(holdKey)).isEqualTo("EXPIRED");
+		assertThat(statusOf("shopper-b", sku)).isEqualTo("NOTIFIED");
+		assertThat(entryOf("shopper-b", sku).get("heldUntil")).isNotNull();
+		assertStock(sku, 1, 1);
+		// A waitlist hold is no order's. ReservationExpired carries the key the order service parses as an
+		// order id, so announcing this one would fail there and dead-letter.
+		assertThat(jdbc.queryForObject("""
+				select count(*) from outbox_messages
+				 where event_type = 'ReservationExpired' and payload->>'reservationKey' = ?""",
+				Integer.class, holdKey)).isZero();
+	}
+
+	@Test
+	@DisplayName("somebody else's checkout never adopts a hold that is not theirs")
+	void onlyTheCustomerAdopts() {
+		String sku = soldOut();
+		join("shopper-a", sku);
+		receive(sku, 1);
+		String holdKey = "waitlist:" + entryOf("shopper-a", sku).get("id");
+
+		ResponseEntity<Map> stranger = reserveExpectingFailure(uniqueKey("order"), "shopper-b", null, sku, 1);
+
+		assertThat(stranger.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(reservationStatus(holdKey)).isEqualTo("HELD");
+	}
+
+	@Test
+	@DisplayName("a flash-sale checkout adopts the hold and is still charged to the sale and the cap")
+	void saleCheckoutAdoptsAndStillCounts() {
+		String sku = uniqueSku("WAIT");
+		UUID saleId = UUID.randomUUID();
+		createStock(sku, 5);
+		allocate(saleId, sku, 5, 1);
+		// Sell the warehouse out from under the sale, then bring one unit back for the queue.
+		reserve(uniqueKey("order"), "bulk", sku, 5);
+		join("shopper-a", sku);
+		receive(sku, 1);
+
+		ResponseEntity<ReservationResponse> order = reserve(uniqueKey("order"), "shopper-a", saleId, sku, 1, null);
+
+		assertThat(order.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+		assertStock(sku, 6, 6);
+		AllocationResponse allocation = rest.getForObject(
+				"/api/v1/inventory/allocations/" + saleId + "/" + sku, AllocationResponse.class);
+		assertThat(allocation.reservedUnits()).isEqualTo(1);
+		// The cap still binds: a second sale unit for the same shopper is refused.
+		ResponseEntity<Map> second = reserveExpectingFailure(uniqueKey("order"), "shopper-a", saleId, sku, 1);
+		assertThat(second.getBody()).containsEntry("code", "CUSTOMER_LIMIT_EXCEEDED");
+	}
+
 	// --- helpers -----------------------------------------------------------------------------------
+
+	/** Ages a shopper's waitlist hold past its expiry and sweeps, as if they never checked out. */
+	private void lapseHoldOf(String customerId, String sku) {
+		String holdKey = "waitlist:" + entryOf(customerId, sku).get("id");
+		assertThat(jdbc.update("update reservations set expires_at = now() - interval '1 minute' "
+				+ "where reservation_key = ? and status = 'HELD'", holdKey)).isEqualTo(1);
+		expiryService.sweepBatch();
+	}
+
+	private String reservationStatus(String reservationKey) {
+		return jdbc.queryForObject("select status from reservations where reservation_key = ?", String.class,
+				reservationKey);
+	}
+
+	/** The sum of one delta column over every movement of a SKU: what the ledger says the balance is. */
+	private int ledgerSum(String sku, String column) {
+		return jdbc.queryForObject("select coalesce(sum(" + column + "), 0) from stock_movements where sku = ?",
+				Integer.class, sku);
+	}
 
 	/** A tracked SKU with nothing available. */
 	private String soldOut() {

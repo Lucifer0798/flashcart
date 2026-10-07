@@ -1,6 +1,6 @@
 # 0044 — A queue for what is gone
 
-**Status:** Accepted · **Date:** 2026-10-06 · **Phase:** post-roadmap
+**Status:** Accepted · **Date:** 2026-10-06 · **Phase:** post-roadmap · **Amended by [ADR 0045](0045-told-means-yours.md)**
 
 ## Context
 
@@ -96,6 +96,8 @@ The queue is for the **SKU**, not for a flash sale's price. A sale can exhaust i
 warehouse still holds general stock; that SKU is not sold out, and joining is refused.
 
 ## What being told does not mean
+
+*Since closed by [ADR 0045](0045-told-means-yours.md): a shopper told now has a unit held in their name, which their own checkout adopts.*
 
 **No unit is held for the shopper told.** Someone who never joined can still buy it first.
 

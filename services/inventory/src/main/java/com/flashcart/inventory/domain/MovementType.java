@@ -24,5 +24,9 @@ public enum MovementType {
 
 	/** A completed sale was undone before the goods left. Increases on-hand; the exact inverse of
 	 *  COMMITTED except that reserved is untouched, because nothing is held any more. */
-	RETURNED
+	RETURNED,
+
+	/** An order took over a unit held for its customer by the waitlist. Moves nothing: the unit was
+	 *  reserved when the hold was made and stays reserved, now for the order. See ADR 0045. */
+	ADOPTED
 }

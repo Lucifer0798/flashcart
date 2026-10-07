@@ -14,6 +14,7 @@ import com.flashcart.inventory.domain.StockMovement;
 import com.flashcart.inventory.repository.StockItemRepository;
 import com.flashcart.inventory.repository.StockMovementRepository;
 import org.springframework.dao.DataIntegrityViolationException;
+import jakarta.persistence.EntityManager;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -36,13 +37,15 @@ public class StockService {
 	private final StockMovementRepository movements;
 	private final MovementRecorder recorder;
 	private final AvailabilityGate gate;
+	private final EntityManager entityManager;
 
 	public StockService(StockItemRepository stockItems, StockMovementRepository movements,
-			MovementRecorder recorder, AvailabilityGate gate) {
+			MovementRecorder recorder, AvailabilityGate gate, EntityManager entityManager) {
 		this.stockItems = stockItems;
 		this.movements = movements;
 		this.recorder = recorder;
 		this.gate = gate;
+		this.entityManager = entityManager;
 	}
 
 	public StockItem get(String sku) {
@@ -111,6 +114,10 @@ public class StockService {
 		// Invalidated rather than incremented: a warehouse change is rare and the next reserve can
 		// afford one database read to re-seed a counter that is now certainly correct.
 		gate.invalidate(item.getSku());
+		// Re-read. Units that came back may have been held for the waitlist inside the record call,
+		// through a conditional UPDATE this entity never saw, and the caller should be told the
+		// position as it now is -- not one that shows a held unit as free. See ADR 0045.
+		entityManager.refresh(item);
 		return item;
 	}
 
@@ -146,6 +153,10 @@ public class StockService {
 		flushOrConflict(sku);
 		recorder.record(item.getSku(), MovementType.ADJUSTED, delta, 0, null, null, reason);
 		gate.invalidate(item.getSku());
+		// Re-read. Units that came back may have been held for the waitlist inside the record call,
+		// through a conditional UPDATE this entity never saw, and the caller should be told the
+		// position as it now is -- not one that shows a held unit as free. See ADR 0045.
+		entityManager.refresh(item);
 		return item;
 	}
 
