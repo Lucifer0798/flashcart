@@ -49,4 +49,5 @@ when someone revisits it in six months.
 | [0041](0041-the-alert-that-forgot.md) | The alert that forgot | Accepted |
 | [0042](0042-every-alert-went-quiet-together.md) | Every alert went quiet together | Accepted |
 | [0043](0043-an-alert-nobody-receives.md) | An alert nobody receives | Accepted |
-| [0044](0044-a-queue-for-what-is-gone.md) | A queue for what is gone | Accepted |
+| [0044](0044-a-queue-for-what-is-gone.md) | A queue for what is gone | Accepted, amended by 0045 |
+| [0045](0045-told-means-yours.md) | Told means yours | Accepted |

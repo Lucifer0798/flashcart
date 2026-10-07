@@ -1,6 +1,7 @@
 package com.flashcart.inventory.service;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
@@ -14,15 +15,21 @@ import com.flashcart.common.event.EventMetadata;
 import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
 import com.flashcart.common.event.message.BackInStock;
+import com.flashcart.inventory.domain.Reservation;
+import com.flashcart.inventory.domain.ReservationLine;
+import com.flashcart.inventory.domain.ReservationStatus;
 import com.flashcart.inventory.domain.StockItem;
 import com.flashcart.inventory.domain.WaitlistEntry;
 import com.flashcart.inventory.domain.WaitlistStatus;
+import com.flashcart.inventory.repository.ReservationRepository;
 import com.flashcart.inventory.repository.StockItemRepository;
 import com.flashcart.inventory.repository.WaitlistRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -40,11 +47,13 @@ import org.springframework.transaction.support.TransactionTemplate;
  * fastest, which is the opposite of what queueing for something means. Each waiter is told at most
  * once, and a waiter who was told and missed the unit joins again at the back.
  *
- * <h2>What being told does not mean</h2>
+ * <h2>Being told means a unit is held</h2>
  *
- * No unit is held for the shopper told. Another buyer who never joined the queue can still take it
- * first. Holding one would mean a reservation the order service did not create and would have to
- * adopt, which is a cross-service change worth making on its own and not inside this one.
+ * Each shopper told also gets one unit reserved in their name for {@code holdTtl}, as a reservation
+ * keyed {@code waitlist:<entry id>}. Their own checkout for the SKU adopts it in
+ * {@link ReservationService} instead of taking fresh stock, so the order service never has to know it
+ * exists. Unused, it expires like any hold, the units come back through the ledger, and the next
+ * waiter is told and held for in turn. See ADR 0045.
  *
  * <h2>Where it is triggered from</h2>
  *
@@ -58,27 +67,58 @@ public class WaitlistService {
 
 	private static final Logger log = LoggerFactory.getLogger(WaitlistService.class);
 
+	/** Marks a reservation as a waitlist hold: owned by no order, and adoptable by its customer's. */
+	public static final String HOLD_KEY_PREFIX = "waitlist:";
+
+	public static String holdKey(UUID entryId) {
+		return HOLD_KEY_PREFIX + entryId;
+	}
+
+	public static boolean isHold(String reservationKey) {
+		return reservationKey != null && reservationKey.startsWith(HOLD_KEY_PREFIX);
+	}
+
 	private final WaitlistRepository waitlist;
 	private final StockItemRepository stockItems;
+	private final ReservationRepository reservations;
+	private final MovementRecorder movements;
 	private final EventPublisher events;
 	private final Clock clock;
+	private final Duration holdTtl;
 	private final TransactionTemplate fresh;
 	private final Counter notified;
 
-	public WaitlistService(WaitlistRepository waitlist, StockItemRepository stockItems, EventPublisher events,
-			Clock clock, PlatformTransactionManager transactionManager, MeterRegistry meters) {
+	/**
+	 * @param movements {@code @Lazy}, because the dependency runs both ways: the recorder calls this
+	 *                  service when units come back, and a hold made here is itself a movement the
+	 *                  recorder writes. The proxy resolves on first use, long after both exist.
+	 */
+	public WaitlistService(WaitlistRepository waitlist, StockItemRepository stockItems,
+			ReservationRepository reservations, @Lazy MovementRecorder movements, EventPublisher events,
+			Clock clock, @Value("${flashcart.inventory.waitlist.hold-ttl:PT10M}") Duration holdTtl,
+			PlatformTransactionManager transactionManager, MeterRegistry meters) {
 		this.waitlist = waitlist;
 		this.stockItems = stockItems;
+		this.reservations = reservations;
+		this.movements = movements;
 		this.events = events;
 		this.clock = clock;
+		this.holdTtl = holdTtl;
 		this.fresh = new TransactionTemplate(transactionManager);
 		this.notified = Counter.builder("flashcart.inventory.waitlist.notified")
 				.description("Shoppers told a SKU they were waiting for is available again")
 				.register(meters);
 	}
 
-	/** A place in a queue, and how many are ahead of it while it is still waiting. */
-	public record Place(WaitlistEntry entry, Long ahead, boolean created) {
+	/**
+	 * A place in a queue: how many are ahead while it is waiting, and until when a unit is held for it
+	 * once it has been told -- null when there is no live hold.
+	 */
+	public record Place(WaitlistEntry entry, Long ahead, boolean created, Instant heldUntil) {
+
+		public Place(WaitlistEntry entry, Long ahead, boolean created) {
+			this(entry, ahead, created, null);
+		}
 	}
 
 	/**
@@ -121,11 +161,22 @@ public class WaitlistService {
 	/** Every queue this shopper has joined, newest first, with a position for the ones still waiting. */
 	@Transactional(readOnly = true)
 	public List<Place> mine(String customerId) {
+		Instant now = clock.instant();
 		return waitlist.findByCustomerIdOrderByCreatedAtDesc(customerId).stream()
-				.map(entry -> new Place(entry, entry.getStatus() == WaitlistStatus.WAITING
-						? waitlist.countAhead(entry.getSku(), entry.getCreatedAt(), entry.getId())
-						: null, false))
+				.map(entry -> switch (entry.getStatus()) {
+					case WAITING -> new Place(entry,
+							waitlist.countAhead(entry.getSku(), entry.getCreatedAt(), entry.getId()), false);
+					case NOTIFIED -> new Place(entry, null, false, liveHoldUntil(entry, now));
+					case CANCELLED -> new Place(entry, null, false);
+				})
 				.toList();
+	}
+
+	private Instant liveHoldUntil(WaitlistEntry entry, Instant now) {
+		return reservations.findByReservationKey(holdKey(entry.getId()))
+				.filter(hold -> hold.getStatus() == ReservationStatus.HELD && hold.getExpiresAt().isAfter(now))
+				.map(Reservation::getExpiresAt)
+				.orElse(null);
 	}
 
 	/**
@@ -168,15 +219,42 @@ public class WaitlistService {
 				.sorted(Comparator.comparing(WaitlistEntry::getCreatedAt).thenComparing(WaitlistEntry::getId))
 				.toList();
 		for (WaitlistEntry entry : told) {
+			Instant heldUntil = holdFor(entry, at);
 			events.publish(Topics.INVENTORY_EVENTS, new BackInStock(
 					EventMetadata.of(BackInStock.TYPE, entry.getId()),
-					entry.getId().toString(), entry.getSku(), entry.getCustomerId(), at));
+					entry.getId().toString(), entry.getSku(), entry.getCustomerId(), at, heldUntil));
 		}
 		if (!told.isEmpty()) {
 			notified.increment(told.size());
 			log.info("{} unit(s) of {} available again; told {} waiting shopper(s)", quantity, sku, told.size());
 		}
 		return told.size();
+	}
+
+	/**
+	 * Reserve one unit for the shopper just told, as a reservation their checkout can adopt.
+	 *
+	 * <p>It should always succeed: this runs in the transaction that just made at least as many units
+	 * available as shoppers are being told, and that transaction holds the stock row, so nobody else can
+	 * have taken them in between. If it ever does not, the shopper is still told -- without a hold -- and
+	 * the stock change that caused it is not rolled back, because refusing a warehouse delivery over a
+	 * courtesy hold would be the wrong way round.
+	 *
+	 * @return when the hold lapses, or null if no unit could be held
+	 */
+	private Instant holdFor(WaitlistEntry entry, Instant at) {
+		if (stockItems.tryReserve(entry.getSku(), 1) == 0) {
+			log.warn("Told {} that {} is back but could not hold a unit for them", entry.getCustomerId(),
+					entry.getSku());
+			return null;
+		}
+		Instant until = at.plus(holdTtl);
+		Reservation hold = new Reservation(UUID.randomUUID(), holdKey(entry.getId()), entry.getCustomerId(),
+				null, until);
+		hold.addLine(new ReservationLine(UUID.randomUUID(), entry.getSku(), 1));
+		reservations.save(hold);
+		movements.reserved(entry.getSku(), 1, hold.getId(), null);
+		return until;
 	}
 
 	private static String normalise(String sku) {

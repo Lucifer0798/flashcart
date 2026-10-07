@@ -15,13 +15,16 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  * entry, so a consumer that dedupes by aggregate tells each place in the queue once. See ADR 0044.
  *
  * @param waitlistEntryId the place in the queue this notice is for
+ * @param heldUntil       when the unit held for this shopper is released if they have not checked out
+ *                        (ADR 0045); null if no unit could be held, which the notice still reports
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record BackInStock(EventMetadata metadata,
 		String waitlistEntryId,
 		String sku,
 		String customerId,
-		Instant notifiedAt) implements DomainEvent {
+		Instant notifiedAt,
+		Instant heldUntil) implements DomainEvent {
 
 	public static final String TYPE = "BackInStock";
 

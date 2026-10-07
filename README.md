@@ -308,8 +308,10 @@ curl localhost:18080/api/v1/inventory/waitlist/mine -H "Authorization: Bearer $T
 
 When `n` units come back — received, released, **expired**, or returned from a cancelled order — the
 `n` oldest waiters are told, each once, and a `BackInStock` event is published for a notifier to send.
-No unit is held for them, so being told is a head start rather than a guarantee. See
-[ADR 0044](docs/adr/0044-a-queue-for-what-is-gone.md).
+Each shopper told also has **one unit held in their name** for ten minutes (`heldUntil` in `/mine`):
+their next checkout for that SKU takes it over, and a stranger's cannot. Unused, the hold lapses and the
+unit passes to the next in line. See [ADR 0044](docs/adr/0044-a-queue-for-what-is-gone.md) and
+[ADR 0045](docs/adr/0045-told-means-yours.md).
 
 ## The order API
 

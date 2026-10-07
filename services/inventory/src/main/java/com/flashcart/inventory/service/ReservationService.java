@@ -186,9 +186,17 @@ public class ReservationService {
 				chargeCustomerLimit(customerId, flashSaleId, line);
 				claimSaleAllocation(flashSaleId, line);
 			}
-			holdStock(line);
 
-			movements.reserved(line.sku(), line.quantity(), reservation.getId(), flashSaleId);
+			// A unit the waitlist is already holding for this customer is theirs: take it over rather
+			// than competing for fresh stock with everybody else. The sale's allocation and the
+			// customer's cap are still charged above -- adopting changes where the unit comes from, not
+			// whether this order may have it. See ADR 0045.
+			int adopted = isHoldKey(reservationKey) ? 0 : adoptWaitlistHolds(customerId, line, reservation, flashSaleId);
+			int remaining = line.quantity() - adopted;
+			if (remaining > 0) {
+				holdStock(new RequestedLine(line.sku(), remaining));
+				movements.reserved(line.sku(), remaining, reservation.getId(), flashSaleId);
+			}
 		}
 
 		try {
@@ -330,8 +338,9 @@ public class ReservationService {
 			case RETURNED -> {
 				return Optional.of(reservation);
 			}
-			case RELEASED, EXPIRED -> {
-				log.warn("Reservation {} is {}, so its units are already back; nothing to return",
+			// ADOPTED only ever happens to a waitlist hold, which is never an order's to return.
+			case RELEASED, EXPIRED, ADOPTED -> {
+				log.warn("Reservation {} is {}, so it holds no sale to undo; nothing to return",
 						reservationKey, reservation.getStatus());
 				return Optional.of(reservation);
 			}
@@ -377,6 +386,45 @@ public class ReservationService {
 	@Transactional(readOnly = true)
 	public List<Reservation> forCustomer(String customerId) {
 		return reservations.findByCustomerIdOrderByCreatedAtDesc(customerId);
+	}
+
+	/**
+	 * Take over this customer's live waitlist holds on the line's SKU, up to the quantity wanted.
+	 *
+	 * <p>Each hold is one unit, reserved when the customer was told the SKU was back. Adopting it moves
+	 * no counter: the unit is already reserved, and stays reserved, now for this order. So the hold is
+	 * marked {@code ADOPTED} rather than released, and the ledger gets a zero-delta entry rather than a
+	 * release and a reserve -- a release would read as units coming back and tell the next waiter about
+	 * a unit that never left.
+	 *
+	 * <p>The holds are claimed with {@code for update skip locked}: two checkouts by the same customer at
+	 * once cannot both take the same unit.
+	 *
+	 * @return how many units were adopted, between zero and the line's quantity
+	 */
+	private int adoptWaitlistHolds(String customerId, RequestedLine line, Reservation order, UUID flashSaleId) {
+		List<UUID> holds = reservations.claimWaitlistHolds(customerId, line.sku(), clock.instant(), line.quantity());
+		int adopted = 0;
+		for (UUID holdId : holds) {
+			Reservation hold = reservations.findById(holdId).orElseThrow();
+			int units = hold.getLines().stream().mapToInt(ReservationLine::getQuantity).sum();
+			if (adopted + units > line.quantity()) {
+				break;
+			}
+			hold.setStatus(ReservationStatus.ADOPTED);
+			hold.setReleasedAt(clock.instant());
+			movements.adopted(line.sku(), units, order.getId(), flashSaleId, hold.getReservationKey());
+			adopted += units;
+		}
+		if (adopted > 0) {
+			log.info("Reservation {} adopted {} unit(s) of {} held for {} by the waitlist",
+					order.getReservationKey(), adopted, line.sku(), customerId);
+		}
+		return adopted;
+	}
+
+	private static boolean isHoldKey(String reservationKey) {
+		return WaitlistService.isHold(reservationKey);
 	}
 
 	// --- the three checks -------------------------------------------------------------------------
