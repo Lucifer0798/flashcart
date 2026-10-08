@@ -204,6 +204,53 @@ jobs:
           echo "TOKEN=$TOKEN" >> $GITHUB_ENV
           echo "signed in as $EMAIL"
 
+      - name: A staff role is granted narrowly, and on the record
+        run: |
+          set -e
+          G=http://localhost:18080
+          # The way a real deployment makes somebody staff (ADR 0047): scripts/grant-role.sh, which only
+          # knows real roles, refuses OPERATOR without --break-glass, and writes role_grants in the same
+          # transaction. Driven here against the real stack, then checked by what the account can do.
+          E="ci-staff-$(date +%s)@example.test"
+          P="a-sufficiently-long-password"
+          curl -sf -o /dev/null -X POST $G/api/v1/users -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$E\",\"password\":\"$P\",\"displayName\":\"CI Staff\"}"
+          signin() {
+            curl -s -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' \
+              -d "{\"email\":\"$E\",\"password\":\"$P\"}" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4
+          }
+          receive() {
+            curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer $1" -d "{\"sku\":\"CI-STAFF-$(date +%s%N)\",\"initialQuantity\":1,\"reason\":\"CI\"}"
+          }
+
+          BEFORE=$(receive "$(signin)")
+          echo "before any grant, receiving stock: $BEFORE"
+          test "$BEFORE" = "403"
+
+          # OPERATOR is refused unless the grant says it is breaking glass.
+          set +e
+          scripts/grant-role.sh grant "$E" OPERATOR --reason "convenience" 2>/dev/null
+          RC=$?
+          set -e
+          echo "OPERATOR without --break-glass: exit $RC"
+          test "$RC" = "3"
+
+          scripts/grant-role.sh grant "$E" WAREHOUSE --reason "CI: warehouse duty"
+          # Roles are read at sign-in, so the grant takes effect on the next token.
+          T=$(signin)
+          AFTER=$(receive "$T")
+          CATALOGUE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/products -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $T" -d '{"sku":"CI-NOPE","name":"Not yours","basePrice":1.00,"currency":"USD","status":"ACTIVE"}')
+          echo "after WAREHOUSE: receiving stock $AFTER, creating a product $CATALOGUE"
+          test "$AFTER" = "201"
+          test "$CATALOGUE" = "403"
+
+          RECORDS=$(docker compose exec -T postgres psql -U flashcart -d flashcart_user -tAc \
+            "select count(*) from role_grants g join users u on u.id = g.user_id where u.email = '$E'" | tr -d '[:space:]')
+          echo "role_grants rows for $E: $RECORDS"
+          test "$RECORDS" = "1"
+
       - name: A checkout settles asynchronously across four services
         run: |
           set -e
@@ -771,7 +818,7 @@ jobs:
           SKU=CI-RUSH-$(date +%s)
           curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI rush\"}" > /dev/null
 
-          docker run --rm --network flashcart_default             -v "$PWD/load/scripts:/scripts:ro"             -e GATEWAY=http://gateway:8080 -e SKU="$SKU" -e VUS=100 -e ITERATIONS=300 -e TOKEN="$OPERATOR"             grafana/k6:0.56.0 run /scripts/flash-sale.js > /tmp/k6.txt 2>&1 || true
+          docker run --rm --network flashcart_default             -v "$PWD/load/scripts:/scripts:ro"             -e GATEWAY=http://gateway:8080 -e SKU="$SKU" -e VUS=100 -e ITERATIONS=300 -e TOKEN="$WAREHOUSE"             grafana/k6:0.56.0 run /scripts/flash-sale.js > /tmp/k6.txt 2>&1 || true
           grep -E 'reservations_(granted|refused|shed|errored)' /tmp/k6.txt || true
 
           GRANTED=$(grep -oE 'reservations_granted[. ]*: *[0-9]+' /tmp/k6.txt | grep -oE '[0-9]+$')

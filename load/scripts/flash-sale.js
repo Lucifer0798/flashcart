@@ -23,7 +23,8 @@ const SKU = __ENV.SKU;
 const VUS = Number(__ENV.VUS || 200);
 const ITERATIONS = Number(__ENV.ITERATIONS || 2000);
 
-// Reserving stock requires an operator since ADR 0022. The harness signs in once and passes the token
+// Reserving stock is warehouse work (ADRs 0022, 0038): the token needs WAREHOUSE, and nothing more is
+// asked of it -- run.sh and CI both sign in as the warehouse account. The harness signs in once and passes the token
 // in, rather than each VU minting its own -- a run where every iteration also ran BCrypt would be
 // measuring the password encoder as much as the reserve path.
 //
@@ -33,7 +34,8 @@ const ITERATIONS = Number(__ENV.ITERATIONS || 2000);
 // exists to prevent, and it is the failure it produced the first time CI ran it without a token.
 const TOKEN = __ENV.TOKEN;
 if (!TOKEN) {
-	throw new Error('TOKEN is required: reserving stock needs an operator. Pass -e TOKEN=$(./scripts/operator-token.sh)');
+	throw new Error('TOKEN is required: reserving stock needs WAREHOUSE. '
+		+ 'Pass -e TOKEN=$(OPERATOR_EMAIL=warehouse@flashcart.local ./scripts/operator-token.sh)');
 }
 
 // Counted separately rather than read off the status codes afterwards, because "refused" and

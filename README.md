@@ -649,8 +649,10 @@ $ curl -X POST localhost:18082/api/v1/orders -H 'X-Customer-Id: someone-else' ..
 ### Operators
 
 Receiving stock, adjusting a ledger, creating an allocation and dispatching a parcel need more than an
-account. **Being signed in makes somebody a customer, not a warehouse** — those need the `OPERATOR`
-role ([ADR 0022](docs/adr/0022-being-signed-in-is-not-being-a-warehouse.md)).
+account. **Being signed in makes somebody a customer, not a warehouse** — those need a staff role
+([ADR 0022](docs/adr/0022-being-signed-in-is-not-being-a-warehouse.md)): `WAREHOUSE`, `CATALOG` or
+`SUPPORT` for the three jobs, or `OPERATOR`, which can do all of them
+([ADR 0038](docs/adr/0038-one-role-did-too-much.md)).
 
 ```bash
 TOKEN=$(./scripts/operator-token.sh)   # seeded development operator
@@ -695,6 +697,21 @@ all**, and the user service logs an error at startup if it finds that row while 
 Its password is in the repository and is meant to be: it is a development credential, and the point
 of the profile is that it cannot arrive anywhere it was not requested. See
 [ADR 0024](docs/adr/0024-the-development-operator-is-not-schema.md).
+
+**Making somebody staff in a real deployment.** There is no endpoint for it, deliberately. Use the
+script, which grants the narrowest role the job needs and records who granted what, and why:
+
+```bash
+scripts/grant-role.sh grant  alex@example.com WAREHOUSE --reason "joins the warehouse team"
+scripts/grant-role.sh revoke alex@example.com WAREHOUSE --reason "moved to merchandising"
+# OPERATOR can do everything, so it is refused without saying so:
+scripts/grant-role.sh grant  alex@example.com OPERATOR --break-glass --reason "incident 42, until 18:00"
+```
+
+It accepts only roles that exist — the database refuses anything else too — and writes
+`role_grants` in the same transaction as the change. The new role takes effect at the account's next
+sign-in. Point it at a database other than the compose stack's with `DATABASE_URL`. See
+[ADR 0047](docs/adr/0047-staff-roles-on-the-record.md).
 
 **Every operator read of somebody else's data is recorded.** Order, payment and shipping each keep an
 `operator_access_log` in their own database: who looked, whose data it was, what they looked at, and

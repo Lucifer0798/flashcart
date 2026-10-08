@@ -68,10 +68,11 @@ fi
 
 # --- 2. seed exactly the stock we intend to fight over -------------------------------------------
 #
-# Seeding stock and reserving both need an operator now: being signed in makes somebody a customer,
-# not a warehouse. See ADR 0022.
-echo "--> signing in as the operator"
-TOKEN=$("$ROOT/scripts/operator-token.sh")
+# Seeding stock and reserving are both warehouse work: being signed in makes somebody a customer, not a
+# warehouse (ADR 0022). The harness holds WAREHOUSE and nothing more -- it never needed OPERATOR, which
+# would also have masked a reservation rule scoped to the wrong role (ADRs 0039, 0047).
+echo "--> signing in as the warehouse"
+TOKEN=$(OPERATOR_EMAIL="${WAREHOUSE_EMAIL:-warehouse@flashcart.local}" "$ROOT/scripts/operator-token.sh")
 
 echo "--> seeding $SKU with $STOCK units"
 SEED_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:18080/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" -d "{\"sku\":\"$SKU\",\"initialQuantity\":$STOCK,\"reason\":\"load test $LABEL\"}")

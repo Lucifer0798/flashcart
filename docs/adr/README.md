@@ -44,7 +44,7 @@ when someone revisits it in six months.
 | [0036](0036-anyone-could-set-the-price.md) | Anyone could set the price | Accepted |
 | [0037](0037-the-last-one-unargued.md) | The last one unargued | Accepted |
 | [0038](0038-one-role-did-too-much.md) | One role did too much | Accepted |
-| [0039](0039-nothing-ever-ran-without-operator.md) | Nothing ever ran without OPERATOR | Accepted |
+| [0039](0039-nothing-ever-ran-without-operator.md) | Nothing ever ran without OPERATOR | Accepted, corrected by 0047 |
 | [0040](0040-a-cancelled-sale-gives-the-units-back.md) | A cancelled sale gives the units back | Accepted |
 | [0041](0041-the-alert-that-forgot.md) | The alert that forgot | Accepted |
 | [0042](0042-every-alert-went-quiet-together.md) | Every alert went quiet together | Accepted |
@@ -52,3 +52,4 @@ when someone revisits it in six months.
 | [0044](0044-a-queue-for-what-is-gone.md) | A queue for what is gone | Accepted, amended by 0045 |
 | [0045](0045-told-means-yours.md) | Told means yours | Accepted |
 | [0046](0046-the-first-message-out.md) | The first message out | Accepted |
+| [0047](0047-staff-roles-on-the-record.md) | Staff roles, on the record | Accepted |

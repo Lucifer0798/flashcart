@@ -1,6 +1,6 @@
 # 0039 — Nothing ever ran without OPERATOR
 
-**Status:** Accepted · **Date:** 2026-10-01 · **Phase:** post-roadmap · **Exercises [ADR 0038](0038-one-role-did-too-much.md)**
+**Status:** Accepted · **Date:** 2026-10-01 · **Phase:** post-roadmap · **Exercises [ADR 0038](0038-one-role-did-too-much.md)** · **Corrected by [ADR 0047](0047-staff-roles-on-the-record.md)**
 
 ## Context
 
@@ -44,6 +44,8 @@ The wrong-verb probe sends `PUT /api/v1/products`, a path no role rule covers, a
 keep `OPERATOR`, and that is the point: it asserts in passing that **an unlisted path is still
 operator-only**, which is the default the whole arrangement rests on. Narrowing it would have removed
 the only check that the fallback still exists.
+
+*Not quite the one: CI's k6 load step also passed `$OPERATOR` as the harness token, and this record missed it. It needed only `WAREHOUSE` and holds only that since [ADR 0047](0047-staff-roles-on-the-record.md), which leaves the wrong-verb probe as genuinely the last.*
 
 ### `SeededOperatorCheck` had to grow, and this is the part that nearly went wrong
 
@@ -118,6 +120,8 @@ the wrong role now fails loudly in CI rather than being absorbed by a superset.
   it makes the narrow roles demonstrably usable, which is the prerequisite.
 - The load harness still signs in as the operator. It only places orders and reads its own, so a
   shopper account would be the honest fit — smaller than it sounds and not bundled here.
+
+  *Wrong about what the harness does: it seeds stock and reserves directly against inventory, which is warehouse work, not a shopper's. It signs in as `WAREHOUSE` since [ADR 0047](0047-staff-roles-on-the-record.md).*
 - Whether a customer may read their own access log, and the operator-scoped view
   ([ADR 0034](0034-who-read-my-data.md)).
 - Cancelled paid orders do not return their units to stock
