@@ -51,3 +51,4 @@ when someone revisits it in six months.
 | [0043](0043-an-alert-nobody-receives.md) | An alert nobody receives | Accepted |
 | [0044](0044-a-queue-for-what-is-gone.md) | A queue for what is gone | Accepted, amended by 0045 |
 | [0045](0045-told-means-yours.md) | Told means yours | Accepted |
+| [0046](0046-the-first-message-out.md) | The first message out | Accepted |

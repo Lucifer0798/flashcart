@@ -246,10 +246,19 @@ services:
       # The database has existed since Phase 1's init script; the service that owns it took until
       # after the roadmap to arrive.
       JWT_SECRET: ${JWT_SECRET:-flashcart-development-secret-do-not-use-anywhere-real}
+      # Since ADR 0046 this service tells shoppers their SKU is back: it hears BackInStock on Kafka and
+      # sends mail, which locally means Mailpit.
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
     ports:
       - "18083:8083"
     depends_on:
       postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      mailpit:
         condition: service_healthy
 
   payment:
@@ -395,6 +404,19 @@ services:
     depends_on:
       prometheus:
         condition: service_healthy
+
+  # Where the platform's mail goes locally (ADR 0046): an SMTP server that delivers nothing and shows
+  # everything. The inbox is http://localhost:19025, and its API is what CI reads to prove a shopper was
+  # actually emailed rather than merely recorded as notified.
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "19025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   # Where alerts go (ADR 0043). Before this, every rule fired into Prometheus's own UI and nowhere else.
   alertmanager:

@@ -1,0 +1,15 @@
+# Test-only overrides, layered over src/main/resources/application.yml (classpath:/config/ is read in
+# addition to the classpath root, and wins).
+spring:
+  kafka:
+    listener:
+      # No broker in these tests. The listener is exercised by calling it, which is what the other
+      # services' suites do too; the broker crossing is covered by the compose stack and CI.
+      auto-startup: false
+
+flashcart:
+  notices:
+    # Tests drive the sender with sendDue(). A background tick racing them would make "still pending
+    # after a failure" depend on timing.
+    poll: PT1H
+    initial-delay: PT1H

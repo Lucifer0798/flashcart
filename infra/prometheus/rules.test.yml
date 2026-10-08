@@ -234,6 +234,32 @@ tests:
         alertname: RefundAbandoned
         exp_alerts: []
 
+  # --- NoticesBacklogged ----------------------------------------------------------------------------
+
+  - name: back-in-stock emails ten minutes behind
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_notices_oldest_pending_seconds{service="user"}'
+        values: '0 60+60x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NoticesBacklogged
+        exp_alerts:
+          - exp_labels: { severity: warning }
+
+  # A busy sender is a few seconds behind, all the time -- steadily, so a threshold set anywhere near
+  # that would fire here. An earlier noisy series dipped to zero often enough to let a 1s threshold
+  # through, which is how this case was found to be proving nothing.
+  - name: a sender keeping up
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_notices_oldest_pending_seconds{service="user"}'
+        values: '0 5x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NoticesBacklogged
+        exp_alerts: []
+
   # --- CancellationsUnanswered ----------------------------------------------------------------------
 
   - name: cancellations re-asked for ten minutes and never answered
