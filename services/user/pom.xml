@@ -101,6 +101,17 @@
 			<scope>runtime</scope>
 		</dependency>
 		<dependency>
+			<!-- Consumes BackInStock from inventory (ADR 0046). Also switches on the shared outbox and
+			     once-only handling from flashcart-common, which is why V4 creates their tables. -->
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-kafka</artifactId>
+		</dependency>
+		<dependency>
+			<!-- The platform's first outbound message. SMTP to Mailpit locally; a real relay elsewhere. -->
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+		</dependency>
+		<dependency>
 			<groupId>org.springdoc</groupId>
 			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
 		</dependency>

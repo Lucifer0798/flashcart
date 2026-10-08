@@ -90,7 +90,9 @@ jobs:
       # nothing about whether anything else works.
       fail-fast: false
       matrix:
-        module: [catalog, inventory, order, payment, shipping]
+        # user since ADR 0046. Its integration tests existed from the day the service did and were never
+        # run here: the unit job skips ITs and user was missing from this list.
+        module: [catalog, inventory, order, payment, shipping, user]
     steps:
       - uses: actions/checkout@v5
 
@@ -134,8 +136,12 @@ jobs:
           docker compose up -d
           echo "Waiting for every service to report healthy..."
           for i in $(seq 1 90); do
-            unhealthy=$(docker compose ps --format '{{.Service}} {{.Health}}' \
-              | awk '$2 != "healthy" && $2 != "" { print $1 }')
+            # Running, and healthy where there is a healthcheck. Health alone was not enough: a
+            # container crash-looping on startup reports state "restarting" and an empty health, which
+            # the old filter read as "no healthcheck" and passed. ADR 0046 found it by crash-looping
+            # the user service on a migration while this loop reported every service healthy.
+            unhealthy=$(docker compose ps --format '{{.Service}} {{.State}} {{.Health}}' \
+              | awk '$2 != "running" || ($3 != "healthy" && $3 != "") { print $1 }')
             if [ -z "$unhealthy" ]; then
               echo "All services healthy."
               exit 0
@@ -353,7 +359,7 @@ jobs:
             -d "{\"sku\":\"$SKU\",\"initialQuantity\":0,\"reason\":\"CI waitlist\"}" > /dev/null
           CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
           curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $CATALOG" \
-            -d "{\"sku\":\"$SKU\",\"name\":\"CI Waitlist Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
+            -d "{\"sku\":\"$SKU\",\"name\":\"CI Waitlist Probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":10.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
           CODE=$(curl -s -o /tmp/w.json -w '%{http_code}' -X POST $G/api/v1/inventory/waitlist \
             -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" -d "{\"sku\":\"$SKU\"}")
@@ -373,6 +379,18 @@ jobs:
           assert entry and entry[0]['status'] == 'NOTIFIED' and entry[0]['heldUntil'], entry
           print('notified, held until', entry[0]['heldUntil'])
           "
+
+          # And actually emailed (ADR 0046): the user service hears BackInStock over Kafka and sends
+          # through Mailpit, whose API is the inbox. Polled, because sending is its own scheduled hop.
+          ME=$(curl -sf -H "Authorization: Bearer $TOKEN" $G/api/v1/users/me | sed -n 's/.*"email":"\([^"]*\)".*/\1/p')
+          for i in $(seq 1 30); do
+            HITS=$(curl -s "http://localhost:19025/api/v1/search?query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote('to:\"$ME\" subject:\"$SKU\"'))")" \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('messages_count', 0))")
+            if [ "${HITS:-0}" -ge 1 ]; then break; fi
+            sleep 2
+          done
+          echo "emails to $ME about $SKU: ${HITS:-0}"
+          test "${HITS:-0}" = "1" || { docker compose logs --tail=60 user; exit 1; }
 
           # A stranger who never queued checks out first. The one unit is held, so they get nothing.
           SEMAIL="ci-stranger-$(date +%s)@example.test"

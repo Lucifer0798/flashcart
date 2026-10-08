@@ -85,3 +85,9 @@ spring:
       on-profile: demo
   flyway:
     locations: classpath:db/migration,classpath:db/seed
+    # The seeds are numbered V900 and up so they run after the schema on a fresh database. On one that
+    # already has them, every later schema migration sorts below an applied seed, and Flyway refuses to
+    # start: "Detected resolved migration not applied to database". ADR 0046's V4 crash-looped the user
+    # service on exactly that. Out of order is allowed here, and only here, because only here are there
+    # seeds to be out of order with.
+    out-of-order: true

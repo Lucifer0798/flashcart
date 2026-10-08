@@ -19,6 +19,28 @@ spring:
     # Explicit, and deliberately not including db/seed: that location holds the development operator
     # account, whose password is readable in this repository. See ADR 0024.
     locations: classpath:db/migration
+  kafka:
+    # Consumer only: this service hears BackInStock and sends the email (ADR 0046). Observation on
+    # both sides, as everywhere else, so the trace a restock started continues into the send.
+    template:
+      observation-enabled: true
+    listener:
+      observation-enabled: true
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+  mail:
+    # Mailpit in the local stack: an SMTP server that delivers nothing and shows everything at
+    # http://localhost:19025. A real relay is a host, a port and credentials away.
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    properties:
+      # JavaMail waits for ever by default. A mail server that stops answering mid-connect then holds
+      # the sender -- and with it the single scheduler thread every @Scheduled job here shares -- until
+      # the OS gives up, minutes later. Found by stopping Mailpit under the running stack: the notice
+      # was never even attempted until Mailpit came back. Five seconds, then a recorded failure and a
+      # retry with backoff. See ADR 0046.
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
 
 server:
   port: ${SERVER_PORT:8083}
@@ -35,6 +57,13 @@ management:
       probes:
         enabled: true
       show-details: when-authorized
+  health:
+    mail:
+      # Off. Boot's mail indicator connects to SMTP on every health check, so a mail outage reported
+      # this whole service DOWN -- to compose, and to anything that restarts unhealthy containers --
+      # and sign-in would have gone with it because email had. Sending has its own backlog gauge and
+      # alert (NoticesBacklogged), which say the true thing: mail is behind, the service is fine.
+      enabled: false
   tracing:
     propagation:
       # W3C rather than Brave's default B3, because the outbox stores the trace context as a
@@ -73,6 +102,11 @@ flashcart:
       # keeps the private half. See ADR 0021.
       secret: ${JWT_SECRET:flashcart-development-secret-do-not-use-anywhere-real}
       ttl: ${JWT_TTL:PT12H}
+  notices:
+    from: ${NOTICES_FROM:FlashCart <no-reply@flashcart.local>}
+    # How often the sender looks for notices due. Short, because a notice is about a unit held for
+    # minutes; the backoff for a failing mail server is per notice, not this.
+    poll: PT2S
 
 ---
 # The development operator, and nothing else. `demo` adds classpath:db/seed to the Flyway locations,
@@ -84,3 +118,9 @@ spring:
       on-profile: demo
   flyway:
     locations: classpath:db/migration,classpath:db/seed
+    # The seeds are numbered V900 and up so they run after the schema on a fresh database. On one that
+    # already has them, every later schema migration sorts below an applied seed, and Flyway refuses to
+    # start: "Detected resolved migration not applied to database". ADR 0046's V4 crash-looped the user
+    # service on exactly that. Out of order is allowed here, and only here, because only here are there
+    # seeds to be out of order with.
+    out-of-order: true

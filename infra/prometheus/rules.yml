@@ -152,6 +152,22 @@ groups:
             select order_number, amount, currency, customer_id, refund_attempts, failure_reason
               from payments where status = 'REFUND_FAILED' order by updated_at desc;
 
+      - alert: NoticesBacklogged
+        # The oldest back-in-stock email still unsent is ten minutes old. That is the length of the hold
+        # the email is about (ADR 0045): past it, the unit has already passed to the next shopper and the
+        # notice is skipped as stale, so a mail outage this long means people are being skipped over
+        # without ever being told. See ADR 0046.
+        expr: max(flashcart_user_notices_oldest_pending_seconds) > 600
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "user: back-in-stock emails are {{ $value | humanizeDuration }} behind"
+          description: >
+            Notices are being received and not sent. The sender retries with backoff and never gives up,
+            so this clears on its own once mail is flowing again -- but every notice older than its hold
+            is skipped rather than sent. Check the mail server, then the user service's logs for
+            "Could not send back-in-stock notice".
+
       - alert: CancellationsUnanswered
         # Not "a cancellation was re-asked" -- one re-ask is a lost message, which is what the
         # backstop is for and is not a fault. This fires when re-asking is not working: the rate has
