@@ -6,14 +6,21 @@ import com.flashcart.common.event.DomainEvent;
 import com.flashcart.common.event.EventMetadata;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
-/** The order will not be fulfilled, and this is why. */
+/**
+ * The order's parcel has left with the carrier: the moment cancelling stops being possible.
+ *
+ * <p>Shipping's {@code ShipmentDispatched} says the same thing about a shipment; this is the order's own
+ * account of it, carrying the customer, so whatever tells the shopper -- the user service's email, since
+ * ADR 0048 -- hears the order's story from the order. Published once, on entering {@code DISPATCHED},
+ * whichever way the order got there.
+ */
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record OrderCancelled(EventMetadata metadata,
+public record OrderDispatched(EventMetadata metadata,
 		String orderNumber,
-		String reason,
-		String customerId) implements DomainEvent {
+		String customerId,
+		Instant dispatchedAt) implements DomainEvent {
 
-	public static final String TYPE = "OrderCancelled";
+	public static final String TYPE = "OrderDispatched";
 
 
 	@Override

@@ -37,6 +37,9 @@ class PaymentRefundIT extends AbstractPaymentIT {
 		assertThat(refunded.getSettledAt()).isNotNull();
 
 		PaymentRefunded event = events.require(PaymentRefunded.class);
+		// Who and which order, so the refund can be emailed by the user service without a lookup (ADR 0048).
+		assertThat(event.orderNumber()).isEqualTo(charged.getOrderNumber());
+		assertThat(event.customerId()).isEqualTo(charged.getCustomerId());
 		assertThat(event.amount()).isEqualByComparingTo("179.00");
 		assertThat(event.providerReference()).isEqualTo(refunded.getRefundReference());
 	}

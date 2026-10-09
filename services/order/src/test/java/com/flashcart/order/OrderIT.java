@@ -13,6 +13,7 @@ import com.flashcart.common.event.message.CancelShipment;
 import com.flashcart.common.event.message.CommitInventory;
 import com.flashcart.common.event.message.CreateShipment;
 import com.flashcart.common.event.message.OrderCancelled;
+import com.flashcart.common.event.message.OrderDispatched;
 import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDelivered;
 import com.flashcart.common.event.message.RefundPayment;
@@ -376,6 +377,9 @@ class OrderIT {
 		// Nothing was held, so there is nothing to release — and no release is published.
 		assertThat(events.published(ReleaseInventory.class)).isFalse();
 		assertThat(events.published(OrderCancelled.class)).isTrue();
+		// Carries the customer, so a cancellation can be emailed without asking the order service who
+		// it belonged to (ADR 0048).
+		assertThat(events.require(OrderCancelled.class).customerId()).isNotBlank();
 	}
 
 	@Test
@@ -505,6 +509,10 @@ class OrderIT {
 		saga.onShipmentDispatched(order.id(), Instant.now());
 
 		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DISPATCHED);
+		// The order's own account of it, carrying the customer: what the user service emails (ADR 0048).
+		OrderDispatched dispatched = events.require(OrderDispatched.class);
+		assertThat(dispatched.orderNumber()).isEqualTo(order.orderNumber());
+		assertThat(dispatched.customerId()).isEqualTo("cust-1");
 
 		ResponseEntity<Map> refused = rest.postForEntity(
 				"/api/v1/orders/" + order.orderNumber() + "/cancel", null, Map.class);
@@ -547,11 +555,33 @@ class OrderIT {
 		OrderResponse order = shippedOrder("cust-1");
 		requestCancellation(order);
 
+		events.clear();
 		saga.onShipmentCancellationRefused(order.id(), "DELIVERED", "already delivered");
 
 		// The other status shipping can refuse with. Resolving it to DISPATCHED would leave the order
 		// claiming the parcel is still in transit when shipping has just said it arrived.
 		assertThat(fetch(order.orderNumber()).status()).isEqualTo(OrderStatus.DELIVERED);
+
+		// And announced. Arriving here by refusal, the order is already DELIVERED when shipping's own
+		// ShipmentDelivered lands, that transition is declined, and until ADR 0048 nothing was ever
+		// published for this order -- the delivery email would silently never have gone.
+		assertThat(events.require(OrderDelivered.class).customerId()).isEqualTo("cust-1");
+		saga.onShipmentDelivered(order.id(), Instant.now());
+		assertThat(events.countOf(OrderDelivered.class)).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("a cancellation refused because the parcel left announces the dispatch, once")
+	void refusalWhileDispatchedAnnouncesIt() {
+		OrderResponse order = shippedOrder("cust-1");
+		requestCancellation(order);
+		events.clear();
+
+		saga.onShipmentCancellationRefused(order.id(), "DISPATCHED", "already with the carrier");
+		saga.onShipmentDispatched(order.id(), Instant.now());
+
+		assertThat(events.countOf(OrderDispatched.class)).isEqualTo(1);
+		assertThat(events.require(OrderDispatched.class).customerId()).isEqualTo("cust-1");
 	}
 
 	@Test

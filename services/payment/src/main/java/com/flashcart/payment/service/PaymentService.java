@@ -254,7 +254,8 @@ public class PaymentService {
 		events.publish(Topics.PAYMENT_EVENTS, new PaymentRefunded(
 				EventMetadata.of(PaymentRefunded.TYPE, payment.getOrderId()),
 				payment.getId().toString(), payment.getAmount(), payment.getCurrency(),
-				payment.getRefundReference()));
+				payment.getRefundReference(),
+				payment.getOrderNumber(), payment.getCustomerId()));
 	}
 
 	/** Exposed for the reconciler. */

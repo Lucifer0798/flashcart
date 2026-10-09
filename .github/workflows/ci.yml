@@ -347,7 +347,7 @@ jobs:
           CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
           # 10.00: no cents the simulated provider treats specially, so it is captured and refunded.
           curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $CATALOG" \
-            -d "{\"sku\":\"$SKU\",\"name\":\"CI Return Probe\",\"categoryId\":\"$CAT\",\"basePrice\":10.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
+            -d "{\"sku\":\"$SKU\",\"name\":\"CI Return Probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":10.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
 
           curl -s -o /tmp/r.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
             -d "{\"idempotencyKey\":\"ci-return-$(date +%s)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"
@@ -382,6 +382,20 @@ jobs:
             sleep 2
           done
           test "$STATUS" = "CANCELLED" || { echo "never reached CANCELLED (at $STATUS)"; curl -s -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER/history"; exit 1; }
+
+          # And the shopper was told each step, by email (ADR 0048): confirmed when it was paid, cancelled
+          # when shipping stopped it, refunded once payment actually moved the money. Three, in that order,
+          # and no more. Polled, because each is its own hop through Kafka and the sender.
+          ME=$(curl -sf -H "Authorization: Bearer $TOKEN" $G/api/v1/users/me | sed -n 's/.*"email":"\([^"]*\)".*/\1/p')
+          for i in $(seq 1 30); do
+            SUBJECTS=$(curl -s "http://localhost:19025/api/v1/search?query=$(python3 -c "import urllib.parse; print(urllib.parse.quote('to:\"$ME\" subject:\"$ORDER\"'))")" \
+              | python3 -c "import json,sys; print('|'.join(m['Subject'] for m in sorted(json.load(sys.stdin)['messages'], key=lambda m: m['Created'])))")
+            if [ "$(echo "$SUBJECTS" | tr '|' '\n' | grep -c .)" -ge 3 ]; then break; fi
+            sleep 2
+          done
+          echo "emails about $ORDER: $SUBJECTS"
+          test "$SUBJECTS" = "Order $ORDER confirmed|Order $ORDER was cancelled|Refund for order $ORDER" \
+            || { docker compose logs --tail=60 user; exit 1; }
 
           # The point of the step. Before ADR 0040 this stayed at 2 for good: refunded, on the
           # shelf, and counted as sold.

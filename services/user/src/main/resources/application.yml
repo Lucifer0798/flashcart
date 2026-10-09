@@ -107,6 +107,10 @@ flashcart:
     # How often the sender looks for notices due. Short, because a notice is about a unit held for
     # minutes; the backoff for a failing mail server is per notice, not this.
     poll: PT2S
+    # How long after the event an email is still worth sending. Past it, skipped as stale: an order
+    # confirmation a day late is noise, and one replayed from the topic's history on a first deploy is
+    # worse -- which is what happened before this existed. See ADR 0048.
+    max-age: ${NOTICES_MAX_AGE:P1D}
 
 ---
 # The development operator, and nothing else. `demo` adds classpath:db/seed to the Flyway locations,
