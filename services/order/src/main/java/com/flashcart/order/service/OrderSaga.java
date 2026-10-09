@@ -15,6 +15,7 @@ import com.flashcart.common.event.message.CreateShipment;
 import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDelivered;
+import com.flashcart.common.event.message.OrderDispatched;
 import com.flashcart.common.event.message.OrderLineMessage;
 import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
@@ -287,8 +288,19 @@ public class OrderSaga {
 		// The customer keeps the goods and the charge stands, which is the correct outcome for a
 		// parcel already in transit -- and the history carries the attempt and the reason it failed,
 		// so "I cancelled this and it arrived anyway" has an answer.
+		// Published here too, not only from the shipment events. Arriving this way, the order is already
+		// in the state when shipping's own ShipmentDispatched or ShipmentDelivered lands, that transition
+		// is declined, and nothing was ever published: an order delivered via a refused cancellation
+		// never announced it. ADR 0048 found this when the announcement started to be an email.
 		advance(orderId, resolved,
-				"cancellation refused: %s (%s)".formatted(reason, shipmentStatus), order -> { });
+				"cancellation refused: %s (%s)".formatted(reason, shipmentStatus), order -> {
+					if (resolved == OrderStatus.DELIVERED) {
+						publishDelivered(order);
+					}
+					else {
+						publishDispatched(order, null);
+					}
+				});
 	}
 
 
@@ -310,7 +322,7 @@ public class OrderSaga {
 	@Transactional
 	public void onShipmentDispatched(UUID orderId, Instant dispatchedAt) {
 		advance(orderId, OrderStatus.DISPATCHED, "handed to the carrier " + dispatchedAt,
-				order -> { });
+				order -> publishDispatched(order, dispatchedAt));
 	}
 
 	/**
@@ -323,10 +335,7 @@ public class OrderSaga {
 	 */
 	@Transactional
 	public void onShipmentDelivered(UUID orderId, Instant deliveredAt) {
-		advance(orderId, OrderStatus.DELIVERED, "delivered " + deliveredAt, order ->
-				events.publish(Topics.ORDER_EVENTS, new OrderDelivered(
-						EventMetadata.of(OrderDelivered.TYPE, order.getId()),
-						order.getOrderNumber(), order.getCustomerId())));
+		advance(orderId, OrderStatus.DELIVERED, "delivered " + deliveredAt, this::publishDelivered);
 	}
 
 	// --- the guard every handler goes through -------------------------------------------------------
@@ -377,9 +386,22 @@ public class OrderSaga {
 		thenDo.accept(order);
 	}
 
+	private void publishDelivered(Order order) {
+		events.publish(Topics.ORDER_EVENTS, new OrderDelivered(
+				EventMetadata.of(OrderDelivered.TYPE, order.getId()),
+				order.getOrderNumber(), order.getCustomerId()));
+	}
+
+	/** @param dispatchedAt null when the order learned of it from a refused cancellation rather than shipping */
+	private void publishDispatched(Order order, Instant dispatchedAt) {
+		events.publish(Topics.ORDER_EVENTS, new OrderDispatched(
+				EventMetadata.of(OrderDispatched.TYPE, order.getId()),
+				order.getOrderNumber(), order.getCustomerId(), dispatchedAt));
+	}
+
 	private void publishCancelled(Order order, String reason) {
 		events.publish(Topics.ORDER_EVENTS, new OrderCancelled(
 				EventMetadata.of(OrderCancelled.TYPE, order.getId()),
-				order.getOrderNumber(), reason));
+				order.getOrderNumber(), reason, order.getCustomerId()));
 	}
 }

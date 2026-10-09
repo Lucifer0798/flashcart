@@ -13,7 +13,9 @@ public record PaymentRefunded(EventMetadata metadata,
 		String paymentId,
 		BigDecimal amount,
 		String currency,
-		String providerReference) implements DomainEvent {
+		String providerReference,
+		String orderNumber,
+		String customerId) implements DomainEvent {
 
 	public static final String TYPE = "PaymentRefunded";
 

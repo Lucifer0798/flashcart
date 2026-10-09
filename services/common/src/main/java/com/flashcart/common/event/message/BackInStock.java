@@ -10,9 +10,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  * A shopper waiting for a sold-out SKU has been told units came back. One per shopper told.
  *
  * <p>Published by inventory in the same transaction as the stock change that freed the units and the
- * claim that chose this shopper, so the three cannot disagree. Nothing in the platform consumes it
- * yet: it is the hook a notifier (email, push) would subscribe to. The aggregate is the waitlist
- * entry, so a consumer that dedupes by aggregate tells each place in the queue once. See ADR 0044.
+ * claim that chose this shopper, so the three cannot disagree. The user service consumes it and emails
+ * the shopper (ADR 0046), keyed by the waitlist entry so each place in the queue is told once. See
+ * ADR 0044.
  *
  * @param waitlistEntryId the place in the queue this notice is for
  * @param heldUntil       when the unit held for this shopper is released if they have not checked out

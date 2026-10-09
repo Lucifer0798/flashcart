@@ -312,7 +312,11 @@ When `n` units come back — received, released, **expired**, or returned from a
 Each shopper told also has **one unit held in their name** for ten minutes (`heldUntil` in `/mine`):
 their next checkout for that SKU takes it over, and a stranger's cannot. Unused, the hold lapses and the
 unit passes to the next in line. The shopper is **emailed** — locally that mail lands in Mailpit at
-<http://localhost:19025> ([ADR 0046](docs/adr/0046-the-first-message-out.md)). See [ADR 0044](docs/adr/0044-a-queue-for-what-is-gone.md) and
+<http://localhost:19025> ([ADR 0046](docs/adr/0046-the-first-message-out.md)).
+
+The same queue emails every order's story: **confirmed, on its way, delivered, cancelled** (worded by why)
+and **refunded** — once each, in the order they happened, retried through a mail outage rather than lost
+([ADR 0048](docs/adr/0048-the-order-tells-its-own-story.md)). See [ADR 0044](docs/adr/0044-a-queue-for-what-is-gone.md) and
 [ADR 0045](docs/adr/0045-told-means-yours.md).
 
 ## The order API
