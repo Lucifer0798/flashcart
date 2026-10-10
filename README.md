@@ -66,11 +66,12 @@ Observability rides alongside: every service exposes `/actuator/prometheus`, scr
 :19090 and drawn by **Grafana** :13000, with traces going to **Zipkin** :19411. Firing alerts go through
 **Alertmanager** :19093 to a local **alert sink** :19095.
 
-Every host port sits in the 15000–19000 range so the whole stack coexists with anything already
-listening on 5432, 6379 or 8080.
+Every host port is the usual one with a 1 in front — PostgreSQL on 15432, Redis on 16379, the gateway
+on 18080, Prometheus on 19090, Grafana on 13000 — so the whole stack coexists with anything already
+listening on the usual ports. The alert sink, which has no usual port, sits beside Alertmanager on 19095.
 
-The full documentation set — the architecture reference, the load and chaos results, and twenty
-decision records — is mapped in [docs/README.md](docs/README.md).
+The full documentation set — the architecture reference, the load and chaos results, and the decision
+records — is mapped in [docs/README.md](docs/README.md).
 
 ### Service boundaries
 
@@ -146,7 +147,7 @@ Each service's `application.yml` already defaults to the published host ports.
 | Prometheus              | http://localhost:19090                         |
 | Alertmanager            | http://localhost:19093                         |
 | Alert sink (the inbox)  | http://localhost:19095/alerts                  |
-| Mailpit (sent email)    | http://localhost:19025                         |
+| Mailpit (sent email)    | http://localhost:18025                         |
 
 ---
 
@@ -312,7 +313,7 @@ When `n` units come back — received, released, **expired**, or returned from a
 Each shopper told also has **one unit held in their name** for ten minutes (`heldUntil` in `/mine`):
 their next checkout for that SKU takes it over, and a stranger's cannot. Unused, the hold lapses and the
 unit passes to the next in line. The shopper is **emailed** — locally that mail lands in Mailpit at
-<http://localhost:19025> ([ADR 0046](docs/adr/0046-the-first-message-out.md)).
+<http://localhost:18025> ([ADR 0046](docs/adr/0046-the-first-message-out.md)).
 
 The same queue emails every order's story: **confirmed, on its way, delivered, cancelled** (worded by why)
 and **refunded** — once each, in the order they happened, retried through a mail outage rather than lost

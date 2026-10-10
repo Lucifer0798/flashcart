@@ -29,6 +29,8 @@ public class ServiceInfoController {
 
 	@GetMapping("/_info")
 	public Map<String, String> info() {
-		return Map.of("service", applicationName, "version", version, "status", "skeleton", "implementedIn", "Phase 4");
+		// "live", since long before this said so. It reported "skeleton", implemented in Phase 4, from the
+		// day it was scaffolded through registration, sign-in, roles and email -- and CI asserted the word.
+		return Map.of("service", applicationName, "version", version, "status", "live", "implementedIn", "post-roadmap");
 	}
 }

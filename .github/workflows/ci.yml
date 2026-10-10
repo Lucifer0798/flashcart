@@ -41,6 +41,12 @@ jobs:
           # looked right -- so it is a script that checks itself, and it runs here.
           python3 scripts/endpoint-coverage.py
 
+      - name: Every decision record is in both lists of them
+        run: |
+          # The map in docs/README.md stopped at 0039 for nine records while still claiming "twenty",
+          # and nothing noticed. Both lists are hand-written, so both are checked.
+          python3 scripts/adr-index-check.py
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5
@@ -161,10 +167,11 @@ jobs:
           echo "--- the listing applies the sale price ---"
           curl -sf "$G/api/v1/products?status=ACTIVE&size=50" | grep -q '"onFlashSale":true'
           echo "--- every service reports itself live ---"
-          for s in inventory order payment shipping; do
-            curl -sf "$G/api/v1/$s/_info" | grep -q '"status":"live"'
+          # All six. catalog had no _info at all, and user reported "skeleton" -- which this step then
+          # asserted, so the one check of the user service's health insisted it was unfinished.
+          for s in catalog inventory order payment shipping user; do
+            curl -sf "$G/api/v1/$s/_info" | grep -q '"status":"live"' || { echo "$s is not reporting live"; exit 1; }
           done
-          curl -sf $G/api/v1/user/_info | grep -q '"status":"skeleton"'
 
       - name: Sign in as the operator, because stock is no longer anyone's to receive
         run: |
@@ -388,7 +395,7 @@ jobs:
           # and no more. Polled, because each is its own hop through Kafka and the sender.
           ME=$(curl -sf -H "Authorization: Bearer $TOKEN" $G/api/v1/users/me | sed -n 's/.*"email":"\([^"]*\)".*/\1/p')
           for i in $(seq 1 30); do
-            SUBJECTS=$(curl -s "http://localhost:19025/api/v1/search?query=$(python3 -c "import urllib.parse; print(urllib.parse.quote('to:\"$ME\" subject:\"$ORDER\"'))")" \
+            SUBJECTS=$(curl -s "http://localhost:18025/api/v1/search?query=$(python3 -c "import urllib.parse; print(urllib.parse.quote('to:\"$ME\" subject:\"$ORDER\"'))")" \
               | python3 -c "import json,sys; print('|'.join(m['Subject'] for m in sorted(json.load(sys.stdin)['messages'], key=lambda m: m['Created'])))")
             if [ "$(echo "$SUBJECTS" | tr '|' '\n' | grep -c .)" -ge 3 ]; then break; fi
             sleep 2
@@ -445,7 +452,7 @@ jobs:
           # through Mailpit, whose API is the inbox. Polled, because sending is its own scheduled hop.
           ME=$(curl -sf -H "Authorization: Bearer $TOKEN" $G/api/v1/users/me | sed -n 's/.*"email":"\([^"]*\)".*/\1/p')
           for i in $(seq 1 30); do
-            HITS=$(curl -s "http://localhost:19025/api/v1/search?query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote('to:\"$ME\" subject:\"$SKU\"'))")" \
+            HITS=$(curl -s "http://localhost:18025/api/v1/search?query=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote('to:\"$ME\" subject:\"$SKU\"'))")" \
               | python3 -c "import json,sys; print(json.load(sys.stdin).get('messages_count', 0))")
             if [ "${HITS:-0}" -ge 1 ]; then break; fi
             sleep 2

@@ -93,6 +93,20 @@ class CatalogIT {
 	// --- who may change a catalogue (ADR 0036) ----------------------------------------------------
 
 	@Test
+	@DisplayName("catalog reports which build is behind its route, to anybody, like every other service")
+	void serviceInfo() {
+		// A token that does not verify, rather than none: this suite signs every bare request as an operator,
+		// which would prove nothing about the path being public.
+		HttpHeaders anonymous = new HttpHeaders();
+		anonymous.set(HttpHeaders.AUTHORIZATION, "Bearer not-a-token");
+		ResponseEntity<Map> info = rest.exchange("/api/v1/catalog/_info", HttpMethod.GET,
+				new HttpEntity<>(anonymous), Map.class);
+
+		assertThat(info.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(info.getBody()).containsEntry("status", "live").containsEntry("service", "flashcart-catalog");
+	}
+
+	@Test
 	@DisplayName("a catalogue is not editable without an account")
 	void anonymousWriteIsRefused() {
 		CategoryResponse category = createCategory(unique("Audio"));

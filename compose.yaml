@@ -406,12 +406,12 @@ services:
         condition: service_healthy
 
   # Where the platform's mail goes locally (ADR 0046): an SMTP server that delivers nothing and shows
-  # everything. The inbox is http://localhost:19025, and its API is what CI reads to prove a shopper was
+  # everything. The inbox is http://localhost:18025, and its API is what CI reads to prove a shopper was
   # actually emailed rather than merely recorded as notified.
   mailpit:
     image: axllent/mailpit:v1.27
     ports:
-      - "19025:8025"
+      - "18025:8025"
     healthcheck:
       test: ["CMD", "/mailpit", "readyz"]
       interval: 10s

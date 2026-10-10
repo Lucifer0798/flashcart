@@ -47,7 +47,8 @@ SOURCES = (
 # argued: every entry is a place the check has been switched off, and a long one means the check is
 # being worked around rather than satisfied.
 ALLOWED = {
-    # ci.yml builds this in a loop: for s in inventory order payment shipping; ... "$G/api/v1/$s/_info"
+    # ci.yml builds this in a loop: for s in catalog inventory ... user; ... "$G/api/v1/$s/_info". The
+    # others are also called by name in a test; shipping's only through the loop.
     '/api/v1/shipping/_info': 'built from a shell loop variable in ci.yml',
 }
 

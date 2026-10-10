@@ -93,6 +93,8 @@ the service stayed `UP`, and it was sent on attempt 2, 23 seconds after Mailpit 
 Locally, the mail server is Mailpit: SMTP that delivers nothing and shows everything, at
 <http://localhost:19025>. A real relay is a host, a port and credentials.
 
+*Since moved to <http://localhost:18025>: every other host port is the usual one with a 1 in front, and Mailpit's usual web port is 8025.*
+
 ## Also found
 
 ### The demo seeds made every new migration crash a running stack

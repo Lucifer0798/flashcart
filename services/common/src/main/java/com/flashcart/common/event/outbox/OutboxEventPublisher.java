@@ -6,8 +6,8 @@ import com.flashcart.common.event.DomainEvent;
 import com.flashcart.common.event.EventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.util.ClassUtils;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -84,20 +84,33 @@ public class OutboxEventPublisher implements EventPublisher {
 	/**
 	 * The current trace, as a W3C {@code traceparent}, so the relay can resume it later.
 	 *
-	 * <p>Built from the MDC rather than by injecting a {@code Tracer}, which keeps this class free of
-	 * a hard dependency on tracing being present at all: a service without it simply queues a null
-	 * and nothing else changes.
+	 * <p>Read from OpenTelemetry's current span, which the Micrometer bridge keeps in step with the
+	 * request's. That gives the trace's real sampled flag. It used to be rebuilt from the logging MDC
+	 * with the flag hard-coded to {@code 01}: honest only while sampling was 1.0, and every service reads
+	 * {@code TRACE_SAMPLING}. Below that, the relay would resume as sampled -- under a parent-based
+	 * sampler, recorded -- every trace the sampler had chosen to drop.
 	 *
-	 * <p>The sampled flag is hard-coded to {@code 01}. That is honest for this platform, where
-	 * sampling is 1.0 and every trace is recorded; it would need to carry the real decision anywhere
-	 * that sampled selectively, or the relay would resurrect traces the sampler had dropped.
+	 * <p>Null when there is no current trace, or when OpenTelemetry is not on the classpath at all: a
+	 * service without tracing simply queues no context and nothing else changes.
 	 */
-	private static String traceParent() {
-		String traceId = MDC.get("traceId");
-		String spanId = MDC.get("spanId");
-		if (traceId == null || spanId == null) {
-			return null;
+	static String traceParent() {
+		return OTEL_PRESENT ? Otel.currentTraceParent() : null;
+	}
+
+	private static final boolean OTEL_PRESENT =
+			ClassUtils.isPresent("io.opentelemetry.api.trace.Span", OutboxEventPublisher.class.getClassLoader());
+
+	/** Holds the OpenTelemetry references, so this class loads without OpenTelemetry present. */
+	private static final class Otel {
+
+		static String currentTraceParent() {
+			io.opentelemetry.api.trace.SpanContext context =
+					io.opentelemetry.api.trace.Span.current().getSpanContext();
+			if (!context.isValid()) {
+				return null;
+			}
+			return "00-" + context.getTraceId() + "-" + context.getSpanId() + "-"
+					+ context.getTraceFlags().asHex();
 		}
-		return "00-" + traceId + "-" + spanId + "-01";
 	}
 }
