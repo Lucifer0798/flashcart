@@ -29,7 +29,7 @@ spring:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
   mail:
     # Mailpit in the local stack: an SMTP server that delivers nothing and shows everything at
-    # http://localhost:19025. A real relay is a host, a port and credentials away.
+    # http://localhost:18025. A real relay is a host, a port and credentials away.
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}
     properties:

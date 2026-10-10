@@ -89,6 +89,8 @@ still treats it as sampled. Fixing that means the publisher reading a live `Span
 the MDC, which would give `flashcart-common` a hard dependency on OpenTelemetry where today it has an
 optional one. That is a trade worth making deliberately, and this is not the record that makes it.
 
+*[ADR 0049](0049-loose-ends.md) made it without the trade: the publisher reads the live span context through a holder class loaded only when OpenTelemetry is present, so the dependency stays optional.*
+
 **Still open.** Per-service ports remain published, so the gateway is an optimisation rather than a
 boundary. An operator cannot read another customer's order. And the audit table added in
 [ADR 0025](0025-record-what-an-operator-reads.md) has no reader.

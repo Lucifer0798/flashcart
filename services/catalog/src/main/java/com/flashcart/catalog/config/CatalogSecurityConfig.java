@@ -77,7 +77,9 @@ public class CatalogSecurityConfig {
 						"GET /api/v1/flash-sales/*",
 						// Compose health-checks this, and a container that cannot answer restarts
 						// forever.
-						"/actuator/**"),
+						"/actuator/**",
+						// Which build is behind the route; public on every service.
+						"/api/v1/catalog/_info"),
 						// Nothing is merely signed-in here. A shopper has no business editing a
 						// catalogue, so the middle category -- the dangerous one, where passing the
 						// filter is not the whole check -- is deliberately empty.

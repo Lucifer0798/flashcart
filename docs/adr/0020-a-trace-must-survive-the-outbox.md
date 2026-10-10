@@ -78,5 +78,7 @@ The `traceparent` is also stored with the sampled flag hard-coded to `01`. That 
 platform sampling at 1.0, and would need to carry the real sampling decision anywhere that sampled
 selectively, or the relay would resurrect traces the sampler had already dropped.
 
+*The stored flag is now the trace's real one, by [ADR 0049](0049-loose-ends.md).*
+
 Finally, this adds a column to a hot table and a string parse per relayed message. Both are small, and
 both are on the relay's path rather than the buyer's, which is the right side of that trade.

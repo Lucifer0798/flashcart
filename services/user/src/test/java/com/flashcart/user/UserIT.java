@@ -279,8 +279,11 @@ class UserIT {
 	@Test
 	@DisplayName("the service still reports itself live")
 	void serviceInfo() {
-		assertThat(rest.getForEntity("/api/v1/user/_info", Map.class).getStatusCode())
-				.isEqualTo(HttpStatus.OK);
+		ResponseEntity<Map> info = rest.getForEntity("/api/v1/user/_info", Map.class);
+		assertThat(info.getStatusCode()).isEqualTo(HttpStatus.OK);
+		// What the name says. This checked only the status code, and passed for every day the service
+		// answered "skeleton".
+		assertThat(info.getBody()).containsEntry("status", "live");
 	}
 
 	@Test

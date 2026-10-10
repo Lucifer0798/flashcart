@@ -1,6 +1,6 @@
 # FlashCart documentation
 
-Four documents and twenty decision records. This page is the map.
+Four documents and the decision records. This page is the map.
 
 ## Start here
 
@@ -57,7 +57,24 @@ Grouped by what they are about rather than by number. Chronological order is in
 **Knowing what it is doing**
 - [0018 — Instrument the silences, not the traffic](adr/0018-metrics-answer-questions-the-logs-cannot.md)
 - [0020 — A trace has to survive the outbox](adr/0020-a-trace-must-survive-the-outbox.md)
+- [0027 — The outbox hop is a span](adr/0027-the-outbox-hop-is-a-span.md)
 - [0019 — Report what the measurement supports, and no more](adr/0019-measure-or-say-you-cannot.md)
+- [0041 — The alert that forgot](adr/0041-the-alert-that-forgot.md)
+- [0042 — Every alert went quiet together](adr/0042-every-alert-went-quiet-together.md)
+- [0043 — An alert nobody receives](adr/0043-an-alert-nobody-receives.md)
+
+**An order's whole life**
+- [0030](adr/0030-cancelling-a-paid-order.md) — Cancelling a paid order
+- [0031](adr/0031-when-nobody-answers.md) — When nobody answers
+- [0032](adr/0032-an-order-that-can-finish.md) — An order that can finish
+- [0033](adr/0033-shipped-did-not-mean-shipped.md) — SHIPPED did not mean shipped
+- [0040](adr/0040-a-cancelled-sale-gives-the-units-back.md) — A cancelled sale gives the units back
+
+**Telling people**
+- [0044](adr/0044-a-queue-for-what-is-gone.md) — A queue for what is gone
+- [0045](adr/0045-told-means-yours.md) — Told means yours
+- [0046](adr/0046-the-first-message-out.md) — The first message out
+- [0048](adr/0048-the-order-tells-its-own-story.md) — The order tells its own story
 
 **Who is asking**
 - [0021](adr/0021-the-client-does-not-say-who-it-is.md) — The client does not get to say who it is
@@ -66,23 +83,20 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0024](adr/0024-the-development-operator-is-not-schema.md) — The development operator is not schema
 - [0025](adr/0025-record-what-an-operator-reads.md) — Record what an operator reads
 - [0026](adr/0026-deleting-an-audit-record-is-a-decision.md) — Deleting an audit record is a decision
-- [0027](adr/0027-the-outbox-hop-is-a-span.md) — The outbox hop is a span
 - [0028](adr/0028-looking-is-not-acting.md) — Looking is not acting
 - [0029](adr/0029-an-operator-read-was-a-silence.md) — An operator read was a silence
-- [0030](adr/0030-cancelling-a-paid-order.md) — Cancelling a paid order
-- [0031](adr/0031-when-nobody-answers.md) — When nobody answers
-- [0032](adr/0032-an-order-that-can-finish.md) — An order that can finish
-- [0033](adr/0033-shipped-did-not-mean-shipped.md) — SHIPPED did not mean shipped
 - [0034](adr/0034-who-read-my-data.md) — Who read my data
 - [0035](adr/0035-nothing-behind-the-check.md) — Nothing behind the check
 - [0036](adr/0036-anyone-could-set-the-price.md) — Anyone could set the price
 - [0037](adr/0037-the-last-one-unargued.md) — The last one unargued
 - [0038](adr/0038-one-role-did-too-much.md) — One role did too much
 - [0039](adr/0039-nothing-ever-ran-without-operator.md) — Nothing ever ran without OPERATOR
+- [0047](adr/0047-staff-roles-on-the-record.md) — Staff roles, on the record
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)
 - [0002 — Spring Boot 4.0.8, not 4.1.x](adr/0002-spring-boot-and-cloud-versions.md)
+- [0049 — Loose ends](adr/0049-loose-ends.md)
 
 ## A note on what these documents claim
 

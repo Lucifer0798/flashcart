@@ -4,6 +4,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.context.Scope;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -68,5 +69,30 @@ class OutboxTraceParentTest {
 		// The relay checks for this. Before it did, the send dereferenced null and the message was
 		// retried for ever over tracing metadata.
 		assertThat(OutboxRelay.outgoingTraceParent(Span.getInvalid(), null)).isNull();
+	}
+
+	// --- what the publisher stores (cleanup after ADR 0048) ----------------------------------------
+
+	@Test
+	@DisplayName("the publisher stores the trace's real sampled flag, so a dropped trace stays dropped")
+	void publisherStoresTheRealSampledFlag() {
+		SpanContext unsampled = SpanContext.create("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331",
+				TraceFlags.getDefault(), TraceState.getDefault());
+		try (Scope ignored = Span.wrap(unsampled).makeCurrent()) {
+			assertThat(OutboxEventPublisher.traceParent())
+					.isEqualTo("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00");
+		}
+
+		SpanContext sampled = SpanContext.create("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331",
+				TraceFlags.getSampled(), TraceState.getDefault());
+		try (Scope ignored = Span.wrap(sampled).makeCurrent()) {
+			assertThat(OutboxEventPublisher.traceParent()).endsWith("-01");
+		}
+	}
+
+	@Test
+	@DisplayName("with no trace in progress the publisher stores none, rather than inventing one")
+	void noTraceStoresNothing() {
+		assertThat(OutboxEventPublisher.traceParent()).isNull();
 	}
 }
