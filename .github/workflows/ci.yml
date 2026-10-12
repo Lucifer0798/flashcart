@@ -415,6 +415,65 @@ jobs:
           docker compose logs --tail=100 inventory order shipping
           exit 1
 
+      - name: A refund the provider would not take, settled by hand, is emailed with its reference
+        run: |
+          set -e
+          G=http://localhost:18080
+          # payment -> Kafka -> user for an event nothing else carries. NoticeIT calls the listener
+          # directly, so this is the one check that the new type's factory, consumer group and header
+          # filter actually meet. See ADR 0050.
+          SKU=CI-OUTSIDE-$(date +%s)
+          curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" \
+            -d "{\"sku\":\"$SKU\",\"initialQuantity\":3,\"reason\":\"CI outside refund\"}" > /dev/null
+          CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+          # .77: captured normally, but the simulated provider refuses every refund of it.
+          curl -sf -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $CATALOG" \
+            -d "{\"sku\":\"$SKU\",\"name\":\"CI Outside Refund Probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":100.77,\"currency\":\"USD\",\"status\":\"ACTIVE\"}" > /dev/null
+
+          curl -s -o /tmp/r.json -X POST $G/api/v1/orders -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+            -d "{\"idempotencyKey\":\"ci-outside-$(date +%s)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}"
+          ORDER=$(sed -n 's/.*"orderNumber":"\([^"]*\)".*/\1/p' /tmp/r.json)
+          echo "placed $ORDER"
+          status() { curl -sf -H "Authorization: Bearer $TOKEN" "$G/api/v1/orders/$ORDER" | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p'; }
+          await() {
+            for i in $(seq 1 60); do STATUS=$(status); if [ "$STATUS" = "$1" ]; then return 0; fi; sleep 2; done
+            echo "never reached $1 (at $STATUS)"; exit 1
+          }
+          await SHIPPED
+          curl -sf -o /dev/null -X POST "$G/api/v1/orders/$ORDER/cancel" -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $TOKEN" -d '{"reason":"CI changed its mind"}'
+          await CANCELLED
+
+          psql_payment() { docker compose exec -T postgres psql -U flashcart -d flashcart_payment -X -q -t -A -c "$1"; }
+          for i in $(seq 1 30); do
+            PAYMENT=$(psql_payment "select status from payments where order_number = '$ORDER'")
+            if [ "$PAYMENT" = "REFUND_FAILED" ]; then break; fi
+            sleep 2
+          done
+          test "$PAYMENT" = "REFUND_FAILED" || { echo "refund was never refused (payment $PAYMENT)"; exit 1; }
+          # At the cap, so the retry job has given up: the state ADR 0041 lets an operator settle. Written
+          # rather than waited for, as RefundSettlementIT does, because five backed-off refusals take hours.
+          psql_payment "update payments set refund_attempts = 5 where order_number = '$ORDER'" > /dev/null
+
+          CODE=$(curl -s -o /tmp/s.json -w '%{http_code}' -X POST "$G/api/v1/payment/_refunds/$ORDER/settled-outside" \
+            -H 'Content-Type: application/json' -H "Authorization: Bearer $OPERATOR" -d '{"reference":"CI-BANK-TX-1"}')
+          echo "settle: $CODE $(cat /tmp/s.json)"
+          test "$CODE" = "200"
+          grep -q '"status":"REFUNDED_OUTSIDE"' /tmp/s.json
+
+          ME=$(curl -sf -H "Authorization: Bearer $TOKEN" $G/api/v1/users/me | sed -n 's/.*"email":"\([^"]*\)".*/\1/p')
+          search() { curl -s "http://localhost:18025/api/v1/search?query=$(python3 -c "import urllib.parse; print(urllib.parse.quote('to:\"$ME\" subject:\"Refund for order $ORDER\"'))")"; }
+          for i in $(seq 1 30); do
+            ID=$(search | python3 -c "import json,sys; ms=json.load(sys.stdin)['messages']; print(ms[0]['ID'] if ms else '')")
+            if [ -n "$ID" ]; then break; fi
+            sleep 2
+          done
+          test -n "$ID" || { echo "no refund email for $ORDER"; docker compose logs --tail=60 user payment; exit 1; }
+          TEXT=$(curl -s "http://localhost:18025/api/v1/message/$ID" | python3 -c "import json,sys; print(json.load(sys.stdin)['Text'])")
+          echo "$TEXT"
+          echo "$TEXT" | grep -q "sent to you directly" && echo "$TEXT" | grep -q "CI-BANK-TX-1" \
+            || { echo "the refund email does not say how the money went back"; exit 1; }
+
       - name: A sold-out SKU's queue hears when stock comes back, and gets the unit
         run: |
           set -e

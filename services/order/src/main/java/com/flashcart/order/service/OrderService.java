@@ -179,6 +179,9 @@ public class OrderService {
 		}
 		history.save(order.transitionTo(OrderStatus.CANCELLED, reason == null ? "cancelled" : reason,
 				CorrelationId.current()));
+		// Announced like every other cancellation. This was the one path that moved an order to CANCELLED
+		// and published nothing, so nothing downstream -- the email, since ADR 0050 -- could know.
+		saga.announceCancelled(order, "CANCELLED_BY_CUSTOMER");
 		return order;
 	}
 

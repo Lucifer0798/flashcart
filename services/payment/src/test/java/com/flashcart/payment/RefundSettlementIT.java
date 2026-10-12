@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.flashcart.common.event.message.PaymentRefunded;
+import com.flashcart.common.event.message.RefundSettledOutside;
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.payment.domain.Payment;
 import com.flashcart.payment.domain.PaymentStatus;
@@ -62,6 +63,13 @@ class RefundSettlementIT extends AbstractPaymentIT {
 
 		// No PaymentRefunded: that event says the provider reversed the capture, which it did not.
 		assertThat(events.published(PaymentRefunded.class)).isFalse();
+
+		// Its own event instead, carrying what the email needs (ADR 0050).
+		RefundSettledOutside announced = events.require(RefundSettledOutside.class);
+		assertThat(announced.orderNumber()).isEqualTo(owed.getOrderNumber());
+		assertThat(announced.customerId()).isEqualTo(owed.getCustomerId());
+		assertThat(announced.amount()).isEqualByComparingTo(owed.getAmount());
+		assertThat(announced.reference()).isEqualTo("BANK-TX-0042");
 	}
 
 	@Test
@@ -75,6 +83,8 @@ class RefundSettlementIT extends AbstractPaymentIT {
 		// accepting the job's next attempt.
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
 		assertThat(response.getBody()).containsEntry("code", "REFUND_NOT_ABANDONED");
+		// Nothing settled, so nothing announced: the customer must not be told about money not yet sent.
+		assertThat(events.published(RefundSettledOutside.class)).isFalse();
 		assertThat(payments.get(refused.getId()).getStatus()).isEqualTo(PaymentStatus.REFUND_FAILED);
 	}
 
@@ -97,6 +107,8 @@ class RefundSettlementIT extends AbstractPaymentIT {
 		assertThat(settle(owed, "BANK-TX-1", null).getStatusCode()).isEqualTo(HttpStatus.OK);
 
 		assertThat(settle(owed, "BANK-TX-1", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+		// A repeat changes nothing, and announces nothing a second time.
+		assertThat(events.countOf(RefundSettledOutside.class)).isEqualTo(1);
 
 		// Two references for one refund is a typo or a customer paid twice. Neither should overwrite.
 		ResponseEntity<Map> different = settle(owed, "BANK-TX-2", null);

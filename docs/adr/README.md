@@ -55,3 +55,4 @@ when someone revisits it in six months.
 | [0047](0047-staff-roles-on-the-record.md) | Staff roles, on the record | Accepted |
 | [0048](0048-the-order-tells-its-own-story.md) | The order tells its own story | Accepted |
 | [0049](0049-loose-ends.md) | Loose ends | Accepted |
+| [0050](0050-the-emails-that-were-not-sent.md) | The emails that were not sent | Accepted |

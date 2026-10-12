@@ -14,6 +14,7 @@ import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDispatched;
 import com.flashcart.common.event.message.PaymentRefunded;
+import com.flashcart.common.event.message.RefundSettledOutside;
 import com.flashcart.user.messaging.NoticeListener;
 import com.flashcart.user.notice.NoticeSender;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -207,6 +208,7 @@ class NoticeIT {
 				"CUSTOMER_LIMIT_EXCEEDED", "limited number per customer",
 				"CARD_DECLINED", "payment was declined",
 				"RESERVATION_EXPIRED", "did not complete in time",
+				"CANCELLED_BY_CUSTOMER", "You cancelled it before paying",
 				"SOMETHING_NEW", "You have not been charged");
 		int n = 0;
 		for (Map.Entry<String, String> reason : expected.entrySet()) {
@@ -233,6 +235,35 @@ class NoticeIT {
 		assertThat(mail.sent).hasSize(1);
 		assertThat(mail.sent.get(0).getSubject()).isEqualTo("Refund for order FC-REFD0001");
 		assertThat(mail.sent.get(0).getText()).contains("refunded 24.99 USD");
+	}
+
+	@Test
+	@DisplayName("a refund paid outside the platform says so, and gives the reference the bank will show")
+	void refundSettledOutsideSaysHow() {
+		Shopper shopper = register();
+
+		listener.onRefundSettledOutside(new RefundSettledOutside(meta(RefundSettledOutside.TYPE),
+				UUID.randomUUID().toString(), "FC-OUTS0001", shopper.id(), new BigDecimal("100.77"), "USD", "BANK-TX-0042"));
+		sender.sendDue();
+
+		assertThat(mail.sent).hasSize(1);
+		assertThat(mail.sent.get(0).getSubject()).isEqualTo("Refund for order FC-OUTS0001");
+		assertThat(mail.sent.get(0).getText()).contains("refunded 100.77 USD")
+				.contains("sent to you directly").contains("BANK-TX-0042");
+	}
+
+	@Test
+	@DisplayName("an order gets one refund email, whichever way the money went back")
+	void oneRefundEmailPerOrder() {
+		Shopper shopper = register();
+
+		listener.onPaymentRefunded(new PaymentRefunded(meta("PaymentRefunded"), UUID.randomUUID().toString(),
+				new BigDecimal("24.99"), "USD", "re_1", "FC-ONCE0001", shopper.id()));
+		listener.onRefundSettledOutside(new RefundSettledOutside(meta(RefundSettledOutside.TYPE),
+				UUID.randomUUID().toString(), "FC-ONCE0001", shopper.id(), new BigDecimal("24.99"), "USD", "BANK-TX-9"));
+		sender.sendDue();
+
+		assertThat(mail.sent).hasSize(1);
 	}
 
 	@Test

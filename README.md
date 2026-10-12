@@ -315,9 +315,12 @@ their next checkout for that SKU takes it over, and a stranger's cannot. Unused,
 unit passes to the next in line. The shopper is **emailed** — locally that mail lands in Mailpit at
 <http://localhost:18025> ([ADR 0046](docs/adr/0046-the-first-message-out.md)).
 
-The same queue emails every order's story: **confirmed, on its way, delivered, cancelled** (worded by why)
-and **refunded** — once each, in the order they happened, retried through a mail outage rather than lost
-([ADR 0048](docs/adr/0048-the-order-tells-its-own-story.md)). See [ADR 0044](docs/adr/0044-a-queue-for-what-is-gone.md) and
+The same queue emails every order's story: **confirmed, on its way, delivered, cancelled** (worded by why,
+including the shopper's own cancellation) and **refunded** — once each, in the order they happened,
+retried through a mail outage rather than lost ([ADR 0048](docs/adr/0048-the-order-tells-its-own-story.md)).
+A refund the provider would not take, recorded by an operator as paid another way
+(`POST /api/v1/payment/_refunds/{order}/settled-outside`), is emailed too, with the reference the
+customer's bank will show ([ADR 0050](docs/adr/0050-the-emails-that-were-not-sent.md)). See [ADR 0044](docs/adr/0044-a-queue-for-what-is-gone.md) and
 [ADR 0045](docs/adr/0045-told-means-yours.md).
 
 ## The order API

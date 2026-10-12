@@ -498,6 +498,12 @@ class OrderIT {
 
 		assertThat(cancelled.status()).isEqualTo(OrderStatus.CANCELLED);
 		assertThat(events.published(ReleaseInventory.class)).isFalse();
+
+		// Announced like every other cancellation. It was the one path to CANCELLED that published
+		// nothing, so the shopper's confirmation email could not exist (ADR 0050).
+		OrderCancelled announced = events.require(OrderCancelled.class);
+		assertThat(announced.reason()).isEqualTo("CANCELLED_BY_CUSTOMER");
+		assertThat(announced.customerId()).isEqualTo("cust-1");
 	}
 
 	@Test

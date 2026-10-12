@@ -7,6 +7,7 @@ import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDelivered;
 import com.flashcart.common.event.message.OrderDispatched;
 import com.flashcart.common.event.message.PaymentRefunded;
+import com.flashcart.common.event.message.RefundSettledOutside;
 import org.springframework.boot.kafka.autoconfigure.KafkaConnectionDetails;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
 import org.springframework.context.annotation.Bean;
@@ -59,5 +60,11 @@ public class UserKafkaConfig {
 	public ConcurrentKafkaListenerContainerFactory<String, PaymentRefunded> paymentRefundedFactory(KafkaProperties properties,
 			KafkaConnectionDetails details, KafkaTemplate<String, Object> template) {
 		return ConsumerFactories.listenerFactory(properties, details, GROUP, PaymentRefunded.class, template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, RefundSettledOutside> refundSettledOutsideFactory(
+			KafkaProperties properties, KafkaConnectionDetails details, KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, details, GROUP, RefundSettledOutside.class, template);
 	}
 }
