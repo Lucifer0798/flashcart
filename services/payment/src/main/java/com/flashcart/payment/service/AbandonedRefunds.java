@@ -3,6 +3,10 @@ package com.flashcart.payment.service;
 import java.time.Clock;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.flashcart.common.event.EventMetadata;
+import com.flashcart.common.event.EventPublisher;
+import com.flashcart.common.event.Topics;
+import com.flashcart.common.event.message.RefundSettledOutside;
 import com.flashcart.common.error.ConflictException;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.payment.config.PaymentProperties;
@@ -48,15 +52,17 @@ public class AbandonedRefunds {
 	private final PaymentRepository payments;
 	private final PaymentProperties properties;
 	private final Clock clock;
+	private final EventPublisher events;
 	private final TransactionTemplate transactions;
 	private final AtomicLong outstanding = new AtomicLong();
 	private final Counter settledOutside;
 
 	public AbandonedRefunds(PaymentRepository payments, PaymentProperties properties, Clock clock,
-			PlatformTransactionManager transactionManager, MeterRegistry meters) {
+			PlatformTransactionManager transactionManager, MeterRegistry meters, EventPublisher events) {
 		this.payments = payments;
 		this.properties = properties;
 		this.clock = clock;
+		this.events = events;
 		this.transactions = new TransactionTemplate(transactionManager);
 		// Backed by a number this service refreshes, not by a query run on every scrape: a scrape that
 		// waits on the database is a scrape that fails when the database is the problem.
@@ -110,8 +116,20 @@ public class AbandonedRefunds {
 		int maxAttempts = properties.refundRetry().maxAttempts();
 		String trimmed = reference.trim();
 
-		Integer updated = transactions.execute(status -> payments.settleAbandonedRefund(
-				orderNumber, trimmed, operatorId, clock.instant(), maxAttempts));
+		Integer updated = transactions.execute(status -> {
+			int written = payments.settleAbandonedRefund(orderNumber, trimmed, operatorId, clock.instant(),
+					maxAttempts);
+			if (written == 1) {
+				// In the same transaction as the settlement, through the outbox: the customer owed this
+				// money is told it arrived, and never told about a settlement that rolled back. ADR 0050.
+				Payment settled = payments.findByOrderNumber(orderNumber).orElseThrow();
+				events.publish(Topics.PAYMENT_EVENTS, new RefundSettledOutside(
+						EventMetadata.of(RefundSettledOutside.TYPE, settled.getOrderId()),
+						settled.getId().toString(), orderNumber, settled.getCustomerId(), settled.getAmount(),
+						settled.getCurrency(), trimmed));
+			}
+			return written;
+		});
 
 		Payment payment = transactions.execute(status -> payments.findByOrderNumber(orderNumber).orElse(null));
 		if (payment == null) {

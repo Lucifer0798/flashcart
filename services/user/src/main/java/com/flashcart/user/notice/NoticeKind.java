@@ -72,6 +72,7 @@ public enum NoticeKind {
 			return switch (reason == null ? "" : reason) {
 				case "CANCELLED_AFTER_PAYMENT" -> "You were charged, so the money is on its way back -- we will "
 						+ "email you when the refund has gone through.";
+				case "CANCELLED_BY_CUSTOMER" -> "You cancelled it before paying, so nothing was charged.";
 				case "INSUFFICIENT_STOCK", "SALE_ALLOCATION_EXHAUSTED" ->
 						"It sold out before we could hold one for you. You have not been charged.";
 				case "CUSTOMER_LIMIT_EXCEEDED" ->
@@ -88,6 +89,14 @@ public enum NoticeKind {
 	REFUNDED {
 		@Override
 		Email render(String name, String orderNumber, Map<String, Object> payload, Instant sendBefore) {
+			if (Boolean.TRUE.equals(payload.get("outside"))) {
+				// The provider would not reverse the charge, so the money was sent another way. Say so,
+				// and give the reference: it is what the customer's bank will show.
+				return new Email("Refund for order %s".formatted(orderNumber),
+						("We have refunded %s %s for order %s. Your card could not be refunded, so the money was "
+								+ "sent to you directly instead, under reference %s.").formatted(payload.get("amount"),
+								payload.get("currency"), orderNumber, payload.get("reference")), name);
+			}
 			return new Email("Refund for order %s".formatted(orderNumber),
 					("We have refunded %s %s for order %s. Depending on your bank it can take a few days to "
 							+ "appear.").formatted(payload.get("amount"), payload.get("currency"), orderNumber), name);

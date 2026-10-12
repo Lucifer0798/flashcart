@@ -399,6 +399,11 @@ public class OrderSaga {
 				order.getOrderNumber(), order.getCustomerId(), dispatchedAt));
 	}
 
+	/** For a cancellation the saga did not drive: the customer's own, of an order not yet paid. */
+	public void announceCancelled(Order order, String reason) {
+		publishCancelled(order, reason);
+	}
+
 	private void publishCancelled(Order order, String reason) {
 		events.publish(Topics.ORDER_EVENTS, new OrderCancelled(
 				EventMetadata.of(OrderCancelled.TYPE, order.getId()),

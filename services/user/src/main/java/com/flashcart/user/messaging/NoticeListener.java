@@ -13,6 +13,7 @@ import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDelivered;
 import com.flashcart.common.event.message.OrderDispatched;
 import com.flashcart.common.event.message.PaymentRefunded;
+import com.flashcart.common.event.message.RefundSettledOutside;
 import com.flashcart.common.event.outbox.IdempotentHandler;
 import com.flashcart.user.notice.NoticeKind;
 import com.flashcart.user.notice.Notices;
@@ -99,6 +100,23 @@ public class NoticeListener {
 		Map<String, Object> payload = new HashMap<>();
 		payload.put("amount", event.amount() == null ? null : event.amount().toPlainString());
 		payload.put("currency", event.currency());
+		record(event, order(event, NoticeKind.REFUNDED, "refunded", event.orderNumber(), event.customerId(),
+				payload));
+	}
+
+	/**
+	 * A refund made outside the platform and recorded by an operator (ADR 0041). Same key as a provider
+	 * refund, so an order gets one refund email however the money moved -- and this is the case where it
+	 * matters most: the customer was told their money was coming back, and then it would not go.
+	 */
+	@KafkaListener(topics = Topics.PAYMENT_EVENTS, containerFactory = "refundSettledOutsideFactory",
+			groupId = UserKafkaConfig.GROUP + "-refund-settled-outside")
+	public void onRefundSettledOutside(RefundSettledOutside event) {
+		Map<String, Object> payload = new HashMap<>();
+		payload.put("amount", event.amount() == null ? null : event.amount().toPlainString());
+		payload.put("currency", event.currency());
+		payload.put("outside", true);
+		payload.put("reference", event.reference());
 		record(event, order(event, NoticeKind.REFUNDED, "refunded", event.orderNumber(), event.customerId(),
 				payload));
 	}
