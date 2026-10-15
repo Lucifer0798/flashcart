@@ -15,6 +15,9 @@ import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDispatched;
 import com.flashcart.common.event.message.PaymentRefunded;
 import com.flashcart.common.event.message.RefundSettledOutside;
+import com.flashcart.common.error.OperatorRequiredException;
+import com.flashcart.common.security.AccessTokens;
+import com.flashcart.user.api.SupportController;
 import com.flashcart.user.messaging.NoticeListener;
 import com.flashcart.user.notice.NoticeSender;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -32,12 +35,19 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mail.MailSendException;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The user service telling shoppers what they would want to know. See ADRs 0046 and 0048.
@@ -104,6 +114,12 @@ class NoticeIT {
 
 	@Autowired
 	private MeterRegistry meters;
+
+	@Autowired
+	private AccessTokens tokens;
+
+	@Autowired
+	private SupportController support;
 
 	@BeforeEach
 	void reset() {
@@ -410,6 +426,112 @@ class NoticeIT {
 		assertThat(NoticeSender.backoff(50)).isEqualTo(Duration.ofMinutes(30));
 	}
 
+	// --- support reads (ADR 0051) ------------------------------------------------------------------
+
+	@Test
+	@DisplayName("support sees every email a customer was meant to get: sent, still trying and why, or skipped and why")
+	void supportSeesWhatWasSentAndWhy() {
+		Shopper shopper = register();
+		Instant now = Instant.now();
+
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE, now.minus(Duration.ofMinutes(5))),
+				"FC-SUPP0001", shopper.id()));
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE, now.minus(Duration.ofDays(2))),
+				"FC-SUPP0002", shopper.id()));
+		sender.sendDue();
+		mail.down = true;
+		listener.onRefundSettledOutside(new RefundSettledOutside(meta(RefundSettledOutside.TYPE, now),
+				UUID.randomUUID().toString(), "FC-SUPP0001", shopper.id(), new BigDecimal("100.77"), "USD", "BANK-TX-7"));
+		sender.sendDue();
+
+		List<Map<String, Object>> seen = notices("email=" + shopper.email().toUpperCase(), support());
+
+		// Newest first. The email support is asked about is usually the most recent one.
+		assertThat(seen).extracting(n -> n.get("kind"))
+				.containsExactly("REFUNDED", "ORDER_CONFIRMED", "ORDER_CONFIRMED");
+
+		Map<String, Object> refund = seen.get(0);
+		assertThat(refund).containsEntry("status", "PENDING").containsEntry("subject", "Refund for order FC-SUPP0001")
+				.containsEntry("attempts", 1);
+		assertThat((String) refund.get("body")).contains("BANK-TX-7");
+		assertThat((String) refund.get("lastError")).contains("mail server is down");
+		assertThat(refund.get("nextAttemptAt")).isNotNull();
+
+		Map<String, Object> sent = seen.get(1);
+		assertThat(sent).containsEntry("status", "SENT").containsEntry("orderNumber", "FC-SUPP0001");
+		assertThat(sent.get("sentAt")).isNotNull();
+		assertThat(sent.get("nextAttemptAt")).isNull();
+
+		assertThat(seen.get(2)).containsEntry("status", "SKIPPED").containsEntry("skipReason", "STALE");
+		assertThat(seen.get(2).get("sentAt")).isNull();
+	}
+
+	@Test
+	@DisplayName("support may ask by id, narrow to one order, and never sees another customer's emails")
+	void byIdAndByOrder() {
+		Shopper shopper = register();
+		Shopper stranger = register();
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE), "FC-SUPP0101", shopper.id()));
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE), "FC-SUPP0102", shopper.id()));
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE), "FC-SUPP0103", stranger.id()));
+
+		assertThat(notices("customerId=" + shopper.id(), support())).extracting(n -> n.get("orderNumber"))
+				.containsExactlyInAnyOrder("FC-SUPP0101", "FC-SUPP0102");
+		assertThat(notices("customerId=" + shopper.id() + "&orderNumber=FC-SUPP0102", support()))
+				.extracting(n -> n.get("orderNumber")).containsExactly("FC-SUPP0102");
+
+		assertThat(noticesStatus("", support())).isEqualTo(HttpStatus.BAD_REQUEST);
+		assertThat(noticesStatus("email=" + shopper.email() + "&customerId=" + shopper.id(), support()))
+				.isEqualTo(HttpStatus.BAD_REQUEST);
+		assertThat(noticesStatus("email=nobody-" + UUID.randomUUID() + "@example.test", support()))
+				.isEqualTo(HttpStatus.NOT_FOUND);
+	}
+
+	@Test
+	@DisplayName("every support read of a customer's emails is recorded before it answers, and can itself be read")
+	void readsAreRecorded() {
+		Shopper shopper = register();
+		String staff = "support-" + UUID.randomUUID();
+
+		notices("customerId=" + shopper.id() + "&orderNumber=FC-SUPP0201", bearer(staff, AccessTokens.SUPPORT));
+
+		assertThat(jdbc.queryForList("select operator_id, action, resource_id from operator_access_log where customer_id = ?",
+				shopper.id())).containsExactly(Map.of("operator_id", staff, "action", "READ_NOTICES",
+						"resource_id", "FC-SUPP0201"));
+
+		ResponseEntity<List> log = rest.exchange("/api/v1/user/_access-log?customerId=" + shopper.id(), HttpMethod.GET,
+				new HttpEntity<>(bearer(staff, AccessTokens.SUPPORT)), List.class);
+		assertThat(log.getStatusCode()).isEqualTo(HttpStatus.OK);
+		// Newest first, and the newest is this read of the log.
+		assertThat(log.getBody()).extracting(e -> ((Map<?, ?>) e).get("action"))
+				.containsExactly("READ_ACCESS_LOG", "READ_NOTICES");
+	}
+
+	@Test
+	@DisplayName("only support reads a customer's emails: not the warehouse, not the customer, not anonymously")
+	void onlySupport() {
+		Shopper shopper = register();
+		String query = "customerId=" + shopper.id();
+
+		assertThat(noticesStatus(query, new HttpHeaders())).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(noticesStatus(query, bearer("wh-" + UUID.randomUUID(), AccessTokens.WAREHOUSE)))
+				.isEqualTo(HttpStatus.FORBIDDEN);
+		// Not even their own: what this shows -- retries, mail-server errors, skip reasons -- is for staff.
+		assertThat(noticesStatus(query, bearer(shopper.id()))).isEqualTo(HttpStatus.FORBIDDEN);
+		assertThat(rest.exchange("/api/v1/user/_access-log?" + query, HttpMethod.GET,
+				new HttpEntity<>(bearer(shopper.id())), String.class).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+
+		// The handler refuses on its own as well, so loosening the filter by mistake opens nothing. Called
+		// directly, because through HTTP the filter answers first and this check is never reached.
+		String customerToken = "Bearer " + tokens.issue(shopper.id(), shopper.email(), List.of());
+		assertThatThrownBy(() -> support.notices(customerToken, null, UUID.fromString(shopper.id()), null, 50))
+				.isInstanceOf(OperatorRequiredException.class);
+
+		// A refused read leaves no record, because nothing was read.
+		assertThat(jdbc.queryForObject("select count(*) from operator_access_log where customer_id = ?", Integer.class,
+				shopper.id())).isZero();
+	}
+
 	// --- helpers ------------------------------------------------------------------------------------
 
 	private record Shopper(String id, String email) {
@@ -441,6 +563,29 @@ class NoticeIT {
 
 	private static Instant future() {
 		return Instant.now().plus(Duration.ofMinutes(10));
+	}
+
+	private HttpHeaders support() {
+		return bearer("support-" + UUID.randomUUID(), AccessTokens.SUPPORT);
+	}
+
+	private HttpHeaders bearer(String subject, String... roles) {
+		HttpHeaders headers = new HttpHeaders();
+		headers.setBearerAuth(tokens.issue(subject, subject + "@flashcart.test", List.of(roles)));
+		return headers;
+	}
+
+	@SuppressWarnings("unchecked")
+	private List<Map<String, Object>> notices(String query, HttpHeaders headers) {
+		ResponseEntity<List> response = rest.exchange("/api/v1/user/_notices?" + query, HttpMethod.GET,
+				new HttpEntity<>(headers), List.class);
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		return response.getBody();
+	}
+
+	private HttpStatusCode noticesStatus(String query, HttpHeaders headers) {
+		return rest.exchange("/api/v1/user/_notices?" + query, HttpMethod.GET, new HttpEntity<>(headers), String.class)
+				.getStatusCode();
 	}
 
 	private Map<String, Object> row(String key) {

@@ -2,16 +2,25 @@ package com.flashcart.user.config;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import com.flashcart.common.security.AccessTokens;
+import com.flashcart.common.security.CallerIdentity;
+import com.flashcart.common.security.OperatorAccessLog;
+import com.flashcart.common.security.OperatorAccessLogReader;
+import com.flashcart.common.security.OperatorAccessRetention;
 import com.flashcart.common.security.OperatorFilter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -34,6 +43,35 @@ public class UserConfig {
 			@Value("${flashcart.security.jwt.secret}") String secret,
 			@Value("${flashcart.security.jwt.ttl:PT12H}") Duration ttl) {
 		return new AccessTokens(secret, ttl);
+	}
+
+	@Bean
+	public CallerIdentity callerIdentity(AccessTokens tokens) {
+		return new CallerIdentity(tokens);
+	}
+
+	/**
+	 * Since ADR 0051 support can read what a customer was emailed, which makes this the fourth service
+	 * with a staff read of someone else's data, and so the fourth with its own record of them. Written on
+	 * the connection the read comes from, for ADR 0025's reason.
+	 */
+	@Bean
+	public OperatorAccessLog operatorAccessLog(JdbcTemplate jdbc, ObjectProvider<MeterRegistry> registry) {
+		return new OperatorAccessLog(jdbc, registry.getIfAvailable(SimpleMeterRegistry::new));
+	}
+
+	@Bean
+	public OperatorAccessLogReader operatorAccessLogReader(JdbcTemplate jdbc, CallerIdentity caller,
+			OperatorAccessLog accessLog) {
+		return new OperatorAccessLogReader(jdbc, caller, accessLog);
+	}
+
+	/** Off unless configured, as in every other service: see ADR 0026. */
+	@Bean
+	public OperatorAccessRetention operatorAccessRetention(JdbcTemplate jdbc,
+			@Value("${flashcart.audit.retention:#{null}}") Duration retention,
+			@Value("${flashcart.audit.retention-batch-size:500}") int batchSize) {
+		return new OperatorAccessRetention(jdbc, retention, batchSize);
 	}
 
 	/**
@@ -75,7 +113,12 @@ public class UserConfig {
 						List.of(
 								"GET /api/v1/users/me",
 								"PATCH /api/v1/users/me",
-								"POST /api/v1/users/me/addresses")));
+								"POST /api/v1/users/me/addresses"),
+						// Support's reads (ADR 0051). The handler checks the role again and records the read;
+						// this only keeps everyone else from reaching it.
+						Map.of(AccessTokens.SUPPORT, List.of(
+								"GET /api/v1/user/_notices",
+								"GET /api/v1/user/_access-log"))));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 20);

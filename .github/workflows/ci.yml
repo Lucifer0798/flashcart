@@ -474,6 +474,15 @@ jobs:
           echo "$TEXT" | grep -q "sent to you directly" && echo "$TEXT" | grep -q "CI-BANK-TX-1" \
             || { echo "the refund email does not say how the money went back"; exit 1; }
 
+          # And support can see it was sent, by the address the customer would give them (ADR 0051).
+          SEEN=$(curl -sf "$G/api/v1/user/_notices?email=$ME&orderNumber=$ORDER" -H "Authorization: Bearer $SUPPORT" \
+            | python3 -c "import json,sys; print('|'.join(n['kind'] + ':' + n['status'] for n in json.load(sys.stdin)))")
+          echo "support sees: $SEEN"
+          test "$SEEN" = "REFUNDED:SENT|ORDER_CANCELLED:SENT|ORDER_CONFIRMED:SENT"
+          # A shopper may not, even for their own: retries and mail-server errors are for staff.
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$G/api/v1/user/_notices?email=$ME" -H "Authorization: Bearer $TOKEN")
+          test "$CODE" = "403" || { echo "a shopper read the notices endpoint ($CODE)"; exit 1; }
+
       - name: A sold-out SKU's queue hears when stock comes back, and gets the unit
         run: |
           set -e
