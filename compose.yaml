@@ -240,6 +240,9 @@ services:
       # the development operator the harnesses sign in as. Drop the profile and there is no operator
       # account at all -- which is the correct state for anything that is not this stack.
       SPRING_PROFILES_ACTIVE: demo
+      # Since ADR 0051 support reads here too, so this service keeps a record of staff reads as well; it
+      # is kept as long as the others' are. See ADR 0026.
+      FLASHCART_AUDIT_RETENTION: ${AUDIT_RETENTION:-P365D}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_user
       SPRING_DATASOURCE_USERNAME: flashcart
       SPRING_DATASOURCE_PASSWORD: flashcart

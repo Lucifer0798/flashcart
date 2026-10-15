@@ -721,7 +721,7 @@ It accepts only roles that exist — the database refuses anything else too — 
 sign-in. Point it at a database other than the compose stack's with `DATABASE_URL`. See
 [ADR 0047](docs/adr/0047-staff-roles-on-the-record.md).
 
-**Every operator read of somebody else's data is recorded.** Order, payment and shipping each keep an
+**Every operator read of somebody else's data is recorded.** Order, payment, shipping and user each keep an
 `operator_access_log` in their own database: who looked, whose data it was, what they looked at, and
 the correlation id that ties it to the logs and the trace. A customer reading their own is not
 recorded — that is the ordinary path, and auditing it would bury the rows that matter.
@@ -754,6 +754,16 @@ is a worked example rather than a default. Leave it unset and the service says s
 with the row count, so unbounded growth is something you chose rather than something you missed. See
 [ADR 0026](docs/adr/0026-deleting-an-audit-record-is-a-decision.md).
 
+**Support can see what a customer was emailed.** "Did you ever tell me about my refund?" is answered
+from the email queue itself: every email the platform meant to send, newest first, with whether it was
+sent, is still being retried and what the mail server last said, or was skipped and why. Name the
+customer by the email address they give you. Support only, and recorded like every other staff read.
+See [ADR 0051](docs/adr/0051-support-can-see-what-we-told-them.md).
+
+```bash
+curl "localhost:18080/api/v1/user/_notices?email=shopper@example.test" -H "Authorization: Bearer $SUPPORT"
+```
+
 **An operator may read another customer's order, and not cancel it.** Reading discloses facts the
 payment and parcel already expose — the customer, the order number, the amount, the shipped lines —
 so refusing it withheld a flash-sale id while leaving support unable to answer "where is my order".
@@ -761,9 +771,8 @@ Cancelling discloses nothing and destroys something, so it stays the customer's 
 recorded. See [ADR 0028](docs/adr/0028-looking-is-not-acting.md).
 
 **What is still open, said plainly.** Per-service ports are still published, so each service checks
-for itself rather than trusting the gateway. The publisher still stores a hard-coded sampled flag.
-And the audit table has no reader — answering "who read my data" is a SQL query, not an endpoint, and
-now against three databases rather than two.
+for itself rather than trusting the gateway. And "who read my data" is one `GET .../_access-log` per
+service, four of them now, because each keeps its own log.
 
 ## Breaking it on purpose
 

@@ -76,6 +76,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0046](adr/0046-the-first-message-out.md) — The first message out
 - [0048](adr/0048-the-order-tells-its-own-story.md) — The order tells its own story
 - [0050](adr/0050-the-emails-that-were-not-sent.md) — The emails that were not sent
+- [0051](adr/0051-support-can-see-what-we-told-them.md) — Support can see what we told them
 
 **Who is asking**
 - [0021](adr/0021-the-client-does-not-say-who-it-is.md) — The client does not get to say who it is
