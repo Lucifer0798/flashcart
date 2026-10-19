@@ -1,6 +1,7 @@
 package com.flashcart.user;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -19,8 +20,10 @@ import com.flashcart.common.error.OperatorRequiredException;
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.user.api.SupportController;
 import com.flashcart.user.messaging.NoticeListener;
+import com.flashcart.user.notice.NoticeRetention;
 import com.flashcart.user.notice.NoticeSender;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -120,6 +123,9 @@ class NoticeIT {
 
 	@Autowired
 	private SupportController support;
+
+	@Autowired
+	private NoticeRetention retention;
 
 	@BeforeEach
 	void reset() {
@@ -532,6 +538,81 @@ class NoticeIT {
 				shopper.id())).isZero();
 	}
 
+	// --- retention (ADR 0052) ----------------------------------------------------------------------
+
+	@Test
+	@DisplayName("finished emails about things past the window are deleted; recent ones and pending ones are kept")
+	void retentionDeletesOnlyWhatIsFinishedAndOld() {
+		String customer = UUID.randomUUID().toString();
+		insert("sent-old", customer, "SENT", Duration.ofDays(91));
+		insert("skipped-old", customer, "SKIPPED", Duration.ofDays(91));
+		// Still owed, however old: the sender skips it as stale on its own terms, and then it may go.
+		insert("pending-old", customer, "PENDING", Duration.ofDays(400));
+		insert("sent-recent", customer, "SENT", Duration.ofDays(89));
+
+		assertThat(retention.sweep()).isEqualTo(2);
+
+		assertThat(jdbc.queryForList("select notice_key from notices where customer_id = ? order by notice_key",
+				String.class, customer)).containsExactly("pending-old", "sent-recent");
+		assertThat(meters.get("flashcart.user.notices.pruned").counter().count()).isGreaterThanOrEqualTo(2);
+	}
+
+	@Test
+	@DisplayName("a backlog bigger than one batch is cleared in one sweep")
+	void retentionWorksThroughBatches() {
+		String customer = UUID.randomUUID().toString();
+		for (int i = 0; i < 7; i++) {
+			insert("backlog-" + i, customer, "SENT", Duration.ofDays(120));
+		}
+		NoticeRetention small = new NoticeRetention(jdbc, new SimpleMeterRegistry(), Duration.ofDays(90),
+				Duration.ofDays(1), 2);
+
+		assertThat(small.sweep()).isEqualTo(7);
+		assertThat(jdbc.queryForObject("select count(*) from notices where customer_id = ?", Integer.class, customer))
+				.isZero();
+	}
+
+	@Test
+	@DisplayName("once its record is deleted, the same refund announced again is too old to email, not a second email")
+	void aPrunedEmailIsNotSentAgain() {
+		Shopper shopper = register();
+		Instant refundedAt = Instant.now().minus(Duration.ofDays(100));
+		PaymentRefunded original = new PaymentRefunded(meta(PaymentRefunded.TYPE, refundedAt), UUID.randomUUID().toString(),
+				new BigDecimal("24.99"), "USD", "re_9", "FC-PRUNE001", shopper.id());
+		// Sent at the time, then a hundred days pass and the record of it is deleted.
+		jdbc.update("""
+				insert into notices (notice_key, kind, customer_id, order_number, occurred_at, payload, status, sent_at)
+				values ('refunded:FC-PRUNE001', 'REFUNDED', ?, 'FC-PRUNE001', ?, '{}', 'SENT', ?)""",
+				shopper.id(), Timestamp.from(refundedAt), Timestamp.from(refundedAt));
+		assertThat(retention.sweep()).isEqualTo(1);
+
+		// Payment re-publishes a refund for a repeated command, now dated when the refund happened.
+		listener.onPaymentRefunded(new PaymentRefunded(meta(PaymentRefunded.TYPE, refundedAt), original.paymentId(),
+				original.amount(), original.currency(), original.providerReference(), original.orderNumber(),
+				original.customerId()));
+		sender.sendDue();
+
+		assertThat(mail.sent).isEmpty();
+		assertThat(row("refunded:FC-PRUNE001")).containsEntry("status", "SKIPPED").containsEntry("skip_reason", "STALE");
+
+		// Why payment had to change: dated now, as it used to be, the same refund would have been
+		// emailed a second time.
+		listener.onPaymentRefunded(new PaymentRefunded(meta(PaymentRefunded.TYPE), original.paymentId(),
+				original.amount(), original.currency(), original.providerReference(), "FC-PRUNE002",
+				original.customerId()));
+		sender.sendDue();
+		assertThat(mail.sent).hasSize(1);
+	}
+
+	@Test
+	@DisplayName("a window no longer than the shelf life is refused at startup, because it would send emails twice")
+	void retentionInsideTheShelfLifeIsRefused() {
+		assertThatThrownBy(() -> new NoticeRetention(jdbc, new SimpleMeterRegistry(), Duration.ofDays(1),
+				Duration.ofDays(1), 500))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("must be longer than flashcart.notices.max-age");
+	}
+
 	// --- helpers ------------------------------------------------------------------------------------
 
 	private record Shopper(String id, String email) {
@@ -563,6 +644,19 @@ class NoticeIT {
 
 	private static Instant future() {
 		return Instant.now().plus(Duration.ofMinutes(10));
+	}
+
+	/**
+	 * A notice in a given state, about something that happened {@code ago}. A pending one is backing off,
+	 * not due, so the scheduled sender leaves it alone while the test looks at it.
+	 */
+	private void insert(String key, String customerId, String status, Duration ago) {
+		Timestamp when = Timestamp.from(Instant.now().minus(ago));
+		jdbc.update("""
+				insert into notices (notice_key, kind, customer_id, occurred_at, status, skip_reason, sent_at, next_attempt_at)
+				values (?, 'ORDER_CONFIRMED', ?, ?, ?, ?, ?, now() + interval '1 day')""",
+				key, customerId, when, status, "SKIPPED".equals(status) ? "STALE" : null,
+				"SENT".equals(status) ? when : null);
 	}
 
 	private HttpHeaders support() {

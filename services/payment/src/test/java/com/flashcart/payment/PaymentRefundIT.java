@@ -1,5 +1,8 @@
 package com.flashcart.payment;
 
+import java.sql.Timestamp;
+import java.time.Instant;
+
 import com.flashcart.common.event.message.PaymentRefunded;
 import com.flashcart.payment.domain.Payment;
 import com.flashcart.payment.domain.PaymentStatus;
@@ -50,6 +53,9 @@ class PaymentRefundIT extends AbstractPaymentIT {
 		Payment charged = charge("179.00");
 		String key = "refund:" + charged.getOrderId();
 		payments.refund(charged.getOrderNumber(), "customer cancelled", key);
+		// A month ago, so the repeat below is plainly a late one.
+		Instant refundedAt = Instant.parse("2026-01-15T10:00:00Z");
+		jdbc.update("update payments set refunded_at = ? where id = ?", Timestamp.from(refundedAt), charged.getId());
 		events.clear();
 
 		Payment again = payments.refund(charged.getOrderNumber(), "customer cancelled", key);
@@ -58,6 +64,9 @@ class PaymentRefundIT extends AbstractPaymentIT {
 		// Re-published rather than ignored, for the same reason a duplicated charge re-publishes: the
 		// likelier explanation for a repeated command is that the first answer was what got lost.
 		assertThat(events.countOf(PaymentRefunded.class)).isEqualTo(1);
+		// Dated when the refund happened, not now: the same refund said again, which the user service
+		// recognises as too old to email about once its first email's record is gone (ADR 0052).
+		assertThat(events.require(PaymentRefunded.class).occurredAt()).isEqualTo(refundedAt);
 	}
 
 	@Test

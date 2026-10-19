@@ -758,7 +758,11 @@ with the row count, so unbounded growth is something you chose rather than somet
 from the email queue itself: every email the platform meant to send, newest first, with whether it was
 sent, is still being retried and what the mail server last said, or was skipped and why. Name the
 customer by the email address they give you. Support only, and recorded like every other staff read.
-See [ADR 0051](docs/adr/0051-support-can-see-what-we-told-them.md).
+See [ADR 0051](docs/adr/0051-support-can-see-what-we-told-them.md). That covers ninety days: sent and skipped
+emails are deleted once the event they were about is older than `flashcart.notices.retention` (`P90D`),
+which must be longer than the one-day shelf life. A notice is also what stops an email going out twice,
+and only an announcement already too old to send is safe to forget
+([ADR 0052](docs/adr/0052-forgetting-an-email-safely.md)).
 
 ```bash
 curl "localhost:18080/api/v1/user/_notices?email=shopper@example.test" -H "Authorization: Bearer $SUPPORT"

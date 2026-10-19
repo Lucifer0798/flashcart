@@ -2,6 +2,7 @@ package com.flashcart.payment.service;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -243,16 +244,22 @@ public class PaymentService {
 			// already cancelled and would ignore it.
 			case REFUND_FAILED -> log.warn("Payment {} is REFUND_FAILED; money is still held",
 					payment.getId());
-			// Paid outside the platform and recorded by hand. Nothing consumes a refund event today,
-			// and PaymentRefunded would claim the provider reversed the capture, which it did not.
+			// Paid outside the platform and recorded by hand, which announced it once as
+			// RefundSettledOutside (ADR 0050). PaymentRefunded would claim the provider reversed the
+			// capture, which it did not.
 			case REFUNDED_OUTSIDE -> log.debug("Payment {} was refunded outside the platform",
 					payment.getId());
 		}
 	}
 
 	private void publishRefunded(Payment payment) {
+		// Stamped with when the refund happened, not now. Re-published for a duplicate command, this is
+		// the same refund said again, and a customer must not get a second "we have refunded" email
+		// for it -- which, once the first email's record has been pruned, only its age prevents. ADR 0052.
+		Instant refundedAt = payment.getRefundedAt();
 		events.publish(Topics.PAYMENT_EVENTS, new PaymentRefunded(
-				EventMetadata.of(PaymentRefunded.TYPE, payment.getOrderId()),
+				refundedAt == null ? EventMetadata.of(PaymentRefunded.TYPE, payment.getOrderId())
+						: EventMetadata.of(PaymentRefunded.TYPE, payment.getOrderId(), refundedAt),
 				payment.getId().toString(), payment.getAmount(), payment.getCurrency(),
 				payment.getRefundReference(),
 				payment.getOrderNumber(), payment.getCustomerId()));

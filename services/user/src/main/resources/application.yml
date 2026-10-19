@@ -111,6 +111,12 @@ flashcart:
     # confirmation a day late is noise, and one replayed from the topic's history on a first deploy is
     # worse -- which is what happened before this existed. See ADR 0048.
     max-age: ${NOTICES_MAX_AGE:P1D}
+    # How long a sent or skipped email is kept, counted from the event it was about. Long enough for
+    # support to answer "did you email me?" about anything a customer is still likely to raise, and must
+    # be longer than max-age: a notice is what stops the same email going out twice, and only a copy
+    # older than the shelf life is safe to have forgotten. The service refuses to start otherwise. See
+    # ADR 0052.
+    retention: ${NOTICES_RETENTION:P90D}
 
 ---
 # The development operator, and nothing else. `demo` adds classpath:db/seed to the Flyway locations,

@@ -32,4 +32,15 @@ public record EventMetadata(
 	public static EventMetadata of(String eventType, UUID aggregateId) {
 		return of(eventType, aggregateId.toString());
 	}
+
+	/**
+	 * A new message about something that happened earlier: re-announcing a fact rather than reporting a
+	 * new one. {@code occurredAt} is when the fact happened, not when it was said again, so a consumer
+	 * that judges a message by its age judges the fact. The user service skips an email that old rather
+	 * than sending it again (ADR 0052).
+	 */
+	public static EventMetadata of(String eventType, UUID aggregateId, Instant occurredAt) {
+		return new EventMetadata(UUID.randomUUID().toString(), eventType, aggregateId.toString(), occurredAt,
+				CorrelationId.current());
+	}
 }
