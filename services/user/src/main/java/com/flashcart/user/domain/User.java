@@ -27,7 +27,7 @@ import jakarta.persistence.Table;
 @Table(name = "users")
 public class User {
 
-	public enum Status { ACTIVE, DISABLED }
+	public enum Status { ACTIVE, DISABLED, CLOSED }
 
 	@Id
 	private UUID id;
@@ -64,6 +64,9 @@ public class User {
 
 	@Column(name = "updated_at", nullable = false)
 	private Instant updatedAt = Instant.now();
+
+	@Column(name = "closed_at")
+	private Instant closedAt;
 
 	protected User() {
 	}
@@ -112,6 +115,25 @@ public class User {
 
 	public void rename(String displayName) {
 		this.displayName = displayName.trim();
+		touch();
+	}
+
+	/**
+	 * Erases who this was, keeping the id. See ADR 0053.
+	 *
+	 * <p>The email becomes one at {@code .invalid}, a domain reserved never to resolve (RFC 2606), unique
+	 * by the id, so the address is free to register again and nothing can ever be sent to this one. The
+	 * password becomes a value no encoder produces, so it matches nothing. The addresses go with the
+	 * collection's orphan removal; the roles are cleared, and the service records their revocation.
+	 */
+	public void close(Instant at) {
+		this.status = Status.CLOSED;
+		this.email = "closed-" + id + "@closed.invalid";
+		this.displayName = "Closed account";
+		this.passwordHash = "!closed";
+		this.roles = "";
+		this.addresses.clear();
+		this.closedAt = at;
 		touch();
 	}
 
@@ -172,6 +194,10 @@ public class User {
 
 	public List<Address> getAddresses() {
 		return addresses;
+	}
+
+	public Instant getClosedAt() {
+		return closedAt;
 	}
 
 	public Instant getCreatedAt() {

@@ -12,12 +12,15 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import com.flashcart.common.event.EventMetadata;
+import com.flashcart.common.event.message.AccountClosed;
 import com.flashcart.common.event.message.BackInStock;
 import com.flashcart.inventory.api.dto.ReceiveStockRequest;
 import com.flashcart.inventory.api.dto.AllocationResponse;
 import com.flashcart.inventory.api.dto.ReservationResponse;
 import com.flashcart.inventory.api.dto.StockResponse;
 import com.flashcart.inventory.domain.ReservationStatus;
+import com.flashcart.inventory.messaging.AccountClosedListener;
 import com.flashcart.inventory.service.ReservationExpiryService;
 import com.flashcart.inventory.service.ReservationService;
 import org.junit.jupiter.api.DisplayName;
@@ -54,6 +57,9 @@ class WaitlistIT extends AbstractInventoryIT {
 
 	@Autowired
 	private ReservationExpiryService expiryService;
+
+	@Autowired
+	private AccountClosedListener accountClosed;
 
 	// --- joining --------------------------------------------------------------------------------
 
@@ -327,6 +333,33 @@ class WaitlistIT extends AbstractInventoryIT {
 
 		assertThat(rejoined.getStatusCode()).isEqualTo(HttpStatus.CREATED);
 		assertThat(rejoined.getBody()).containsEntry("ahead", 1);
+	}
+
+	@Test
+	@DisplayName("a closed account leaves every queue, and a unit held for it passes to the next in line")
+	void aClosedAccountLeavesEveryQueue() {
+		String waiting = soldOut();
+		String told = soldOut();
+		join("leaver", waiting);
+		join("leaver", told);
+		join("next", told);
+		receive(told, 1);
+		assertThat(statusOf("leaver", told)).isEqualTo("NOTIFIED");
+		String hold = "waitlist:" + entryOf("leaver", told).get("id");
+
+		AccountClosed closed = new AccountClosed(EventMetadata.of(AccountClosed.TYPE, "leaver"), "leaver");
+		accountClosed.onAccountClosed(closed);
+		accountClosed.onAccountClosed(closed);
+
+		assertThat(statusOf("leaver", waiting)).isEqualTo("CANCELLED");
+		assertThat(reservationStatus(hold)).isEqualTo("RELEASED");
+		// Through the ledger, like any released hold, so the next shopper is told and holds it now.
+		assertThat(noticesFor(told)).containsExactlyInAnyOrder("leaver", "next");
+		assertThat(entryOf("next", told).get("heldUntil")).isNotNull();
+
+		// And when the first SKU comes back, nobody is told about it for an account that is gone.
+		receive(waiting, 1);
+		assertThat(noticesFor(waiting)).isEmpty();
 	}
 
 	// --- the held unit (ADR 0045) -------------------------------------------------------------------

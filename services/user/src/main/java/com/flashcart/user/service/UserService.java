@@ -1,10 +1,16 @@
 package com.flashcart.user.service;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import com.flashcart.common.error.ConflictException;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.error.UnauthenticatedException;
+import com.flashcart.common.event.EventMetadata;
+import com.flashcart.common.event.EventPublisher;
+import com.flashcart.common.event.Topics;
+import com.flashcart.common.event.message.AccountClosed;
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.user.domain.Address;
 import com.flashcart.user.domain.User;
@@ -12,11 +18,12 @@ import com.flashcart.user.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Registration, sign-in and addresses. */
+/** Registration, sign-in, addresses, and closing the account. */
 @Service
 public class UserService {
 
@@ -25,11 +32,16 @@ public class UserService {
 	private final UserRepository users;
 	private final PasswordEncoder passwords;
 	private final AccessTokens tokens;
+	private final JdbcTemplate jdbc;
+	private final EventPublisher events;
 
-	public UserService(UserRepository users, PasswordEncoder passwords, AccessTokens tokens) {
+	public UserService(UserRepository users, PasswordEncoder passwords, AccessTokens tokens, JdbcTemplate jdbc,
+			EventPublisher events) {
 		this.users = users;
 		this.passwords = passwords;
 		this.tokens = tokens;
+		this.jdbc = jdbc;
+		this.events = events;
 	}
 
 	@Transactional
@@ -74,10 +86,59 @@ public class UserService {
 		return tokens.issue(user.getId().toString(), user.getEmail(), user.getRoles());
 	}
 
+	/**
+	 * The caller's account, for the {@code /me} paths.
+	 *
+	 * @throws UnauthenticatedException for a closed account: its tokens stay valid until they expire, and
+	 *                                  the account they name is no longer one anybody can use (ADR 0053)
+	 */
 	@Transactional(readOnly = true)
 	public User require(UUID id) {
-		return users.findWithAddresses(id)
+		User user = users.findWithAddresses(id)
 				.orElseThrow(() -> ResourceNotFoundException.of("User", id.toString()));
+		if (user.getStatus() == User.Status.CLOSED) {
+			throw new UnauthenticatedException("This account has been closed");
+		}
+		return user;
+	}
+
+	/**
+	 * Closes the caller's account. Irreversible. See ADR 0053.
+	 *
+	 * <p>Asks for the password as well as the token, so a token copied from somewhere cannot destroy an
+	 * account on its own. A wrong password is the sign-in's answer, INVALID_CREDENTIALS.
+	 *
+	 * <p>One transaction: the identity is erased, any staff roles are revoked on the record, the emails
+	 * kept about the account are deleted, and {@code AccountClosed} goes to the outbox. Either all of it
+	 * happens or none of it, and the other services are told only about a closure that committed.
+	 */
+	@Transactional
+	public void close(UUID id, String rawPassword) {
+		User user = require(id);
+		if (!passwords.matches(rawPassword, user.getPasswordHash())) {
+			log.info("Refused to close account {}: wrong password", id);
+			throw new UnauthenticatedException();
+		}
+
+		List<String> roles = user.getRoles();
+		Instant now = Instant.now();
+		user.close(now);
+		users.flush();
+
+		// A staff account can be closed too, and its roles go with it. Recorded as grant-role.sh records
+		// a revocation (ADR 0047), so the history of who held a role does not just stop.
+		for (String role : roles) {
+			jdbc.update("""
+					insert into role_grants (user_id, role, action, reason, granted_by)
+					values (?, ?, 'REVOKE', 'account closed by its holder', 'account-closure')""", id, role);
+		}
+		// What was emailed to them, and anything still waiting to be: the subject lines name their orders,
+		// the bodies their refunds. Support's view of their emails ends here.
+		int notices = jdbc.update("delete from notices where customer_id = ?", id.toString());
+
+		events.publish(Topics.USER_EVENTS, new AccountClosed(EventMetadata.of(AccountClosed.TYPE, id), id.toString()));
+		log.info("Closed account {}: erased its identity, revoked {} role(s), deleted {} notice(s)", id,
+				roles.size(), notices);
 	}
 
 	@Transactional

@@ -16,6 +16,8 @@ import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderDispatched;
 import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDelivered;
+import com.flashcart.common.event.EventMetadata;
+import com.flashcart.common.event.message.AccountClosed;
 import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.RequestPayment;
@@ -26,6 +28,7 @@ import com.flashcart.common.web.CorrelationId;
 import com.flashcart.order.api.dto.OrderResponse;
 import com.flashcart.order.api.dto.PlaceOrderRequest;
 import com.flashcart.order.client.CatalogClient;
+import com.flashcart.order.messaging.AccountClosedListener;
 import com.flashcart.order.service.CancellationReconciliationService;
 import com.flashcart.order.service.OrderReconciliationService;
 import com.flashcart.order.service.OrderSaga;
@@ -164,6 +167,9 @@ class OrderIT {
 
 	@Autowired
 	private CancellationReconciliationService cancellations;
+
+	@Autowired
+	private AccountClosedListener accountClosed;
 
 	@BeforeEach
 	void reset() {
@@ -504,6 +510,39 @@ class OrderIT {
 		OrderCancelled announced = events.require(OrderCancelled.class);
 		assertThat(announced.reason()).isEqualTo("CANCELLED_BY_CUSTOMER");
 		assertThat(announced.customerId()).isEqualTo("cust-1");
+	}
+
+	@Test
+	@DisplayName("a closed account's leftover token cannot buy, not even by retrying an earlier checkout")
+	void closedAccountsCannotBuy() {
+		signedInAs("cust-closing");
+		String key = uniqueKey();
+		ResponseEntity<OrderResponse> before = rest.postForEntity("/api/v1/orders", new PlaceOrderRequest(key, null,
+				List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))), OrderResponse.class);
+		assertThat(before.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+
+		AccountClosed closed = new AccountClosed(EventMetadata.of(AccountClosed.TYPE, "cust-closing"), "cust-closing");
+		accountClosed.onAccountClosed(closed);
+		accountClosed.onAccountClosed(closed);
+
+		ResponseEntity<Map> refused = rest.postForEntity("/api/v1/orders", new PlaceOrderRequest(uniqueKey(), null,
+				List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))), Map.class);
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(refused.getBody()).containsEntry("code", "UNAUTHENTICATED");
+		// Nor by replaying the key of an order placed before closing, which would otherwise be handed back
+		// -- and, for one still CREATED, re-sent to inventory.
+		assertThat(rest.postForEntity("/api/v1/orders", new PlaceOrderRequest(key, null,
+				List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))), Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(jdbc.queryForObject("select count(*) from orders where customer_id = 'cust-closing'", Integer.class))
+				.isEqualTo(1);
+
+		// What was bought before closing is still there, and still theirs to look at.
+		assertThat(rest.getForEntity("/api/v1/orders/" + before.getBody().orderNumber(), Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.OK);
+		// Only that account. Everybody else buys as before.
+		signedInAs("cust-1");
+		place("cust-1", "AUD-HP-001", 1);
 	}
 
 	@Test

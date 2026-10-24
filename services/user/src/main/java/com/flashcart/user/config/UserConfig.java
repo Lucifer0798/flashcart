@@ -113,7 +113,8 @@ public class UserConfig {
 						List.of(
 								"GET /api/v1/users/me",
 								"PATCH /api/v1/users/me",
-								"POST /api/v1/users/me/addresses"),
+								"POST /api/v1/users/me/addresses",
+								"POST /api/v1/users/me/close"),
 						// Support's reads (ADR 0051). The handler checks the role again and records the read;
 						// this only keeps everyone else from reaching it.
 						Map.of(AccessTokens.SUPPORT, List.of(

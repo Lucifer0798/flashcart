@@ -654,6 +654,24 @@ $ curl -X POST localhost:18082/api/v1/orders -H 'X-Customer-Id: someone-else' ..
 401
 ```
 
+### Closing an account
+
+```bash
+curl -X POST localhost:18080/api/v1/users/me/close -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"password":"a-sufficiently-long-password"}'
+```
+
+**Closing erases who the account was, and keeps what it did.** The email, name, password and addresses
+are gone, and so are the emails kept about it. Orders, payments and parcels stay as the records they
+are, under an id that no longer leads to anyone: no other service ever held a name or an address. The
+password is asked for again, so a token alone cannot close an account. The address can be registered
+again as a new account. Staff roles are revoked on the record, in `role_grants`.
+
+Tokens issued before closing still verify until they expire, because each service checks them itself.
+So `AccountClosed` goes out on the bus: the order service refuses checkouts from that account, and
+inventory takes it out of every waitlist, passing any unit held for it to the next in line. See
+[ADR 0053](docs/adr/0053-closing-an-account.md).
+
 ### Operators
 
 Receiving stock, adjusting a ledger, creating an allocation and dispatching a parcel need more than an

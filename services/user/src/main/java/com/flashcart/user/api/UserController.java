@@ -8,6 +8,7 @@ import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.user.api.dto.UserDtos.AddressRequest;
 import com.flashcart.user.api.dto.UserDtos.AddressResponse;
+import com.flashcart.user.api.dto.UserDtos.CloseRequest;
 import com.flashcart.user.api.dto.UserDtos.RegisterRequest;
 import com.flashcart.user.api.dto.UserDtos.RenameRequest;
 import com.flashcart.user.api.dto.UserDtos.SignInRequest;
@@ -102,6 +103,24 @@ public class UserController {
 				request.line1(), request.line2(), request.city(), request.postcode(),
 				request.country(), request.makeDefault()));
 		return ResponseEntity.status(201).body(AddressResponse.of(address));
+	}
+
+	@PostMapping("/me/close")
+	@Operation(summary = "Close the signed-in account",
+			description = "Irreversible. Needs the current password as well as the token. Erases the email, "
+					+ "name, password and addresses, and the emails kept about the account; orders, payments "
+					+ "and parcels are kept as records, under an id that no longer leads to anyone. New "
+					+ "checkouts from the account are refused. The email address can be registered again. "
+					+ "See ADR 0053.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "204", description = "Closed"),
+			@ApiResponse(responseCode = "401", description = "INVALID_CREDENTIALS -- wrong password; or the account "
+					+ "is already closed")
+	})
+	public ResponseEntity<Void> close(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+			@Valid @RequestBody CloseRequest request) {
+		users.close(caller(authorization), request.password());
+		return ResponseEntity.noContent().build();
 	}
 
 	/**
