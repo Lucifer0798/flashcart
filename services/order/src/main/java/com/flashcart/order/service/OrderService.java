@@ -12,6 +12,7 @@ import java.util.UUID;
 import com.flashcart.common.error.BadRequestException;
 import com.flashcart.common.error.ConflictException;
 import com.flashcart.common.error.ResourceNotFoundException;
+import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.order.OrderStateMachine;
 import com.flashcart.common.order.OrderStatus;
 import com.flashcart.common.web.CorrelationId;
@@ -68,14 +69,16 @@ public class OrderService {
 	private final CatalogClient catalog;
 	private final OrderSaga saga;
 	private final TransactionTemplate transactions;
+	private final ClosedAccounts closedAccounts;
 
 	public OrderService(OrderRepository orders, OrderStatusChangeRepository history, CatalogClient catalog,
-			OrderSaga saga, PlatformTransactionManager transactionManager) {
+			OrderSaga saga, PlatformTransactionManager transactionManager, ClosedAccounts closedAccounts) {
 		this.orders = orders;
 		this.history = history;
 		this.catalog = catalog;
 		this.saga = saga;
 		this.transactions = new TransactionTemplate(transactionManager);
+		this.closedAccounts = closedAccounts;
 	}
 
 	/** One requested line, before catalog has priced it. */
@@ -93,6 +96,12 @@ public class OrderService {
 	 */
 	public Order place(String idempotencyKey, String customerId, UUID flashSaleId,
 			List<RequestedLine> requestedLines) {
+
+		// A token issued before its account closed still verifies until it expires. It must not buy
+		// (ADR 0053). Before the idempotency lookup, so a retry cannot be used to get a new order through.
+		if (closedAccounts.isClosed(customerId)) {
+			throw new UnauthenticatedException("This account has been closed");
+		}
 
 		Order existing = orders.findByIdempotencyKey(idempotencyKey).orElse(null);
 		if (existing != null) {

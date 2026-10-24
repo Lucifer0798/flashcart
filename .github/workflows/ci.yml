@@ -558,6 +558,59 @@ jobs:
           echo "waiting shopper's order $WORDER: $WSTATUS"
           case "$WSTATUS" in FULFILLING|SHIPPED) ;; *) docker compose logs --tail=80 inventory order; exit 1 ;; esac
 
+      - name: A closed account is forgotten, and its leftover token cannot buy
+        run: |
+          set -e
+          G=http://localhost:18080
+          # user -> Kafka -> inventory and order, for the one event the user service publishes. Each
+          # service's tests call its listener directly; this is the check that AccountClosed arrives.
+          # See ADR 0053.
+          EMAIL="ci-closing-$(date +%s)@example.test"; PASS="a-sufficiently-long-password"
+          curl -sf -o /dev/null -X POST $G/api/v1/users -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"displayName\":\"CI Leaver\"}"
+          LEAVER=$(curl -s -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+          test -n "$LEAVER"
+
+          SKU=CI-CLOSE-$(date +%s)
+          curl -sf -o /dev/null -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" \
+            -d "{\"sku\":\"$SKU\",\"initialQuantity\":0,\"reason\":\"CI closure\"}"
+          CAT=$(curl -sf $G/api/v1/categories | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -1)
+          curl -sf -o /dev/null -X POST $G/api/v1/products -H 'Content-Type: application/json' -H "Authorization: Bearer $CATALOG" \
+            -d "{\"sku\":\"$SKU\",\"name\":\"CI Closure Probe $SKU\",\"categoryId\":\"$CAT\",\"basePrice\":10.00,\"currency\":\"USD\",\"status\":\"ACTIVE\"}"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/waitlist -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $LEAVER" -d "{\"sku\":\"$SKU\"}")
+          test "$CODE" = "201"
+
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/me/close -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $LEAVER" -d '{"password":"not-it"}')
+          test "$CODE" = "401" || { echo "closed with the wrong password ($CODE)"; exit 1; }
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/me/close -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $LEAVER" -d "{\"password\":\"$PASS\"}")
+          echo "close: $CODE"
+          test "$CODE" = "204"
+          test "$(curl -s -o /dev/null -w '%{http_code}' $G/api/v1/users/me -H "Authorization: Bearer $LEAVER")" = "401"
+
+          # Inventory heard: the waiting place is given up. Polled, because it is a hop through Kafka.
+          for i in $(seq 1 30); do
+            PLACE=$(curl -sf $G/api/v1/inventory/waitlist/mine -H "Authorization: Bearer $LEAVER" \
+              | python3 -c "import json,sys; print(next((e['status'] for e in json.load(sys.stdin) if e['sku'] == sys.argv[1]), ''))" "$SKU")
+            if [ "$PLACE" = "CANCELLED" ]; then break; fi
+            sleep 2
+          done
+          echo "waitlist place: $PLACE"
+          test "$PLACE" = "CANCELLED" || { docker compose logs --tail=60 inventory user; exit 1; }
+
+          # Order heard: the token, still valid, cannot buy.
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/orders -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer $LEAVER" -d "{\"idempotencyKey\":\"ci-closed-$i-$(date +%s)\",\"lines\":[{\"sku\":\"$SKU\",\"quantity\":1}]}")
+            if [ "$CODE" = "401" ]; then break; fi
+            sleep 2
+          done
+          echo "checkout after closing: $CODE"
+          test "$CODE" = "401" || { docker compose logs --tail=60 order user; exit 1; }
+
       - name: The shared error envelope survives every hop
         run: |
           set -e

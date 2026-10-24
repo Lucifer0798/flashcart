@@ -46,6 +46,9 @@ public final class Topics {
 	/** Catalog changes, so read models and caches can invalidate. Keyed by product id. */
 	public static final String CATALOG_EVENTS = "flashcart.catalog.events";
 
+	/** Things that happen to an account, such as its closure (ADR 0053). Keyed by customer id. */
+	public static final String USER_EVENTS = "flashcart.user.events";
+
 	/**
 	 * Where a message goes once a consumer has exhausted its retries.
 	 *

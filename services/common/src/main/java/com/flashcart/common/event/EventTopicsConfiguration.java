@@ -52,6 +52,7 @@ public class EventTopicsConfiguration {
 				topic(Topics.SHIPPING_COMMANDS),
 				topic(Topics.SHIPPING_EVENTS),
 				topic(Topics.CATALOG_EVENTS),
+				topic(Topics.USER_EVENTS),
 				// The dead-letter topic is declared alongside the rest rather than created on first
 				// use — the moment it is first needed is the worst moment to discover it is missing.
 				topic(Topics.DEAD_LETTER)).toArray(NewTopic[]::new));

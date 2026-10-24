@@ -201,7 +201,9 @@ public class NoticeSender {
 		catch (IllegalArgumentException ex) {
 			return null;
 		}
-		return jdbc.query("select email, display_name from users where id = ?",
+		// Not a closed account's placeholder address (ADR 0053). Notices.receive stops new ones for it; this
+		// covers one that was already queued when it closed.
+		return jdbc.query("select email, display_name from users where id = ? and status <> 'CLOSED'",
 				rs -> rs.next() ? new Recipient(rs.getString("email"), rs.getString("display_name")) : null,
 				userId);
 	}

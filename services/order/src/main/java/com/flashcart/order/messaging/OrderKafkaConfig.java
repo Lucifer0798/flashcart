@@ -1,6 +1,7 @@
 package com.flashcart.order.messaging;
 
 import com.flashcart.common.event.ConsumerFactories;
+import com.flashcart.common.event.message.AccountClosed;
 import com.flashcart.common.event.message.InventoryReservationFailed;
 import com.flashcart.common.event.message.InventoryReserved;
 import com.flashcart.common.event.message.PaymentCompleted;
@@ -105,5 +106,12 @@ public class OrderKafkaConfig {
 			KafkaConnectionDetails connectionDetails, KafkaTemplate<String, Object> template) {
 		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP,
 				ShipmentCancellationRefused.class, template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, AccountClosed> accountClosedFactory(
+			KafkaProperties properties, KafkaConnectionDetails connectionDetails,
+			KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, connectionDetails, GROUP, AccountClosed.class, template);
 	}
 }

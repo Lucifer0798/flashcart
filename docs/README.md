@@ -95,6 +95,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0038](adr/0038-one-role-did-too-much.md) — One role did too much
 - [0039](adr/0039-nothing-ever-ran-without-operator.md) — Nothing ever ran without OPERATOR
 - [0047](adr/0047-staff-roles-on-the-record.md) — Staff roles, on the record
+- [0053](adr/0053-closing-an-account.md) — Closing an account
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)

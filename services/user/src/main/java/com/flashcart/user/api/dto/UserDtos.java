@@ -67,4 +67,8 @@ public final class UserDtos {
 
 	public record RenameRequest(@NotBlank @Size(max = 120) String displayName) {
 	}
+
+	/** The current password, asked for again because closing cannot be undone. */
+	public record CloseRequest(@NotBlank String password) {
+	}
 }

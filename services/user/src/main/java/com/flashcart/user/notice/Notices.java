@@ -39,6 +39,12 @@ public class Notices {
 	 * @return true if this was new
 	 */
 	public boolean receive(Notice notice) {
+		if (closed(notice.customerId())) {
+			// Not even recorded: closing erased what was kept about this account (ADR 0053), and a refund
+			// announced afterwards would otherwise put its order and amount back for ninety days.
+			log.info("Not recording notice {}: the account is closed", notice.key());
+			return false;
+		}
 		int inserted = jdbc.update("""
 				insert into notices
 				       (notice_key, kind, customer_id, order_number, occurred_at, payload, send_before, status)
@@ -51,6 +57,11 @@ public class Notices {
 			log.info("Already have notice {}; not sending another", notice.key());
 		}
 		return inserted == 1;
+	}
+
+	private boolean closed(String customerId) {
+		return customerId != null && Boolean.TRUE.equals(jdbc.queryForObject(
+				"select exists (select 1 from users where id::text = ? and status = 'CLOSED')", Boolean.class, customerId));
 	}
 
 	/** Seconds the oldest unsent notice has been waiting, or zero when nothing is waiting. */
