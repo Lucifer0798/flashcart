@@ -277,6 +277,32 @@ class UserIT {
 	}
 
 	@Test
+	@DisplayName("makeDefault may be left out, and leaving it out means no")
+	void makeDefaultIsOptional() {
+		String email = uniqueEmail();
+		register(email);
+		String token = signIn(email, "a-sufficiently-long-password");
+
+		// A raw map, not an AddressRequest: the record cannot leave a field out, so a typed body would
+		// always send makeDefault and this test could never fail. Jackson 3 refuses a missing
+		// primitive, which is how this endpoint came to answer 400 to a perfectly reasonable request.
+		Map<String, String> withoutMakeDefault = Map.of("label", "Home", "line1", "1 Test Street",
+				"city", "London", "postcode", "E1 6AN", "country", "GB");
+
+		ResponseEntity<Map> first = rest.exchange("/api/v1/users/me/addresses", HttpMethod.POST,
+				new HttpEntity<>(withoutMakeDefault, bearer(token)), Map.class);
+		ResponseEntity<Map> second = rest.exchange("/api/v1/users/me/addresses", HttpMethod.POST,
+				new HttpEntity<>(withoutMakeDefault, bearer(token)), Map.class);
+
+		assertThat(first.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+		assertThat(second.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+		// The first is the default because it is the first. The second is the half that says what
+		// absent means: had it been read as true, it would have taken the default from the first.
+		assertThat(first.getBody()).containsEntry("isDefault", true);
+		assertThat(second.getBody()).containsEntry("isDefault", false);
+	}
+
+	@Test
 	@DisplayName("the service still reports itself live")
 	void serviceInfo() {
 		ResponseEntity<Map> info = rest.getForEntity("/api/v1/user/_info", Map.class);

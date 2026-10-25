@@ -94,14 +94,15 @@ public class UserController {
 
 	@PostMapping("/me/addresses")
 	@Operation(summary = "Add an address",
-			description = "The first address becomes the default whether or not you ask for it.")
+			description = "makeDefault may be left out, and then means false. The first address becomes "
+					+ "the default whether or not you ask for it.")
 	public ResponseEntity<AddressResponse> addAddress(
 			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
 			@Valid @RequestBody AddressRequest request) {
 
 		Address address = users.addAddress(caller(authorization), Address.of(request.label(),
 				request.line1(), request.line2(), request.city(), request.postcode(),
-				request.country(), request.makeDefault()));
+				request.country(), Boolean.TRUE.equals(request.makeDefault())));
 		return ResponseEntity.status(201).body(AddressResponse.of(address));
 	}
 

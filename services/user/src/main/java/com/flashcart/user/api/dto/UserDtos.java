@@ -42,7 +42,9 @@ public final class UserDtos {
 			@NotBlank @Size(max = 20) String postcode,
 			@NotBlank @Pattern(regexp = "^[A-Za-z]{2}$", message = "must be an ISO 3166-1 alpha-2 code")
 			String country,
-			boolean makeDefault) {
+			// Boxed so it can be left out: Jackson 3 refuses a missing primitive with a 400. Null means
+			// false, and the controller says so where it builds the address.
+			Boolean makeDefault) {
 	}
 
 	public record AddressResponse(UUID id, String label, String line1, String line2, String city,
