@@ -1,6 +1,6 @@
 # 0053 — Closing an account
 
-**Status:** Accepted · **Date:** 2026-10-24 · **Phase:** post-roadmap · **Builds on [ADR 0021](0021-the-client-does-not-say-who-it-is.md), [ADR 0045](0045-told-means-yours.md), [ADR 0047](0047-staff-roles-on-the-record.md) and [ADR 0052](0052-forgetting-an-email-safely.md)**
+**Status:** Accepted · **Date:** 2026-10-24 · **Phase:** post-roadmap · **Amended by [ADR 0054](0054-a-closed-account-cannot-queue.md)** · **Builds on [ADR 0021](0021-the-client-does-not-say-who-it-is.md), [ADR 0045](0045-told-means-yours.md), [ADR 0047](0047-staff-roles-on-the-record.md) and [ADR 0052](0052-forgetting-an-email-safely.md)**
 
 ## Context
 
@@ -119,7 +119,7 @@ keep stay whole and stop pointing at a person.
 - A cancellation reason the customer typed is stored as they typed it, on the order and its history. It
   is free text and could contain anything, and closing leaves it.
 - A leftover token can still join a waitlist in inventory until it expires. The place it makes is never
-  cleaned up, because the closure was already processed.
+  cleaned up, because the closure was already processed. *Closed by [ADR 0054](0054-a-closed-account-cannot-queue.md).*
 
 **Still open.**
 

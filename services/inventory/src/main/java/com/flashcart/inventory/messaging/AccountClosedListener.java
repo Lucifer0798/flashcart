@@ -24,6 +24,6 @@ public class AccountClosedListener {
 	@KafkaListener(topics = Topics.USER_EVENTS, containerFactory = "accountClosedFactory",
 			groupId = InventoryKafkaConfig.GROUP + "-account-closed")
 	public void onAccountClosed(AccountClosed event) {
-		handler.handle(event, CONSUMER, () -> closure.forget(event.customerId()));
+		handler.handle(event, CONSUMER, () -> closure.forget(event.customerId(), event.occurredAt()));
 	}
 }

@@ -96,6 +96,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0039](adr/0039-nothing-ever-ran-without-operator.md) — Nothing ever ran without OPERATOR
 - [0047](adr/0047-staff-roles-on-the-record.md) — Staff roles, on the record
 - [0053](adr/0053-closing-an-account.md) — Closing an account
+- [0054](adr/0054-a-closed-account-cannot-queue.md) — A closed account cannot queue
 
 **Shape of the repository**
 - [0001 — One multi-module Maven repo, not seven](adr/0001-multi-module-monorepo.md)

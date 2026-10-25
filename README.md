@@ -669,8 +669,9 @@ again as a new account. Staff roles are revoked on the record, in `role_grants`.
 
 Tokens issued before closing still verify until they expire, because each service checks them itself.
 So `AccountClosed` goes out on the bus: the order service refuses checkouts from that account, and
-inventory takes it out of every waitlist, passing any unit held for it to the next in line. See
-[ADR 0053](docs/adr/0053-closing-an-account.md).
+inventory takes it out of every waitlist, passes any unit held for it to the next in line, and refuses
+it new places. See [ADR 0053](docs/adr/0053-closing-an-account.md) and
+[ADR 0054](docs/adr/0054-a-closed-account-cannot-queue.md).
 
 ### Operators
 

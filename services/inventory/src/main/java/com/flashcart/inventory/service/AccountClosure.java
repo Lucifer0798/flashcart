@@ -1,6 +1,7 @@
 package com.flashcart.inventory.service;
 
 import java.time.Clock;
+import java.time.Instant;
 
 import com.flashcart.inventory.domain.ReservationStatus;
 import com.flashcart.inventory.domain.WaitlistEntry;
@@ -31,19 +32,29 @@ public class AccountClosure {
 	private final WaitlistRepository waitlist;
 	private final ReservationService reservations;
 	private final ReservationRepository holds;
+	private final ClosedAccounts closedAccounts;
 	private final Clock clock;
 
 	public AccountClosure(WaitlistRepository waitlist, ReservationService reservations, ReservationRepository holds,
-			Clock clock) {
+			ClosedAccounts closedAccounts, Clock clock) {
 		this.waitlist = waitlist;
 		this.reservations = reservations;
 		this.holds = holds;
+		this.closedAccounts = closedAccounts;
 		this.clock = clock;
 	}
 
-	/** Idempotent: a second call finds nothing waiting and no live hold. */
+	/**
+	 * Idempotent: a second call finds nothing waiting and no live hold.
+	 *
+	 * @param closedAt when the account closed, kept beside when this service heard
+	 */
 	@Transactional
-	public void forget(String customerId) {
+	public void forget(String customerId, Instant closedAt) {
+		// Recorded first and under the lock a join takes, so no join can slip a place in after the
+		// cancelling below has looked (ADR 0054).
+		closedAccounts.lock(customerId);
+		closedAccounts.record(customerId, closedAt);
 		int cancelled = 0;
 		int released = 0;
 		// Waiting places first, so a unit released below cannot be offered straight back to another of this
