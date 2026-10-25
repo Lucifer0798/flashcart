@@ -126,4 +126,25 @@ class OperatorAccessLogIT extends AbstractShippingIT {
 		// Conflating the two would make it useless for both questions.
 		assertThat(auditRows("audit-owner-g")).isZero();
 	}
+
+	@Test
+	@DisplayName("a customer can see when staff looked at their parcels, and at what -- not who")
+	void aCustomerReadsTheirOwn() {
+		jdbc.update("""
+				insert into operator_access_log (operator_id, action, resource_id, customer_id) values
+				  ('support-1', 'READ_SHIPMENT', 'TRK-MINE-1', 'mine-s'),
+				  ('support-1', 'READ_SHIPMENT_LIST', null, 'mine-s'),
+				  ('support-1', 'READ_SHIPMENT', 'TRK-MINE-2', 'somebody-else')""");
+
+		ResponseEntity<List> mine = rest.exchange("/api/v1/shipping/_access-log/mine", HttpMethod.GET,
+				new HttpEntity<>(bearer("mine-s")), List.class);
+
+		assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
+		List<Map<String, Object>> entries = mine.getBody();
+		assertThat(entries).extracting(e -> e.get("description")).containsExactlyInAnyOrder(
+				"A member of staff viewed one of your parcels", "A member of staff viewed your parcels");
+		assertThat(entries).allSatisfy(e -> assertThat(e).containsOnlyKeys("action", "description", "resourceId", "readAt"));
+		assertThat(jdbc.queryForObject("select count(*) from operator_access_log where customer_id = 'mine-s'",
+				Integer.class)).isEqualTo(2);
+	}
 }

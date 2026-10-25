@@ -1015,6 +1015,26 @@ class OrderIT {
 	}
 
 	@Test
+	@DisplayName("a customer can see when staff looked at their orders, and at what -- not who")
+	void aCustomerReadsTheirOwnAccessLog() {
+		jdbc.update("""
+				insert into operator_access_log (operator_id, action, resource_id, customer_id) values
+				  ('support-1', 'READ_ORDER_HISTORY', 'FC-MINE0003', 'mine-o'),
+				  ('support-1', 'READ_ORDER', 'FC-MINE0004', 'somebody-else')""");
+		signedInAs("mine-o");
+
+		ResponseEntity<List> mine = rest.getForEntity("/api/v1/order/_access-log/mine", List.class);
+
+		assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
+		List<Map<String, Object>> entries = mine.getBody();
+		assertThat(entries).hasSize(1);
+		assertThat(entries.get(0)).containsEntry("description", "A member of staff viewed the history of one of your orders")
+				.containsEntry("resourceId", "FC-MINE0003")
+				.containsOnlyKeys("action", "description", "resourceId", "readAt");
+		assertThat(auditRows("mine-o")).isEqualTo(1);
+	}
+
+	@Test
 	@DisplayName("a signed-in customer cannot read the access log, and nothing but this holds that")
 	void customerCannotReadTheAccessLog() {
 		signedInAs("audit-reader-b");

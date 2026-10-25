@@ -106,7 +106,10 @@ public class PaymentSecurityConfig {
 						List.of(
 								"GET /api/v1/payments",
 								"GET /api/v1/payments/*",
-								"GET /api/v1/payments/order/*"),
+								"GET /api/v1/payments/order/*",
+								// Your own entries in this service's access log (ADR 0056). The reader takes
+								// whose they are from the token; the request names nobody.
+								"GET /api/v1/payment/_access-log/mine"),
 						// The audit reader is support's work, not the warehouse's. Reading another customer's
 						// charges goes through CustomerDataAccess, which checks the same capability in code.
 						Map.of(AccessTokens.SUPPORT, List.of("GET /api/v1/payment/_access-log"))));

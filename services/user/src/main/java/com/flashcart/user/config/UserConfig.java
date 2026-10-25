@@ -114,7 +114,9 @@ public class UserConfig {
 								"GET /api/v1/users/me",
 								"PATCH /api/v1/users/me",
 								"POST /api/v1/users/me/addresses",
-								"POST /api/v1/users/me/close"),
+								"POST /api/v1/users/me/close",
+								// Your own entries in this service's access log (ADR 0056).
+								"GET /api/v1/user/_access-log/mine"),
 						// Support's reads (ADR 0051). The handler checks the role again and records the read;
 						// this only keeps everyone else from reaching it.
 						Map.of(AccessTokens.SUPPORT, List.of(

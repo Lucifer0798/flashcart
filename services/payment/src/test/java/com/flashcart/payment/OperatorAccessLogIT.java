@@ -88,6 +88,41 @@ class OperatorAccessLogIT extends AbstractPaymentIT {
 	}
 
 	@Test
+	@DisplayName("a customer can see when staff looked at their payments, and at what -- not who")
+	void aCustomerReadsTheirOwn() {
+		UUID orderId = UUID.randomUUID();
+		payments.charge(orderId, "FC-MINE0001", "mine-a", new BigDecimal("15.00"), "USD", orderId.toString());
+		UUID otherId = UUID.randomUUID();
+		payments.charge(otherId, "FC-MINE0002", "mine-b", new BigDecimal("15.00"), "USD", otherId.toString());
+		// Support looks at both customers' payments.
+		rest.getForEntity("/api/v1/payments/order/FC-MINE0001", Map.class);
+		rest.getForEntity("/api/v1/payments/order/FC-MINE0002", Map.class);
+
+		ResponseEntity<List> mine = rest.exchange("/api/v1/payment/_access-log/mine", HttpMethod.GET,
+				new HttpEntity<>(bearer("mine-a")), List.class);
+
+		assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
+		List<Map<String, Object>> entries = mine.getBody();
+		// Their own, and only their own.
+		assertThat(entries).hasSize(1);
+		assertThat(entries.get(0)).containsEntry("action", "READ_PAYMENT")
+				.containsEntry("description", "A member of staff viewed one of your payments")
+				.containsEntry("resourceId", "FC-MINE0001");
+		// That staff looked, not who: no operator id, and no correlation id to trace one through.
+		assertThat(entries.get(0)).containsOnlyKeys("action", "description", "resourceId", "readAt");
+		// A customer reading their own is not itself a staff read, so it leaves nothing.
+		assertThat(auditRows("mine-a")).isEqualTo(1);
+		// The token decides whose: there is no way to ask for anyone else's.
+		assertThat(rest.exchange("/api/v1/payment/_access-log/mine?customerId=mine-b", HttpMethod.GET,
+				new HttpEntity<>(bearer("mine-a")), List.class).getBody()).hasSize(1);
+		// A token that does not verify, since this suite's template adds the operator's to a request with none.
+		HttpHeaders forged = new HttpHeaders();
+		forged.set(HttpHeaders.AUTHORIZATION, "Bearer not-a-real-token");
+		assertThat(rest.exchange("/api/v1/payment/_access-log/mine", HttpMethod.GET,
+				new HttpEntity<>(forged), Map.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+	}
+
+	@Test
 	@DisplayName("a customer nobody has looked at has an empty log, not an error")
 	void untouchedCustomerHasAnEmptyLog() {
 		ResponseEntity<List> log = rest.getForEntity(

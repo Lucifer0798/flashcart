@@ -514,6 +514,26 @@ class NoticeIT {
 	}
 
 	@Test
+	@DisplayName("a customer can see when support read their emails -- not who, and only their own")
+	void aCustomerReadsTheirOwnAccessLog() {
+		Shopper shopper = register();
+		Shopper stranger = register();
+		notices("customerId=" + shopper.id(), support());
+		notices("customerId=" + stranger.id(), support());
+
+		ResponseEntity<List> mine = rest.exchange("/api/v1/user/_access-log/mine", HttpMethod.GET,
+				new HttpEntity<>(bearer(shopper.id())), List.class);
+
+		assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(mine.getBody()).hasSize(1);
+		assertThat((Map<String, Object>) mine.getBody().get(0))
+				.containsEntry("description", "A member of staff viewed the emails we sent you")
+				.containsOnlyKeys("action", "description", "resourceId", "readAt");
+		assertThat(jdbc.queryForObject("select count(*) from operator_access_log where customer_id = ?", Integer.class,
+				shopper.id())).isEqualTo(1);
+	}
+
+	@Test
 	@DisplayName("only support reads a customer's emails: not the warehouse, not the customer, not anonymously")
 	void onlySupport() {
 		Shopper shopper = register();

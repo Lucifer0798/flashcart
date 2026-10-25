@@ -2,6 +2,7 @@ package com.flashcart.common.security;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import com.flashcart.common.error.OperatorRequiredException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -68,8 +69,8 @@ public class OperatorAccessLogReader {
 	 *
 	 * <p>Operator-only, and deliberately <strong>not</strong> routed through
 	 * {@link CustomerDataAccess#mayRead}, which would also grant the customer named in the query.
-	 * Whether a shopper should see which staff opened their order is a genuine question and not one to
-	 * answer as a side effect of building the reader; ADR 0034 records it as open.
+	 * Whether a shopper should see which staff opened their order was a genuine question and not one to
+	 * answer as a side effect of building the reader. ADR 0056 answered it, separately: see {@link #mine}.
 	 *
 	 * @throws OperatorRequiredException when the caller is signed in but is not an operator
 	 */
@@ -96,5 +97,50 @@ public class OperatorAccessLogReader {
 				rs.getString("correlation_id"),
 				rs.getTimestamp("read_at").toInstant()),
 				customerId, limit);
+	}
+
+	/**
+	 * One staff access to the caller's own data, as the customer sees it.
+	 *
+	 * <p>Says that staff looked, what at and when, and not who: no operator id, and no correlation id that
+	 * could be traced to one. Support can still name the person from {@link #forCustomer}. See ADR 0056.
+	 *
+	 * @param description the action in words, for a person rather than a program
+	 * @param resourceId  which of theirs, when it was one thing; null for a listing
+	 */
+	public record CustomerEntry(String action, String description, String resourceId, Instant readAt) {
+	}
+
+	private static final Map<String, String> SAID_AS = Map.of(
+			"READ_ORDER", "A member of staff viewed one of your orders",
+			"READ_ORDER_HISTORY", "A member of staff viewed the history of one of your orders",
+			"READ_ORDER_LIST", "A member of staff viewed your orders",
+			"READ_PAYMENT", "A member of staff viewed one of your payments",
+			"READ_PAYMENT_LIST", "A member of staff viewed your payments",
+			"READ_SHIPMENT", "A member of staff viewed one of your parcels",
+			"READ_SHIPMENT_LIST", "A member of staff viewed your parcels",
+			"READ_NOTICES", "A member of staff viewed the emails we sent you",
+			ACTION, "A member of staff viewed this record of who has looked at your data");
+
+	private static final String MINE = """
+			select action, resource_id, read_at
+			  from operator_access_log
+			 where customer_id = ?
+			 order by read_at desc, id desc
+			 limit ?""";
+
+	/**
+	 * Every recorded staff access to the caller's own data in this service, newest first. See ADR 0056.
+	 *
+	 * <p>Whose log is read comes from the token, never from the request, so a customer cannot name anyone
+	 * else (ADR 0023). Not itself recorded: it is a customer reading their own.
+	 */
+	public List<CustomerEntry> mine(String authorization, int limit) {
+		String customerId = caller.require(authorization);
+		return jdbc.query(MINE, (rs, row) -> {
+			String action = rs.getString("action");
+			return new CustomerEntry(action, SAID_AS.getOrDefault(action, "A member of staff looked at your data"),
+					rs.getString("resource_id"), rs.getTimestamp("read_at").toInstant());
+		}, customerId, limit);
 	}
 }
