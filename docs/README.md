@@ -58,6 +58,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0018 — Instrument the silences, not the traffic](adr/0018-metrics-answer-questions-the-logs-cannot.md)
 - [0020 — A trace has to survive the outbox](adr/0020-a-trace-must-survive-the-outbox.md)
 - [0027 — The outbox hop is a span](adr/0027-the-outbox-hop-is-a-span.md)
+- [0055 — The sampling rate reaches the stack](adr/0055-the-sampling-rate-reaches-the-stack.md)
 - [0019 — Report what the measurement supports, and no more](adr/0019-measure-or-say-you-cannot.md)
 - [0041 — The alert that forgot](adr/0041-the-alert-that-forgot.md)
 - [0042 — Every alert went quiet together](adr/0042-every-alert-went-quiet-together.md)

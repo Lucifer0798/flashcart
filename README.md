@@ -827,6 +827,11 @@ publish from publishing, so the send happens later, on another thread, possibly 
 which is exactly what cuts a trace in half. The `traceparent` is therefore captured into the outbox
 row at queue time and replayed onto the record when the relay finally sends.
 
+**Every trace is kept by default.** `TRACE_SAMPLING=0.1 docker compose up -d` keeps one in ten, set
+for all seven services at once, so a trace kept at the gateway is kept everywhere it goes. A dropped
+trace stays dropped across the outbox hop as well
+([ADR 0049](docs/adr/0049-loose-ends.md), [ADR 0055](docs/adr/0055-the-sampling-rate-reaches-the-stack.md)).
+
 The relay's Kafka template is deliberately **not** observation-enabled. Producer instrumentation
 injects whatever context the relay thread is in — its own scheduled tick — and would overwrite the
 buyer's trace with the sweeper's. See [ADR 0020](docs/adr/0020-a-trace-must-survive-the-outbox.md).

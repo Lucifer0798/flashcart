@@ -60,3 +60,4 @@ when someone revisits it in six months.
 | [0052](0052-forgetting-an-email-safely.md) | Forgetting an email, safely | Accepted |
 | [0053](0053-closing-an-account.md) | Closing an account | Accepted, amended by 0054 |
 | [0054](0054-a-closed-account-cannot-queue.md) | A closed account cannot queue | Accepted |
+| [0055](0055-the-sampling-rate-reaches-the-stack.md) | The sampling rate reaches the stack | Accepted |

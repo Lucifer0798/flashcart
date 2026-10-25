@@ -1,7 +1,8 @@
 # The whole platform on one machine.
 #
-# Host ports are all in the 15000-19000 range so this stack can run alongside anything else already
-# using 5432/6379/8080. Container-internal ports are the conventional ones.
+# Every host port is the conventional one with a 1 in front -- 15432, 16379, 18080, 13000 -- so this stack
+# can run alongside anything else already using 5432/6379/8080 (ADR 0049). Container-internal ports are
+# the conventional ones.
 #
 #   docker compose up --build          bring everything up
 #   docker compose up -d postgres redis kafka   infrastructure only, services from your IDE
@@ -27,6 +28,11 @@ x-service-base: &service-base
   mem_limit: 384m
   environment: &service-env
     FLASHCART_VERSION: 0.1.0-SNAPSHOT
+    # The share of traces kept, 0.0 to 1.0. Every service reads it, and until ADR 0055 compose passed it
+    # to none of them, so `TRACE_SAMPLING=0.1 docker compose up` changed nothing and said nothing. Set
+    # for all seven at once: a trace sampled at the gateway and dropped by the order service is the
+    # half-trace ADR 0020 exists to prevent. Every trace by default, which is what a local stack wants.
+    TRACE_SAMPLING: ${TRACE_SAMPLING:-1.0}
   healthcheck:
     test: ["CMD-SHELL", "wget -q -O - http://localhost:$${SERVER_PORT}/actuator/health | grep -q UP"]
     interval: 10s
