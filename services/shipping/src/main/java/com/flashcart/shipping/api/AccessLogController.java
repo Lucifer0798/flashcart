@@ -59,4 +59,18 @@ public class AccessLogController {
 			@RequestParam(defaultValue = "100") @Min(1) @Max(500) int limit) {
 		return accessLog.forCustomer(authorization, customerId, limit);
 	}
+
+	@GetMapping("/_access-log/mine")
+	@Operation(summary = "When staff looked at your parcels",
+			description = "Signed in. Your own entries only, newest first: when a member of staff looked "
+					+ "at your parcels, and at what -- not who. Covers this service only. See ADR 0056.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "200", description = "Staff accesses to your data, newest first"),
+			@ApiResponse(responseCode = "401", description = "No token, or one that does not verify")
+	})
+	public List<OperatorAccessLogReader.CustomerEntry> mine(
+			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+			@RequestParam(defaultValue = "100") @Min(1) @Max(500) int limit) {
+		return accessLog.mine(authorization, limit);
+	}
 }

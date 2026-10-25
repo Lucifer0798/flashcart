@@ -90,6 +90,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0028](adr/0028-looking-is-not-acting.md) — Looking is not acting
 - [0029](adr/0029-an-operator-read-was-a-silence.md) — An operator read was a silence
 - [0034](adr/0034-who-read-my-data.md) — Who read my data
+- [0056](adr/0056-a-customer-sees-that-staff-looked.md) — A customer sees that staff looked
 - [0035](adr/0035-nothing-behind-the-check.md) — Nothing behind the check
 - [0036](adr/0036-anyone-could-set-the-price.md) — Anyone could set the price
 - [0037](adr/0037-the-last-one-unargued.md) — The last one unargued

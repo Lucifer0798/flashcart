@@ -110,4 +110,19 @@ public class SupportController {
 			@RequestParam(defaultValue = "100") @Min(1) @Max(500) int limit) {
 		return accessLogReader.forCustomer(authorization, customerId, limit);
 	}
+
+	@GetMapping("/_access-log/mine")
+	@Operation(summary = "When staff looked at your account's data",
+			description = "Signed in. Your own entries only, newest first: when a member of staff looked "
+					+ "at what this service keeps about you, such as the emails sent to you -- not who. "
+					+ "Covers this service only. See ADR 0056.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "200", description = "Staff accesses to your data, newest first"),
+			@ApiResponse(responseCode = "401", description = "No token, or one that does not verify")
+	})
+	public List<OperatorAccessLogReader.CustomerEntry> myAccessLog(
+			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+			@RequestParam(defaultValue = "100") @Min(1) @Max(500) int limit) {
+		return accessLogReader.mine(authorization, limit);
+	}
 }

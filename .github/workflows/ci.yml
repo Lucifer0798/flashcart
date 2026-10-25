@@ -482,6 +482,11 @@ jobs:
           # A shopper may not, even for their own: retries and mail-server errors are for staff.
           CODE=$(curl -s -o /dev/null -w '%{http_code}' "$G/api/v1/user/_notices?email=$ME" -H "Authorization: Bearer $TOKEN")
           test "$CODE" = "403" || { echo "a shopper read the notices endpoint ($CODE)"; exit 1; }
+          # But they can see that support looked, and when -- not who (ADR 0056).
+          SAW=$(curl -sf "$G/api/v1/user/_access-log/mine" -H "Authorization: Bearer $TOKEN" \
+            | python3 -c "import json,sys; e=json.load(sys.stdin); print(e[0]['action'], 'operatorId' in e[0])")
+          echo "the shopper sees: $SAW"
+          test "$SAW" = "READ_NOTICES False"
 
       - name: A sold-out SKU's queue hears when stock comes back, and gets the unit
         run: |

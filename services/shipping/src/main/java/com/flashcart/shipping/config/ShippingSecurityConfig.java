@@ -106,7 +106,10 @@ public class ShippingSecurityConfig {
 						List.of(
 								"GET /api/v1/shipments",
 								"GET /api/v1/shipments/*",
-								"GET /api/v1/shipments/order/*"),
+								"GET /api/v1/shipments/order/*",
+								// Your own entries in this service's access log (ADR 0056). The reader takes
+								// whose they are from the token; the request names nobody.
+								"GET /api/v1/shipping/_access-log/mine"),
 						Map.of(
 								// Moving a parcel is warehouse work.
 								AccessTokens.WAREHOUSE, List.of(

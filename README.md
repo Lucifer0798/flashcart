@@ -755,6 +755,17 @@ select operator_id, action, resource_id, read_at
 from operator_access_log where customer_id = ? order by read_at desc;
 ```
 
+**The customer can see it too: that staff looked, and when, but not who.** Each service answers for its
+own log at `GET /api/v1/{order,payment,shipping,user}/_access-log/mine`, with any signed-in token. The
+token decides whose entries come back, and the request names nobody. Each entry says what was looked at,
+in words ("A member of staff viewed one of your payments"), and when. It leaves out the staff member's
+id and the correlation id. Support can still see who, from their own reader. See
+[ADR 0056](docs/adr/0056-a-customer-sees-that-staff-looked.md).
+
+```bash
+curl localhost:18080/api/v1/payment/_access-log/mine -H "Authorization: Bearer $TOKEN"
+```
+
 **And it is visible, not just recorded.** `flashcart_operator_reads_total{action}` puts operator
 access on the dashboard beside the outbox and the gate — because a row in a table nobody queries is
 not visibility, and ADR 0018's whole idea is that these metrics are a list of the platform's
@@ -795,7 +806,7 @@ recorded. See [ADR 0028](docs/adr/0028-looking-is-not-acting.md).
 
 **What is still open, said plainly.** Per-service ports are still published, so each service checks
 for itself rather than trusting the gateway. And "who read my data" is one `GET .../_access-log` per
-service, four of them now, because each keeps its own log.
+service, four of them now, for support and for the customer alike, because each service keeps its own log.
 
 ## Breaking it on purpose
 
