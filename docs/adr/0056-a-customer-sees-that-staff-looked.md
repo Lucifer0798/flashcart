@@ -61,6 +61,10 @@ which ADR 0025 does not audit.
   is not recorded. In user, the entry comes from a real support read of the customer's emails.
 - Mutations, all 7 caught: every customer's entries returned; the customer's own read recorded; the
   descriptions not given; and, one per service, the route not opened in the filter.
+- Live, on the compose stack: support read one shopper's order, payment, parcel and emails. The
+  shopper's `/mine` on each of the four services showed exactly that one read: "viewed one of your
+  orders / payments / parcels", each with the order number, and "viewed the emails we sent you". Each
+  entry had the four fields and nothing else. The shopper still got 403 from the support reader.
 - CI: in the outside-refund step, after support reads the shopper's emails, the shopper's own read shows
   `READ_NOTICES` and no `operatorId`.
 
