@@ -11,6 +11,7 @@ import java.util.UUID;
 import com.flashcart.common.error.BadRequestException;
 import com.flashcart.common.error.ConflictException;
 import com.flashcart.common.error.ResourceNotFoundException;
+import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.event.EventMetadata;
 import com.flashcart.common.event.EventPublisher;
 import com.flashcart.common.event.Topics;
@@ -85,6 +86,7 @@ public class WaitlistService {
 	private final EventPublisher events;
 	private final Clock clock;
 	private final Duration holdTtl;
+	private final ClosedAccounts closedAccounts;
 	private final TransactionTemplate fresh;
 	private final Counter notified;
 
@@ -96,7 +98,8 @@ public class WaitlistService {
 	public WaitlistService(WaitlistRepository waitlist, StockItemRepository stockItems,
 			ReservationRepository reservations, @Lazy MovementRecorder movements, EventPublisher events,
 			Clock clock, @Value("${flashcart.inventory.waitlist.hold-ttl:PT10M}") Duration holdTtl,
-			PlatformTransactionManager transactionManager, MeterRegistry meters) {
+			PlatformTransactionManager transactionManager, MeterRegistry meters, ClosedAccounts closedAccounts) {
+		this.closedAccounts = closedAccounts;
 		this.waitlist = waitlist;
 		this.stockItems = stockItems;
 		this.reservations = reservations;
@@ -128,8 +131,13 @@ public class WaitlistService {
 	 * @throws ConflictException         {@code IN_STOCK} when there are units to buy right now. Joining
 	 *                                   would put the shopper behind a notice that already happened, so
 	 *                                   they would wait for the next one instead of buying this one
+	 * @throws UnauthenticatedException  for an account its holder has closed, whose token is still valid
+	 *                                   until it expires (ADR 0054)
 	 */
 	public Place join(String customerId, String sku) {
+		if (closedAccounts.isClosed(customerId)) {
+			throw closed();
+		}
 		String normalized = normalise(sku);
 		StockItem item = stockItems.findBySku(normalized)
 				.orElseThrow(() -> ResourceNotFoundException.of("Stock for SKU", normalized));
@@ -146,8 +154,16 @@ public class WaitlistService {
 		}
 
 		try {
-			WaitlistEntry entry = fresh.execute(status -> waitlist.saveAndFlush(
-					new WaitlistEntry(UUID.randomUUID(), normalized, customerId, clock.instant())));
+			WaitlistEntry entry = fresh.execute(status -> {
+				// Checked again under the customer's lock, which the closure also takes: the check above
+				// cannot see a closure still in flight, and a place inserted after it had cancelled this
+				// customer's places would never be cleaned up.
+				closedAccounts.lock(customerId);
+				if (closedAccounts.isClosed(customerId)) {
+					throw closed();
+				}
+				return waitlist.saveAndFlush(new WaitlistEntry(UUID.randomUUID(), normalized, customerId, clock.instant()));
+			});
 			return new Place(entry, waitlist.countAhead(normalized, entry.getCreatedAt(), entry.getId()), true);
 		}
 		catch (DataIntegrityViolationException ex) {
@@ -156,6 +172,10 @@ public class WaitlistService {
 					WaitlistStatus.WAITING).orElseThrow(() -> ex);
 			return new Place(winner, waitlist.countAhead(normalized, winner.getCreatedAt(), winner.getId()), false);
 		}
+	}
+
+	private static UnauthenticatedException closed() {
+		return new UnauthenticatedException("This account has been closed");
 	}
 
 	/** Every queue this shopper has joined, newest first, with a position for the ones still waiting. */

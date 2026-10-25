@@ -58,4 +58,5 @@ when someone revisits it in six months.
 | [0050](0050-the-emails-that-were-not-sent.md) | The emails that were not sent | Accepted |
 | [0051](0051-support-can-see-what-we-told-them.md) | Support can see what we told them | Accepted |
 | [0052](0052-forgetting-an-email-safely.md) | Forgetting an email, safely | Accepted |
-| [0053](0053-closing-an-account.md) | Closing an account | Accepted |
+| [0053](0053-closing-an-account.md) | Closing an account | Accepted, amended by 0054 |
+| [0054](0054-a-closed-account-cannot-queue.md) | A closed account cannot queue | Accepted |

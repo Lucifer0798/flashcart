@@ -1,5 +1,6 @@
 package com.flashcart.inventory;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -21,6 +22,7 @@ import com.flashcart.inventory.api.dto.ReservationResponse;
 import com.flashcart.inventory.api.dto.StockResponse;
 import com.flashcart.inventory.domain.ReservationStatus;
 import com.flashcart.inventory.messaging.AccountClosedListener;
+import com.flashcart.inventory.service.AccountClosure;
 import com.flashcart.inventory.service.ReservationExpiryService;
 import com.flashcart.inventory.service.ReservationService;
 import org.junit.jupiter.api.DisplayName;
@@ -60,6 +62,9 @@ class WaitlistIT extends AbstractInventoryIT {
 
 	@Autowired
 	private AccountClosedListener accountClosed;
+
+	@Autowired
+	private AccountClosure accountClosure;
 
 	// --- joining --------------------------------------------------------------------------------
 
@@ -360,6 +365,62 @@ class WaitlistIT extends AbstractInventoryIT {
 		// And when the first SKU comes back, nobody is told about it for an account that is gone.
 		receive(waiting, 1);
 		assertThat(noticesFor(waiting)).isEmpty();
+	}
+
+	@Test
+	@DisplayName("a closed account's leftover token cannot queue again")
+	void aClosedAccountCannotRejoin() {
+		String sku = soldOut();
+		accountClosed.onAccountClosed(new AccountClosed(EventMetadata.of(AccountClosed.TYPE, "gone"), "gone"));
+
+		ResponseEntity<Map> refused = join("gone", sku);
+
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(refused.getBody()).containsEntry("code", "UNAUTHENTICATED");
+		assertThat(jdbc.queryForObject("select count(*) from waitlist_entries where customer_id = 'gone'", Integer.class))
+				.isZero();
+		// Everyone else queues as before.
+		assertThat(join("still-here", sku).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+	}
+
+	@Test
+	@DisplayName("a join racing the closure waits for it and is refused, rather than leaving a place nobody cancels")
+	void aJoinRacingTheClosureIsRefused() throws Exception {
+		String sku = soldOut();
+		String customer = "racing-" + UUID.randomUUID();
+		CountDownLatch closing = new CountDownLatch(1);
+		CountDownLatch commit = new CountDownLatch(1);
+		ExecutorService pool = Executors.newFixedThreadPool(2);
+		try {
+			// The closure, held open after it has cancelled this customer's places and before it commits.
+			Future<?> closure = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+				accountClosure.forget(customer, Instant.now());
+				closing.countDown();
+				try {
+					commit.await(10, TimeUnit.SECONDS);
+				}
+				catch (InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			}));
+			assertThat(closing.await(10, TimeUnit.SECONDS)).isTrue();
+
+			Future<ResponseEntity<Map>> joining = pool.submit(() -> join(customer, sku));
+			// It cannot finish while the closure holds the customer's lock. Without the lock it would insert a
+			// place now, which the closure has already looked past.
+			Thread.sleep(1_000);
+			assertThat(joining.isDone()).isFalse();
+
+			commit.countDown();
+			closure.get(10, TimeUnit.SECONDS);
+			assertThat(joining.get(10, TimeUnit.SECONDS).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+		finally {
+			commit.countDown();
+			pool.shutdownNow();
+		}
+		assertThat(jdbc.queryForObject("select count(*) from waitlist_entries where customer_id = ? and status = 'WAITING'",
+				Integer.class, customer)).isZero();
 	}
 
 	// --- the held unit (ADR 0045) -------------------------------------------------------------------

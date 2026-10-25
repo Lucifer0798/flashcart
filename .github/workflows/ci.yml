@@ -600,6 +600,10 @@ jobs:
           done
           echo "waitlist place: $PLACE"
           test "$PLACE" = "CANCELLED" || { docker compose logs --tail=60 inventory user; exit 1; }
+          # And it cannot queue again with the same token (ADR 0054).
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/inventory/waitlist -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $LEAVER" -d "{\"sku\":\"$SKU\"}")
+          test "$CODE" = "401" || { echo "a closed account joined a waitlist ($CODE)"; exit 1; }
 
           # Order heard: the token, still valid, cannot buy.
           for i in $(seq 1 30); do
