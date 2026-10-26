@@ -113,6 +113,12 @@ public class User {
 		touch();
 	}
 
+	/** A new password, already encoded. Only through a verified reset (ADR 0057). */
+	public void changePassword(String passwordHash) {
+		this.passwordHash = passwordHash;
+		touch();
+	}
+
 	public void rename(String displayName) {
 		this.displayName = displayName.trim();
 		touch();

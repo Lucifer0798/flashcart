@@ -2,6 +2,7 @@ package com.flashcart.user.api;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.common.error.UnauthenticatedException;
@@ -9,6 +10,8 @@ import com.flashcart.common.security.AccessTokens;
 import com.flashcart.user.api.dto.UserDtos.AddressRequest;
 import com.flashcart.user.api.dto.UserDtos.AddressResponse;
 import com.flashcart.user.api.dto.UserDtos.CloseRequest;
+import com.flashcart.user.api.dto.UserDtos.PasswordResetConfirmation;
+import com.flashcart.user.api.dto.UserDtos.PasswordResetRequest;
 import com.flashcart.user.api.dto.UserDtos.RegisterRequest;
 import com.flashcart.user.api.dto.UserDtos.RenameRequest;
 import com.flashcart.user.api.dto.UserDtos.SignInRequest;
@@ -16,6 +19,7 @@ import com.flashcart.user.api.dto.UserDtos.TokenResponse;
 import com.flashcart.user.api.dto.UserDtos.UserResponse;
 import com.flashcart.user.domain.Address;
 import com.flashcart.user.domain.User;
+import com.flashcart.user.service.PasswordResets;
 import com.flashcart.user.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -44,12 +48,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
 
 	private final UserService users;
+	private final PasswordResets resets;
 	private final AccessTokens tokens;
 	private final Duration ttl;
 
-	public UserController(UserService users, AccessTokens tokens,
+	public UserController(UserService users, PasswordResets resets, AccessTokens tokens,
 			@Value("${flashcart.security.jwt.ttl:PT12H}") Duration ttl) {
 		this.users = users;
+		this.resets = resets;
 		this.tokens = tokens;
 		this.ttl = ttl;
 	}
@@ -77,6 +83,36 @@ public class UserController {
 	public TokenResponse signIn(@Valid @RequestBody SignInRequest request) {
 		String token = users.signIn(request.email(), request.password());
 		return new TokenResponse(token, "Bearer", ttl.toSeconds());
+	}
+
+	@PostMapping("/password-reset")
+	@Operation(summary = "Ask for a password reset email",
+			description = "Always 202, and the same body, whether or not the address has an account: telling "
+					+ "them apart would let anyone ask whether somebody shops here. An active account is sent "
+					+ "a link that works once, within 30 minutes. Asking again within a minute sends nothing "
+					+ "more. See ADR 0057.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "202", description = "If the address has an account, an email is on its way")
+	})
+	public ResponseEntity<Map<String, String>> requestReset(@Valid @RequestBody PasswordResetRequest request) {
+		resets.request(request.email());
+		return ResponseEntity.accepted().body(Map.of("message",
+				"If that address has an account, we have emailed it a link to reset the password."));
+	}
+
+	@PostMapping("/password-reset/confirm")
+	@Operation(summary = "Set a new password with the token from a reset email",
+			description = "The token works once and expires 30 minutes after the request. Using it cancels the "
+					+ "account's other outstanding reset links. Tokens already issued for signing in are not "
+					+ "revoked, and stay valid until they expire. See ADR 0057.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "204", description = "Password changed"),
+			@ApiResponse(responseCode = "400", description = "RESET_TOKEN_INVALID -- unknown, expired or already "
+					+ "used, deliberately not told apart; or the new password is too short")
+	})
+	public ResponseEntity<Void> confirmReset(@Valid @RequestBody PasswordResetConfirmation request) {
+		resets.confirm(request.token(), request.newPassword());
+		return ResponseEntity.noContent().build();
 	}
 
 	@GetMapping("/me")

@@ -654,6 +654,22 @@ $ curl -X POST localhost:18082/api/v1/orders -H 'X-Customer-Id: someone-else' ..
 401
 ```
 
+### Forgetting a password
+
+```bash
+curl -X POST localhost:18080/api/v1/users/password-reset -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.test"}'
+# the email arrives in Mailpit, http://localhost:18025, with a link carrying a token
+curl -X POST localhost:18080/api/v1/users/password-reset/confirm -H 'Content-Type: application/json' \
+  -d '{"token":"<from the email>","newPassword":"a-sufficiently-long-password"}'
+```
+
+**Asking says nothing about whether the address has an account**: always 202, and the same body. The
+link works once, for thirty minutes. The token is never stored: the email queue holds only the reset's
+id, the token is minted as the email is sent, and only its hash is kept. Neither a database reader nor
+support's view of a customer's emails ever holds a working link. Tokens already issued for signing in
+are not revoked by a reset. See [ADR 0057](docs/adr/0057-a-forgotten-password-is-not-a-lost-account.md).
+
 ### Closing an account
 
 ```bash

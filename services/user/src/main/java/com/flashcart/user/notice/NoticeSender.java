@@ -3,10 +3,13 @@ package com.flashcart.user.notice;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.flashcart.user.service.PasswordResets;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -78,12 +81,14 @@ public class NoticeSender {
 	private final TransactionTemplate transactions;
 	private final String from;
 	private final int batchSize;
+	private final PasswordResets resets;
 	private final AtomicLong oldestPending = new AtomicLong();
 
 	public NoticeSender(JdbcTemplate jdbc, Notices notices, JavaMailSender mail, ObjectMapper json,
 			PlatformTransactionManager transactionManager, MeterRegistry meters,
 			@Value("${flashcart.notices.from:FlashCart <no-reply@flashcart.local>}") String from,
-			@Value("${flashcart.notices.batch-size:50}") int batchSize) {
+			@Value("${flashcart.notices.batch-size:50}") int batchSize, PasswordResets resets) {
+		this.resets = resets;
 		this.jdbc = jdbc;
 		this.notices = notices;
 		this.mail = mail;
@@ -164,6 +169,17 @@ public class NoticeSender {
 		}
 
 		Map<String, Object> payload = json.readValue((String) row.get("payload"), new TypeReference<>() { });
+		if (kind == NoticeKind.PASSWORD_RESET) {
+			// Minted now, in this transaction, and kept only as a hash: the queue never holds a working
+			// link. A reset used or expired since it was asked for is not sent. ADR 0057.
+			Optional<String> link = resets.mint((String) payload.get("resetId"));
+			if (link.isEmpty()) {
+				skip(key, kind, "STALE");
+				return Outcome.HANDLED;
+			}
+			payload = new HashMap<>(payload);
+			payload.put("link", link.get());
+		}
 		NoticeKind.Email email = kind.render(recipient.name(), (String) row.get("order_number"), payload, sendBefore);
 		try {
 			mail.send(message(recipient.email(), email));
