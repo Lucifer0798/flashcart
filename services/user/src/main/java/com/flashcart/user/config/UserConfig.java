@@ -88,10 +88,10 @@ public class UserConfig {
 	 * remembered — which is exactly how the order service (ADR 0035) and catalog (ADR 0036) came to be
 	 * exposed. Neither of those was a decision either.
 	 *
-	 * <p><strong>The two public POSTs are the reason this service is different.</strong> Register and
-	 * sign in are unauthenticated by necessity, not by oversight, and they are the only writes in the
-	 * platform that must stay that way. They are listed by exact path and method, so a future
-	 * {@code POST /api/v1/users/anything} is not covered by them.
+	 * <p><strong>The public POSTs are the reason this service is different.</strong> Register, sign in
+	 * and the two halves of a password reset (ADR 0057) are unauthenticated by necessity, not by
+	 * oversight, and they are the only writes in the platform that must stay that way. They are listed by
+	 * exact path and method, so a future {@code POST /api/v1/users/anything} is not covered by them.
 	 *
 	 * <p>The three {@code /me} paths are signed-in, which is the dangerous category: passing this
 	 * filter is not the whole check. Each resolves the caller from the token and touches only that
@@ -106,6 +106,9 @@ public class UserConfig {
 						// You cannot present a token to get your first one.
 						"POST /api/v1/users",
 						"POST /api/v1/users/sessions",
+						// Nor to recover access to an account you can no longer sign in to (ADR 0057).
+						"POST /api/v1/users/password-reset",
+						"POST /api/v1/users/password-reset/confirm",
 						"/api/v1/user/_info",
 						// Compose health-checks this, and a container that cannot answer restarts
 						// forever.

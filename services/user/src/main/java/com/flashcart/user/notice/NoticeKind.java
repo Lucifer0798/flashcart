@@ -86,6 +86,21 @@ public enum NoticeKind {
 		}
 	},
 
+	PASSWORD_RESET {
+		@Override
+		Email render(String name, String orderNumber, Map<String, Object> payload, Instant sendBefore) {
+			// The link exists only while the email is being sent: the sender mints it then and stores no
+			// more than its hash. Rendered from the queue for support, there is none to show. ADR 0057.
+			Object link = payload.get("link");
+			String how = link != null
+					? "To choose a new one, open this link within 30 minutes. It works once:\n\n" + link
+					: "A link to choose a new one was sent in this email. It is not kept anywhere.";
+			return new Email("Reset your FlashCart password",
+					("Someone asked to reset the password for this account. %s\n\nIf that wasn't you, ignore this "
+							+ "email: your password has not changed.").formatted(how), name);
+		}
+	},
+
 	REFUNDED {
 		@Override
 		Email render(String name, String orderNumber, Map<String, Object> payload, Instant sendBefore) {

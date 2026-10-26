@@ -70,6 +70,15 @@ public final class UserDtos {
 	public record RenameRequest(@NotBlank @Size(max = 120) String displayName) {
 	}
 
+	/** Asks for a reset email. The answer is the same whether or not the address has an account. */
+	public record PasswordResetRequest(@NotBlank @Email @Size(max = 320) String email) {
+	}
+
+	/** The token from the email, and the password to set. Length only, as at registration. */
+	public record PasswordResetConfirmation(@NotBlank @Size(max = 200) String token,
+			@NotBlank @Size(min = 12, max = 200) String newPassword) {
+	}
+
 	/** The current password, asked for again because closing cannot be undone. */
 	public record CloseRequest(@NotBlank String password) {
 	}

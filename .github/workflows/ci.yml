@@ -563,6 +563,42 @@ jobs:
           echo "waiting shopper's order $WORDER: $WSTATUS"
           case "$WSTATUS" in FULFILLING|SHIPPED) ;; *) docker compose logs --tail=80 inventory order; exit 1 ;; esac
 
+      - name: A forgotten password is reset through the real mail server, once
+        run: |
+          set -e
+          G=http://localhost:18080
+          # The token exists only in the email, so this is the one place the whole loop can be checked:
+          # request -> queue -> sender mints -> SMTP -> Mailpit -> confirm. See ADR 0057.
+          EMAIL="ci-forgot-$(date +%s)@example.test"; OLD="the-original-password"; NEW="a-brand-new-password"
+          curl -sf -o /dev/null -X POST $G/api/v1/users -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$OLD\",\"displayName\":\"CI Forgetful\"}"
+
+          KNOWN=$(curl -s -w ' %{http_code}' -X POST $G/api/v1/users/password-reset -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\"}")
+          UNKNOWN=$(curl -s -w ' %{http_code}' -X POST $G/api/v1/users/password-reset -H 'Content-Type: application/json' -d '{"email":"nobody-at-all@example.test"}')
+          echo "known: $KNOWN"
+          test "$KNOWN" = "$UNKNOWN" || { echo "the answer differs for an unknown address: $UNKNOWN"; exit 1; }
+
+          for i in $(seq 1 30); do
+            ID=$(curl -s "http://localhost:18025/api/v1/search?query=$(python3 -c "import urllib.parse; print(urllib.parse.quote('to:\"$EMAIL\" subject:\"Reset your FlashCart password\"'))")" \
+              | python3 -c "import json,sys; ms=json.load(sys.stdin)['messages']; print(ms[0]['ID'] if ms else '')")
+            if [ -n "$ID" ]; then break; fi
+            sleep 2
+          done
+          test -n "$ID" || { echo "no reset email"; docker compose logs --tail=60 user; exit 1; }
+          TOKEN_IN_MAIL=$(curl -s "http://localhost:18025/api/v1/message/$ID" \
+            | python3 -c "import json,re,sys; print(re.search(r'token=([A-Za-z0-9_-]+)', json.load(sys.stdin)['Text']).group(1))")
+
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/password-reset/confirm -H 'Content-Type: application/json' \
+            -d "{\"token\":\"$TOKEN_IN_MAIL\",\"newPassword\":\"$NEW\"}")
+          test "$CODE" = "204" || { echo "confirm: $CODE"; exit 1; }
+          signin() { curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$1\"}"; }
+          test "$(signin "$NEW")" = "200"
+          test "$(signin "$OLD")" = "401"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/password-reset/confirm -H 'Content-Type: application/json' \
+            -d "{\"token\":\"$TOKEN_IN_MAIL\",\"newPassword\":\"yet-another-password\"}")
+          test "$CODE" = "400" || { echo "a used link worked again ($CODE)"; exit 1; }
+          echo "reset by email, once"
+
       - name: A closed account is forgotten, and its leftover token cannot buy
         run: |
           set -e
