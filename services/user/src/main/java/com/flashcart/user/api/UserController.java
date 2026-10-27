@@ -24,6 +24,7 @@ import com.flashcart.user.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
@@ -78,10 +79,13 @@ public class UserController {
 					+ "INVALID_CREDENTIALS. Telling them apart would let anyone enumerate accounts.")
 	@ApiResponses({
 			@ApiResponse(responseCode = "200", description = "Signed in"),
-			@ApiResponse(responseCode = "401", description = "INVALID_CREDENTIALS")
+			@ApiResponse(responseCode = "401", description = "INVALID_CREDENTIALS"),
+			@ApiResponse(responseCode = "429", description = "TOO_MANY_ATTEMPTS -- too many recent failures, "
+					+ "for this account from here, from here at all, or for this account from anywhere. "
+					+ "Retry-After says when. Refused even with the right password. See ADR 0058.")
 	})
-	public TokenResponse signIn(@Valid @RequestBody SignInRequest request) {
-		String token = users.signIn(request.email(), request.password());
+	public TokenResponse signIn(@Valid @RequestBody SignInRequest request, HttpServletRequest http) {
+		String token = users.signIn(request.email(), request.password(), clientAddress(http));
 		return new TokenResponse(token, "Bearer", ttl.toSeconds());
 	}
 
@@ -158,6 +162,27 @@ public class UserController {
 			@Valid @RequestBody CloseRequest request) {
 		users.close(caller(authorization), request.password());
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * Where a sign-in came from, for the throttle (ADR 0058).
+	 *
+	 * <p>Through the gateway, the right-most {@code X-Forwarded-For} entry: the address the gateway itself
+	 * saw, appended after anything the client sent. Entries to its left are whatever the client chose to
+	 * write, and trusting them would let a guesser pick a fresh address for every attempt. Straight to this
+	 * service's published port there is no gateway, and that last entry is also the client's to write --
+	 * the same exposure every service's published port has, accepted in ADR 0049 for this stack.
+	 */
+	static String clientAddress(HttpServletRequest http) {
+		String forwarded = http.getHeader("X-Forwarded-For");
+		if (forwarded != null && !forwarded.isBlank()) {
+			String[] hops = forwarded.split(",");
+			String last = hops[hops.length - 1].trim();
+			if (!last.isEmpty()) {
+				return last;
+			}
+		}
+		return http.getRemoteAddr();
 	}
 
 	/**

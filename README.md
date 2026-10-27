@@ -654,6 +654,16 @@ $ curl -X POST localhost:18082/api/v1/orders -H 'X-Customer-Id: someone-else' ..
 401
 ```
 
+### Guessing a password
+
+Failed sign-ins are limited three ways: **5 per 15 minutes** for one account from one client, **30 per 15
+minutes** from one client across any accounts (credential stuffing), and **50 per hour** for one account
+from anywhere. Past a limit the answer is `429 TOO_MANY_ATTEMPTS` with `Retry-After`, even for the right
+password, and before BCrypt runs. A success clears that client's count for the account. An address with
+no account is throttled exactly like one with an account, and the table keeps only hashes. The client is
+the gateway's own `X-Forwarded-For` entry, the right-most one, so a guesser cannot pick a new address for
+each try. See [ADR 0058](docs/adr/0058-a-guess-costs-more-than-a-hash.md).
+
 ### Forgetting a password
 
 ```bash

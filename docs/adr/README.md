@@ -63,3 +63,4 @@ when someone revisits it in six months.
 | [0055](0055-the-sampling-rate-reaches-the-stack.md) | The sampling rate reaches the stack | Accepted |
 | [0056](0056-a-customer-sees-that-staff-looked.md) | A customer sees that staff looked | Accepted |
 | [0057](0057-a-forgotten-password-is-not-a-lost-account.md) | A forgotten password is not a lost account | Accepted |
+| [0058](0058-a-guess-costs-more-than-a-hash.md) | A guess costs more than a hash | Accepted |

@@ -563,6 +563,29 @@ jobs:
           echo "waiting shopper's order $WORDER: $WSTATUS"
           case "$WSTATUS" in FULFILLING|SHIPPED) ;; *) docker compose logs --tail=80 inventory order; exit 1 ;; esac
 
+      - name: Guessing a password is throttled at the edge, per client, as the gateway sees it
+        run: |
+          set -e
+          G=http://localhost:18080
+          # Through the gateway, so the client the service counts is the one the gateway appends to
+          # X-Forwarded-For. The forged entry this sends to its left must not help. See ADR 0058.
+          EMAIL="ci-guessed-$(date +%s)@example.test"; PASS="the-right-password-here"
+          curl -sf -o /dev/null -X POST $G/api/v1/users -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"displayName\":\"CI Guessed\"}"
+          attempt() {
+            curl -s -o /tmp/t.json -D /tmp/t.headers -w '%{http_code}' -X POST $G/api/v1/users/sessions \
+              -H 'Content-Type: application/json' -H "X-Forwarded-For: 10.$1.0.1" -d "{\"email\":\"$EMAIL\",\"password\":\"$2\"}"
+          }
+          for i in 1 2 3 4 5; do
+            CODE=$(attempt $i "wrong-guess-$i")
+            test "$CODE" = "401" || { echo "guess $i: $CODE"; exit 1; }
+          done
+          CODE=$(attempt 6 "$PASS")
+          echo "the right password after five wrong ones: $CODE, $(grep -i '^retry-after' /tmp/t.headers | tr -d '\r')"
+          test "$CODE" = "429"
+          grep -q '"code":"TOO_MANY_ATTEMPTS"' /tmp/t.json
+          grep -qi '^retry-after: [0-9]' /tmp/t.headers
+
       - name: A forgotten password is reset through the real mail server, once
         run: |
           set -e

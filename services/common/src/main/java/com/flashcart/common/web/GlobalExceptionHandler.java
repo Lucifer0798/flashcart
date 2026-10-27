@@ -7,6 +7,7 @@ import jakarta.validation.ConstraintViolationException;
 
 import com.flashcart.common.api.ApiError;
 import com.flashcart.common.error.BadRequestException;
+import com.flashcart.common.error.TooManyAttemptsException;
 import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.error.UpstreamUnavailableException;
 import com.flashcart.common.error.ConflictException;
@@ -57,6 +58,16 @@ public class GlobalExceptionHandler {
 					ex.getMessage());
 		}
 		return build(status, ex.getCode(), ex.getMessage(), request);
+	}
+
+	/** 429, and when to try again. More specific than the handler above, so Spring prefers it. ADR 0058. */
+	@ExceptionHandler(TooManyAttemptsException.class)
+	public ResponseEntity<ApiError> handleTooManyAttempts(TooManyAttemptsException ex, HttpServletRequest request) {
+		log.debug("{} handling {} {}", ex.getCode(), request.getMethod(), request.getRequestURI());
+		return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+				.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()))
+				.body(ApiError.of(HttpStatus.TOO_MANY_REQUESTS.value(), ex.getCode(), ex.getMessage(),
+						request.getRequestURI(), CorrelationId.current()));
 	}
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)
