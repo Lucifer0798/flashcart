@@ -34,9 +34,11 @@ public class UserService {
 	private final AccessTokens tokens;
 	private final JdbcTemplate jdbc;
 	private final EventPublisher events;
+	private final SignInThrottle throttle;
 
 	public UserService(UserRepository users, PasswordEncoder passwords, AccessTokens tokens, JdbcTemplate jdbc,
-			EventPublisher events) {
+			EventPublisher events, SignInThrottle throttle) {
+		this.throttle = throttle;
 		this.users = users;
 		this.passwords = passwords;
 		this.tokens = tokens;
@@ -68,8 +70,11 @@ public class UserService {
 	 * password encoder. Returning faster for an unknown address is an account-enumeration oracle:
 	 * anyone can then ask "does this person shop here" and get an answer from the timing alone.
 	 */
-	@Transactional(readOnly = true)
-	public String signIn(String email, String rawPassword) {
+	// Deliberately no transaction. A failure is recorded and then the sign-in throws, and a transaction
+	// around both would roll the record back with the refusal, so failures would never count (ADR 0058).
+	public String signIn(String email, String rawPassword, String clientAddress) {
+		// Before the password is looked at, so a throttled guess that happens to be right is refused too.
+		throttle.check(email, clientAddress);
 		User user = users.findByEmail(email.trim().toLowerCase()).orElse(null);
 
 		String hash = user != null ? user.getPasswordHash()
@@ -79,10 +84,12 @@ public class UserService {
 
 		boolean matches = passwords.matches(rawPassword, hash);
 		if (user == null || !matches || user.getStatus() != User.Status.ACTIVE) {
+			throttle.failed(email, clientAddress);
 			log.info("Rejected a sign-in attempt for {}", email);
 			throw new UnauthenticatedException();
 		}
 
+		throttle.succeeded(email, clientAddress);
 		return tokens.issue(user.getId().toString(), user.getEmail(), user.getRoles());
 	}
 
