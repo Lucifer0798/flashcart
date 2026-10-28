@@ -12,6 +12,7 @@ import com.flashcart.user.api.dto.UserDtos.AddressResponse;
 import com.flashcart.user.api.dto.UserDtos.CloseRequest;
 import com.flashcart.user.api.dto.UserDtos.PasswordResetConfirmation;
 import com.flashcart.user.api.dto.UserDtos.PasswordResetRequest;
+import com.flashcart.user.api.dto.UserDtos.RefreshRequest;
 import com.flashcart.user.api.dto.UserDtos.RegisterRequest;
 import com.flashcart.user.api.dto.UserDtos.RenameRequest;
 import com.flashcart.user.api.dto.UserDtos.SignInRequest;
@@ -20,6 +21,7 @@ import com.flashcart.user.api.dto.UserDtos.UserResponse;
 import com.flashcart.user.domain.Address;
 import com.flashcart.user.domain.User;
 import com.flashcart.user.service.PasswordResets;
+import com.flashcart.user.service.Sessions;
 import com.flashcart.user.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -50,13 +52,15 @@ public class UserController {
 
 	private final UserService users;
 	private final PasswordResets resets;
+	private final Sessions sessions;
 	private final AccessTokens tokens;
 	private final Duration ttl;
 
-	public UserController(UserService users, PasswordResets resets, AccessTokens tokens,
-			@Value("${flashcart.security.jwt.ttl:PT12H}") Duration ttl) {
+	public UserController(UserService users, PasswordResets resets, Sessions sessions, AccessTokens tokens,
+			@Value("${flashcart.security.jwt.ttl:PT15M}") Duration ttl) {
 		this.users = users;
 		this.resets = resets;
+		this.sessions = sessions;
 		this.tokens = tokens;
 		this.ttl = ttl;
 	}
@@ -85,8 +89,53 @@ public class UserController {
 					+ "Retry-After says when. Refused even with the right password. See ADR 0058.")
 	})
 	public TokenResponse signIn(@Valid @RequestBody SignInRequest request, HttpServletRequest http) {
-		String token = users.signIn(request.email(), request.password(), clientAddress(http));
-		return new TokenResponse(token, "Bearer", ttl.toSeconds());
+		return response(users.signIn(request.email(), request.password(), clientAddress(http)));
+	}
+
+	@PostMapping("/sessions/refresh")
+	@Operation(summary = "Exchange a refresh token for a new session",
+			description = "The refresh token works once and comes back replaced. Presenting one that was "
+					+ "already used ends every session descended from the same sign-in: only somebody "
+					+ "else's copy would be presented twice. The account is read again, so a closed account "
+					+ "or a revoked role takes effect here. See ADR 0059.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "200", description = "A new access token and refresh token"),
+			@ApiResponse(responseCode = "401", description = "UNAUTHENTICATED -- unknown, used, revoked or expired, "
+					+ "deliberately not told apart: sign in again")
+	})
+	public TokenResponse refresh(@Valid @RequestBody RefreshRequest request) {
+		return response(sessions.refresh(request.refreshToken()));
+	}
+
+	@PostMapping("/sessions/sign-out")
+	@Operation(summary = "Sign out of this session",
+			description = "Ends the session this refresh token belongs to; its access token lapses within "
+					+ "minutes. Always 204, whether or not the token was known.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "204", description = "Signed out")
+	})
+	public ResponseEntity<Void> signOut(@Valid @RequestBody RefreshRequest request) {
+		sessions.signOut(request.refreshToken());
+		return ResponseEntity.noContent().build();
+	}
+
+	@PostMapping("/me/sign-out-everywhere")
+	@Operation(summary = "Sign out of every session",
+			description = "Every refresh token of the account is revoked, so every device is signed out at "
+					+ "its next refresh, within one access token's lifetime. This one included. See ADR 0059.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "204", description = "Every session will end within minutes"),
+			@ApiResponse(responseCode = "401", description = "No token, or one that does not verify")
+	})
+	public ResponseEntity<Void> signOutEverywhere(
+			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+		users.signOutEverywhere(caller(authorization));
+		return ResponseEntity.noContent().build();
+	}
+
+	private TokenResponse response(Sessions.Session session) {
+		return new TokenResponse(session.accessToken(), "Bearer", ttl.toSeconds(), session.refreshToken(),
+				sessions.refreshTtl().toSeconds());
 	}
 
 	@PostMapping("/password-reset")

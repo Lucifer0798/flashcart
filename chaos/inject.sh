@@ -33,10 +33,17 @@ FAILURES=0
 # The order calls use the warehouse token rather than a third account because placing and reading your
 # own order needs only a signed-in caller -- the ownership check resolves the token's own subject. A
 # warehouse account is as good a shopper as any, and it cannot touch the catalogue.
-WH_TOKEN=$(OPERATOR_EMAIL="warehouse@flashcart.local" "$ROOT/scripts/operator-token.sh")
-WH_AUTH="Authorization: Bearer $WH_TOKEN"
-CAT_TOKEN=$(OPERATOR_EMAIL="catalog@flashcart.local" "$ROOT/scripts/operator-token.sh")
-CAT_AUTH="Authorization: Bearer $CAT_TOKEN"
+#
+# Signed in again before every scenario, not once for the run: an access token lasts fifteen minutes
+# (ADR 0059), and `all` can outlast one, which would turn the later scenarios' requests into 401s that
+# read as a platform fault.
+sign_in() {
+	WH_TOKEN=$(OPERATOR_EMAIL="warehouse@flashcart.local" "$ROOT/scripts/operator-token.sh")
+	WH_AUTH="Authorization: Bearer $WH_TOKEN"
+	CAT_TOKEN=$(OPERATOR_EMAIL="catalog@flashcart.local" "$ROOT/scripts/operator-token.sh")
+	CAT_AUTH="Authorization: Bearer $CAT_TOKEN"
+}
+sign_in
 
 say()  { echo ""; echo "=== $* ==="; }
 step() { echo "  -> $*"; }
@@ -294,7 +301,7 @@ case "$SCENARIO" in
 	kafka)     kafka_dies ;;
 	inventory) inventory_dies ;;
 	catalog)   catalog_dies ;;
-	all)       redis_dies; kafka_dies; inventory_dies; catalog_dies ;;
+	all)       redis_dies; sign_in; kafka_dies; sign_in; inventory_dies; sign_in; catalog_dies ;;
 	*) echo "unknown scenario: $SCENARIO (redis|kafka|inventory|catalog|all)"; exit 2 ;;
 esac
 

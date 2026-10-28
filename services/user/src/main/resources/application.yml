@@ -101,7 +101,10 @@ flashcart:
       # The day a third party needs to verify one of these, this becomes RS256 and only this service
       # keeps the private half. See ADR 0021.
       secret: ${JWT_SECRET:flashcart-development-secret-do-not-use-anywhere-real}
-      ttl: ${JWT_TTL:PT12H}
+      # Fifteen minutes. Every service verifies a token for itself and none can withdraw one, so this is
+      # how long a session outlives being signed out everywhere, a password reset or a closure. A refresh
+      # token keeps the session going in between. See ADR 0059.
+      ttl: ${JWT_TTL:PT15M}
   notices:
     from: ${NOTICES_FROM:FlashCart <no-reply@flashcart.local>}
     # How often the sender looks for notices due. Short, because a notice is about a unit held for

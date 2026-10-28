@@ -563,6 +563,35 @@ jobs:
           echo "waiting shopper's order $WORDER: $WSTATUS"
           case "$WSTATUS" in FULFILLING|SHIPPED) ;; *) docker compose logs --tail=80 inventory order; exit 1 ;; esac
 
+      - name: A session refreshes through the gateway, and signing out everywhere ends it
+        run: |
+          set -e
+          G=http://localhost:18080
+          # Through the gateway, which must route the refresh and sign-out paths without a token in front
+          # of them: the refresh token in the body is the credential. See ADR 0059.
+          EMAIL="ci-session-$(date +%s)@example.test"; PASS="a-sufficiently-long-password"
+          curl -sf -o /dev/null -X POST $G/api/v1/users -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"displayName\":\"CI Session\"}"
+          field() { python3 -c "import json,sys; print(json.load(sys.stdin)['$1'])"; }
+          SESSION=$(curl -sf -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}")
+          test "$(echo "$SESSION" | field expiresInSeconds)" = "900"
+          FIRST=$(echo "$SESSION" | field refreshToken)
+
+          refresh() { curl -s -o /tmp/r.json -w '%{http_code}' -X POST $G/api/v1/users/sessions/refresh -H 'Content-Type: application/json' -d "{\"refreshToken\":\"$1\"}"; }
+          test "$(refresh "$FIRST")" = "200"
+          SECOND=$(field refreshToken < /tmp/r.json)
+          ACCESS=$(field accessToken < /tmp/r.json)
+          test "$(curl -s -o /dev/null -w '%{http_code}' $G/api/v1/users/me -H "Authorization: Bearer $ACCESS")" = "200"
+          test "$(refresh "$FIRST")" = "401" || { echo "a used refresh token worked again"; exit 1; }
+
+          # That reuse ended the session, so sign in afresh, then sign out everywhere.
+          SESSION=$(curl -sf -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}")
+          ACCESS=$(echo "$SESSION" | field accessToken); THIRD=$(echo "$SESSION" | field refreshToken)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/me/sign-out-everywhere -H "Authorization: Bearer $ACCESS")
+          test "$CODE" = "204"
+          test "$(refresh "$THIRD")" = "401" || { echo "a session outlived signing out everywhere"; exit 1; }
+          echo "refreshed once, reuse caught, signed out everywhere"
+
       - name: Guessing a password is throttled at the edge, per client, as the gateway sees it
         run: |
           set -e

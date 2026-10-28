@@ -35,10 +35,12 @@ public class UserService {
 	private final JdbcTemplate jdbc;
 	private final EventPublisher events;
 	private final SignInThrottle throttle;
+	private final Sessions sessions;
 
 	public UserService(UserRepository users, PasswordEncoder passwords, AccessTokens tokens, JdbcTemplate jdbc,
-			EventPublisher events, SignInThrottle throttle) {
+			EventPublisher events, SignInThrottle throttle, Sessions sessions) {
 		this.throttle = throttle;
+		this.sessions = sessions;
 		this.users = users;
 		this.passwords = passwords;
 		this.tokens = tokens;
@@ -72,7 +74,7 @@ public class UserService {
 	 */
 	// Deliberately no transaction. A failure is recorded and then the sign-in throws, and a transaction
 	// around both would roll the record back with the refusal, so failures would never count (ADR 0058).
-	public String signIn(String email, String rawPassword, String clientAddress) {
+	public Sessions.Session signIn(String email, String rawPassword, String clientAddress) {
 		// Before the password is looked at, so a throttled guess that happens to be right is refused too.
 		throttle.check(email, clientAddress);
 		User user = users.findByEmail(email.trim().toLowerCase()).orElse(null);
@@ -90,7 +92,7 @@ public class UserService {
 		}
 
 		throttle.succeeded(email, clientAddress);
-		return tokens.issue(user.getId().toString(), user.getEmail(), user.getRoles());
+		return sessions.start(user);
 	}
 
 	/**
@@ -99,6 +101,13 @@ public class UserService {
 	 * @throws UnauthenticatedException for a closed account: its tokens stay valid until they expire, and
 	 *                                  the account they name is no longer one anybody can use (ADR 0053)
 	 */
+	/** Every session of this account ends at its next refresh, this one included. ADR 0059. */
+	@Transactional
+	public void signOutEverywhere(UUID id) {
+		require(id);
+		sessions.revokeAll(id, "signed out everywhere");
+	}
+
 	@Transactional(readOnly = true)
 	public User require(UUID id) {
 		User user = users.findWithAddresses(id)
@@ -143,6 +152,8 @@ public class UserService {
 		// the bodies their refunds. Support's view of their emails ends here.
 		int notices = jdbc.update("delete from notices where customer_id = ?", id.toString());
 
+		// Its sessions end at their next refresh, within one access token's lifetime (ADR 0059).
+		sessions.revokeAll(id, "account closed");
 		events.publish(Topics.USER_EVENTS, new AccountClosed(EventMetadata.of(AccountClosed.TYPE, id), id.toString()));
 		log.info("Closed account {}: erased its identity, revoked {} role(s), deleted {} notice(s)", id,
 				roles.size(), notices);
