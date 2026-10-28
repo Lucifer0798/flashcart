@@ -31,7 +31,16 @@ public final class UserDtos {
 	}
 
 	/** Deliberately no refresh token: see the ADR. */
-	public record TokenResponse(String accessToken, String tokenType, long expiresInSeconds) {
+	/**
+	 * A session. The access token goes on every request and lasts minutes; the refresh token goes only to
+	 * {@code /sessions/refresh}, works once, and comes back replaced. See ADR 0059.
+	 */
+	public record TokenResponse(String accessToken, String tokenType, long expiresInSeconds, String refreshToken,
+			long refreshExpiresInSeconds) {
+	}
+
+	/** A refresh token, to exchange for a new session or to end the one it belongs to. */
+	public record RefreshRequest(@NotBlank @Size(max = 200) String refreshToken) {
 	}
 
 	public record AddressRequest(

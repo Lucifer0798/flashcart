@@ -64,3 +64,4 @@ when someone revisits it in six months.
 | [0056](0056-a-customer-sees-that-staff-looked.md) | A customer sees that staff looked | Accepted |
 | [0057](0057-a-forgotten-password-is-not-a-lost-account.md) | A forgotten password is not a lost account | Accepted |
 | [0058](0058-a-guess-costs-more-than-a-hash.md) | A guess costs more than a hash | Accepted |
+| [0059](0059-a-session-ends-within-fifteen-minutes.md) | A session ends within fifteen minutes | Accepted |

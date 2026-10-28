@@ -59,12 +59,14 @@ public class PasswordResets {
 	private final Notices notices;
 	private final UserRepository users;
 	private final PasswordEncoder passwords;
+	private final Sessions sessions;
 	private final Duration ttl;
 	private final Duration minInterval;
 	private final String link;
 	private final SecureRandom random = new SecureRandom();
 
 	public PasswordResets(JdbcTemplate jdbc, Notices notices, UserRepository users, PasswordEncoder passwords,
+			Sessions sessions,
 			@Value("${flashcart.password-reset.ttl:PT30M}") Duration ttl,
 			@Value("${flashcart.password-reset.min-interval:PT1M}") Duration minInterval,
 			@Value("${flashcart.password-reset.link:https://flashcart.local/reset-password?token=}") String link) {
@@ -72,6 +74,7 @@ public class PasswordResets {
 		this.notices = notices;
 		this.users = users;
 		this.passwords = passwords;
+		this.sessions = sessions;
 		this.ttl = ttl;
 		this.minInterval = minInterval;
 		this.link = link;
@@ -150,6 +153,8 @@ public class PasswordResets {
 		UUID userId = claimed.get(0);
 		User user = users.findById(userId).orElseThrow();
 		user.changePassword(passwords.encode(newPassword));
+		// Whoever had the old password may also have a session. It ends at its next refresh (ADR 0059).
+		sessions.revokeAll(userId, "password reset");
 		// Any other link still in somebody's inbox stops working too.
 		int others = jdbc.update("update password_resets set used_at = now() where user_id = ? and used_at is null",
 				userId);

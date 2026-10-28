@@ -41,7 +41,7 @@ public class UserConfig {
 	@Bean
 	public AccessTokens accessTokens(
 			@Value("${flashcart.security.jwt.secret}") String secret,
-			@Value("${flashcart.security.jwt.ttl:PT12H}") Duration ttl) {
+			@Value("${flashcart.security.jwt.ttl:PT15M}") Duration ttl) {
 		return new AccessTokens(secret, ttl);
 	}
 
@@ -88,9 +88,10 @@ public class UserConfig {
 	 * remembered — which is exactly how the order service (ADR 0035) and catalog (ADR 0036) came to be
 	 * exposed. Neither of those was a decision either.
 	 *
-	 * <p><strong>The public POSTs are the reason this service is different.</strong> Register, sign in
-	 * and the two halves of a password reset (ADR 0057) are unauthenticated by necessity, not by
-	 * oversight, and they are the only writes in the platform that must stay that way. They are listed by
+	 * <p><strong>The public POSTs are the reason this service is different.</strong> Register, sign in,
+	 * the two halves of a password reset (ADR 0057), and refreshing or ending a session (ADR 0059), whose
+	 * credential is the refresh token in the body, are unauthenticated by necessity, not by oversight,
+	 * and they are the only writes in the platform that must stay that way. They are listed by
 	 * exact path and method, so a future {@code POST /api/v1/users/anything} is not covered by them.
 	 *
 	 * <p>The three {@code /me} paths are signed-in, which is the dangerous category: passing this
@@ -109,6 +110,9 @@ public class UserConfig {
 						// Nor to recover access to an account you can no longer sign in to (ADR 0057).
 						"POST /api/v1/users/password-reset",
 						"POST /api/v1/users/password-reset/confirm",
+						// A refresh token is the credential here; the access token may already have lapsed.
+						"POST /api/v1/users/sessions/refresh",
+						"POST /api/v1/users/sessions/sign-out",
 						"/api/v1/user/_info",
 						// Compose health-checks this, and a container that cannot answer restarts
 						// forever.
@@ -118,6 +122,7 @@ public class UserConfig {
 								"PATCH /api/v1/users/me",
 								"POST /api/v1/users/me/addresses",
 								"POST /api/v1/users/me/close",
+								"POST /api/v1/users/me/sign-out-everywhere",
 								// Your own entries in this service's access log (ADR 0056).
 								"GET /api/v1/user/_access-log/mine"),
 						// Support's reads (ADR 0051). The handler checks the role again and records the read;
