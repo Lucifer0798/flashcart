@@ -173,28 +173,20 @@ jobs:
             curl -sf "$G/api/v1/$s/_info" | grep -q '"status":"live"' || { echo "$s is not reporting live"; exit 1; }
           done
 
-      - name: Sign in as the operator, because stock is no longer anyone's to receive
+      - name: Sign in as the operator and each narrow role, so nothing runs with more than it needs
         run: |
           set -e
-          OPERATOR=$(./scripts/operator-token.sh)
-          test -n "$OPERATOR"
-          echo "OPERATOR=$OPERATOR" >> $GITHUB_ENV
-          echo "got an operator token"
-
-      - name: Sign in as each narrow role, so nothing runs with more than it needs
-        run: |
-          set -e
-          # ADR 0039. The operator token above still exists because one probe genuinely needs it: a
-          # wrong verb on a path no role rule covers, which must stay operator-only to prove that
-          # unlisted paths still are. Everything else below holds exactly its own privileges, which is
-          # the only arrangement where a rule scoped to the wrong role fails instead of being masked
-          # by OPERATOR's superset.
-          for ROLE in warehouse catalog support; do
-            ROLE_TOKEN=$(OPERATOR_EMAIL="$ROLE@flashcart.local" ./scripts/operator-token.sh)
-            test -n "$ROLE_TOKEN"
-            echo "$(echo "$ROLE" | tr '[:lower:]' '[:upper:]')=$ROLE_TOKEN" >> $GITHUB_ENV
-          done
-          echo "got WAREHOUSE, CATALOG and SUPPORT tokens"
+          # ADR 0039. The operator token still exists because one probe genuinely needs it: a wrong verb on
+          # a path no role rule covers, which must stay operator-only to prove that unlisted paths still
+          # are. Everything else holds exactly its own privileges, which is the only arrangement where a
+          # rule scoped to the wrong role fails instead of being masked by OPERATOR's superset.
+          #
+          # Nothing is kept from here. Every step that needs a token signs in for itself through
+          # scripts/ci-sign-in.sh, because a token lasts fifteen minutes and this job can run longer
+          # (ADR 0059). This step only proves the accounts can sign in before anything depends on them.
+          . scripts/ci-sign-in.sh
+          for T in "$OPERATOR" "$WAREHOUSE" "$CATALOG" "$SUPPORT"; do test -n "$T"; done
+          echo "OPERATOR, WAREHOUSE, CATALOG and SUPPORT can all sign in"
 
       - name: Sign in, because a checkout now needs a shopper
         run: |
@@ -206,9 +198,12 @@ jobs:
           CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\",\"displayName\":\"CI Shopper\"}")
           test "$CODE" = "201"
 
-          TOKEN=$(curl -s -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}" | grep -o '"accessToken":"[^"]*"' | cut -d'"' -f4)
+          # The address and password, not a token: later steps sign this same shopper in again
+          # through scripts/ci-sign-in.sh, each when it needs to (ADR 0059).
+          echo "CI_SHOPPER_EMAIL=$EMAIL" >> $GITHUB_ENV
+          echo "CI_SHOPPER_PASSWORD=$PASS" >> $GITHUB_ENV
+          CI_SHOPPER_EMAIL="$EMAIL" CI_SHOPPER_PASSWORD="$PASS" . scripts/ci-sign-in.sh
           test -n "$TOKEN"
-          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
           echo "signed in as $EMAIL"
 
       - name: A staff role is granted narrowly, and on the record
@@ -261,6 +256,7 @@ jobs:
       - name: A checkout settles asynchronously across four services
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           SKU=AUD-HP-001
           curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE" \
@@ -295,6 +291,7 @@ jobs:
       - name: A declined payment compensates and gives the stock back
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           # The simulated provider declines any amount ending in .13, and the catalog seed has a
           # product priced at 24.99 -> so use one whose total lands on .13 via quantity.
@@ -344,6 +341,7 @@ jobs:
       - name: A cancelled paid order gives the money and the units back
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           # The only flow that crosses order -> shipping -> order -> inventory and payment after the
           # money has moved. Each service's own tests cover its half; nothing else here checks that
@@ -418,6 +416,7 @@ jobs:
       - name: A refund the provider would not take, settled by hand, is emailed with its reference
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           # payment -> Kafka -> user for an event nothing else carries. NoticeIT calls the listener
           # directly, so this is the one check that the new type's factory, consumer group and header
@@ -491,6 +490,7 @@ jobs:
       - name: A sold-out SKU's queue hears when stock comes back, and gets the unit
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           # Through the gateway, the real filter and the real saga. The integration tests cover the
           # queue's rules; this covers a shopper reaching it, and the held unit surviving a stranger's
@@ -654,6 +654,7 @@ jobs:
       - name: A closed account is forgotten, and its leftover token cannot buy
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           # user -> Kafka -> inventory and order, for the one event the user service publishes. Each
           # service's tests call its listener directly; this is the check that AccountClosed arrives.
@@ -711,6 +712,7 @@ jobs:
       - name: The shared error envelope survives every hop
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           curl -s $G/api/v1/products/00000000-0000-4000-8000-0000000000ff | grep -q '"code":"NOT_FOUND"'
           # A wrong verb is a 405, not a 500 -- the whole platform shares one handler for this.
@@ -747,6 +749,7 @@ jobs:
       - name: A client cannot say who it is
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           SKU=CI-AUTH-$(date +%s)
           curl -sf -X POST $G/api/v1/inventory/stock -H 'Content-Type: application/json' -H "Authorization: Bearer $WAREHOUSE"             -d "{\"sku\":\"$SKU\",\"initialQuantity\":5,\"reason\":\"CI auth\"}" > /dev/null
@@ -787,6 +790,7 @@ jobs:
       - name: A shopper is not a warehouse
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
           SKU=CI-OPS-$(date +%s)
 
@@ -861,6 +865,7 @@ jobs:
       - name: A customer can see their own payment and parcel, and nobody else's
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           G=http://localhost:18080
 
           # A second shopper, so "not yours" is a real other account rather than a missing token.
@@ -1045,6 +1050,7 @@ jobs:
       - name: The anti-oversell invariant holds under concurrency
         run: |
           set -e
+          . scripts/ci-sign-in.sh
           # A small, deliberately un-timed load run. CI cannot measure throughput -- a shared runner
           # is noisier than the laptop that already could not distinguish the configurations -- so
           # this asserts only the thing that is not a matter of degree: with 5 units and 100
