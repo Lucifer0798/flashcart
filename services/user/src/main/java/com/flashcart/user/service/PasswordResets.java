@@ -60,13 +60,14 @@ public class PasswordResets {
 	private final UserRepository users;
 	private final PasswordEncoder passwords;
 	private final Sessions sessions;
+	private final AttemptThrottle throttle;
 	private final Duration ttl;
 	private final Duration minInterval;
 	private final String link;
 	private final SecureRandom random = new SecureRandom();
 
 	public PasswordResets(JdbcTemplate jdbc, Notices notices, UserRepository users, PasswordEncoder passwords,
-			Sessions sessions,
+			Sessions sessions, AttemptThrottle throttle,
 			@Value("${flashcart.password-reset.ttl:PT30M}") Duration ttl,
 			@Value("${flashcart.password-reset.min-interval:PT1M}") Duration minInterval,
 			@Value("${flashcart.password-reset.link:https://flashcart.local/reset-password?token=}") String link) {
@@ -75,6 +76,7 @@ public class PasswordResets {
 		this.users = users;
 		this.passwords = passwords;
 		this.sessions = sessions;
+		this.throttle = throttle;
 		this.ttl = ttl;
 		this.minInterval = minInterval;
 		this.link = link;
@@ -87,7 +89,10 @@ public class PasswordResets {
 	 * so the form cannot be used to fill somebody's inbox.
 	 */
 	@Transactional
-	public void request(String email) {
+	public void request(String email, String clientAddress) {
+		// Per client, before the address is looked up, and counted whatever the address is (ADR 0060).
+		throttle.checkResetRequest(clientAddress);
+		throttle.resetRequested(clientAddress);
 		Optional<User> found = users.findByEmail(email.trim().toLowerCase())
 				.filter(user -> user.getStatus() == User.Status.ACTIVE);
 		if (found.isEmpty()) {

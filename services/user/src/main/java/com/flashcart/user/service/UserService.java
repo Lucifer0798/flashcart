@@ -34,11 +34,11 @@ public class UserService {
 	private final AccessTokens tokens;
 	private final JdbcTemplate jdbc;
 	private final EventPublisher events;
-	private final SignInThrottle throttle;
+	private final AttemptThrottle throttle;
 	private final Sessions sessions;
 
 	public UserService(UserRepository users, PasswordEncoder passwords, AccessTokens tokens, JdbcTemplate jdbc,
-			EventPublisher events, SignInThrottle throttle, Sessions sessions) {
+			EventPublisher events, AttemptThrottle throttle, Sessions sessions) {
 		this.throttle = throttle;
 		this.sessions = sessions;
 		this.users = users;

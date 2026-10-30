@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import com.flashcart.user.service.SignInThrottle;
+import com.flashcart.user.service.AttemptThrottle;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -32,7 +32,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
 		"flashcart.sign-in.limit.account-and-client.failures=3",
 		"flashcart.sign-in.limit.client.failures=6",
-		"flashcart.sign-in.limit.account.failures=9" })
+		"flashcart.sign-in.limit.account.failures=9",
+		"flashcart.password-reset.limit.client.requests=3",
+		// Longer than every sign-in window, so pruning by the sign-in windows alone would be caught.
+		"flashcart.password-reset.limit.client.window=PT2H" })
 @AutoConfigureTestRestTemplate
 class SignInThrottleIT {
 
@@ -52,7 +55,7 @@ class SignInThrottleIT {
 	private JdbcTemplate jdbc;
 
 	@Autowired
-	private SignInThrottle throttle;
+	private AttemptThrottle throttle;
 
 	@Test
 	@DisplayName("one client guessing one account is stopped, even when it then guesses right; the owner elsewhere is not")
@@ -143,7 +146,7 @@ class SignInThrottleIT {
 		String from = client();
 		signIn(email, "wrong", from);
 
-		List<String> keys = jdbc.queryForList("select key_hash from sign_in_failures", String.class);
+		List<String> keys = jdbc.queryForList("select key_hash from throttled_attempts", String.class);
 		assertThat(keys).isNotEmpty().allSatisfy(key -> assertThat(key).matches("[0-9a-f]{64}"));
 		assertThat(String.join(",", keys)).doesNotContain(email).doesNotContain(from);
 	}
@@ -158,12 +161,12 @@ class SignInThrottleIT {
 		}
 		assertThat(signIn(email, PASSWORD, here).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 
-		jdbc.update("update sign_in_failures set failed_at = now() - interval '16 minutes'");
+		jdbc.update("update throttled_attempts set attempted_at = now() - interval '16 minutes'");
 		assertThat(signIn(email, PASSWORD, here).getStatusCode()).isEqualTo(HttpStatus.OK);
 
-		jdbc.update("update sign_in_failures set failed_at = now() - interval '2 hours'");
+		jdbc.update("update throttled_attempts set attempted_at = now() - interval '2 hours'");
 		throttle.prune();
-		assertThat(jdbc.queryForObject("select count(*) from sign_in_failures where failed_at < now() - interval '1 hour'",
+		assertThat(jdbc.queryForObject("select count(*) from throttled_attempts where attempted_at < now() - interval '1 hour'",
 				Integer.class)).isZero();
 	}
 
@@ -180,6 +183,81 @@ class SignInThrottleIT {
 		assertThat(signIn(email, PASSWORD, "10.9.9.9, " + real).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 	}
 
+	// --- password reset requests (ADR 0060) -------------------------------------------------------------
+
+	@Test
+	@DisplayName("one client asking for resets for many addresses is stopped, whether or not they have accounts")
+	void resetRequestsPerClient() {
+		String asker = client();
+		String known = register();
+		for (int i = 0; i < 3; i++) {
+			String address = i == 1 ? known : "stranger-" + UUID.randomUUID() + "@example.test";
+			assertThat(requestReset(address, asker).getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+		// The fourth is refused for an address with an account and one without, identically: the limit is the
+		// client's, so the answer says nothing about the address.
+		ResponseEntity<Map> forKnown = requestReset(known, asker);
+		ResponseEntity<Map> forUnknown = requestReset("nobody-" + UUID.randomUUID() + "@example.test", asker);
+		assertThat(forKnown.getStatusCode()).isEqualTo(forUnknown.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+		assertThat(forKnown.getBody().get("message")).isEqualTo(forUnknown.getBody().get("message"));
+		assertThat(Long.parseLong(forKnown.getHeaders().getFirst(HttpHeaders.RETRY_AFTER))).isBetween(1L, 7200L);
+
+		// Another client asks as usual.
+		assertThat(requestReset(known, client()).getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+	}
+
+	@Test
+	@DisplayName("requests for addresses with no account count too, so the limit cannot be used to find real ones")
+	void unknownAddressesCountToo() {
+		String asker = client();
+		for (int i = 0; i < 3; i++) {
+			requestReset("nobody-" + UUID.randomUUID() + "@example.test", asker);
+		}
+		String known = register();
+
+		assertThat(requestReset(known, asker).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+		// Refused before the address was looked at: no reset was recorded for it.
+		assertThat(jdbc.queryForObject("""
+				select count(*) from password_resets r join users u on u.id = r.user_id where u.email = ?""",
+				Integer.class, known)).isZero();
+	}
+
+	@Test
+	@DisplayName("reset requests and failed sign-ins are counted apart, so neither uses up the other")
+	void resetAndSignInAreSeparate() {
+		String asker = client();
+		String email = register();
+		// Three failed sign-ins, then three resets: each half of its own limit, and together six -- the
+		// sign-in client limit. Counted under one key, the resets would start refused, and the sign-in after
+		// them would be.
+		for (int i = 0; i < 3; i++) {
+			signIn("stranger-" + UUID.randomUUID() + "@example.test", "wrong", asker);
+		}
+		for (int i = 0; i < 3; i++) {
+			assertThat(requestReset("stranger-" + UUID.randomUUID() + "@example.test", asker).getStatusCode())
+					.isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+		assertThat(signIn(email, PASSWORD, asker).getStatusCode()).isEqualTo(HttpStatus.OK);
+	}
+
+	@Test
+	@DisplayName("pruning keeps reset requests for as long as their own, longer window counts them")
+	void pruningRespectsTheResetWindow() {
+		String asker = client();
+		for (int i = 0; i < 3; i++) {
+			requestReset("stranger-" + UUID.randomUUID() + "@example.test", asker);
+		}
+		// Ninety minutes old: past every sign-in window, still inside the reset window of two hours.
+		jdbc.update("update throttled_attempts set attempted_at = now() - interval '90 minutes' "
+				+ "where attempted_at > now() - interval '1 minute'");
+		throttle.prune();
+
+		assertThat(requestReset("stranger-" + UUID.randomUUID() + "@example.test", asker).getStatusCode())
+				.isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+	}
+
 	// --- helpers ------------------------------------------------------------------------------------
 
 	private static String client() {
@@ -193,6 +271,13 @@ class SignInThrottleIT {
 		assertThat(rest.postForEntity("/api/v1/users", Map.of("email", email, "password", PASSWORD, "displayName", "T"),
 				Map.class).getStatusCode()).isEqualTo(HttpStatus.CREATED);
 		return email;
+	}
+
+	private ResponseEntity<Map> requestReset(String email, String forwardedFor) {
+		HttpHeaders headers = new HttpHeaders();
+		headers.set("X-Forwarded-For", forwardedFor);
+		return rest.exchange("/api/v1/users/password-reset", HttpMethod.POST, new HttpEntity<>(Map.of("email", email),
+				headers), Map.class);
 	}
 
 	private ResponseEntity<Map> signIn(String email, String password, String forwardedFor) {

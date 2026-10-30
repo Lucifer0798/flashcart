@@ -19,9 +19,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Limits failed sign-ins, so that guessing a password is slow. See ADR 0058.
+ * Limits failed sign-ins, so that guessing a password is slow (ADR 0058), and password-reset requests, so
+ * that the reset form cannot be used to make the platform email strangers (ADR 0060).
  *
- * <p>Three limits, because each catches what the others cannot:
+ * <p>Three sign-in limits, because each catches what the others cannot:
  *
  * <ul>
  *   <li><strong>One account, one client</strong> -- tight. Somebody guessing one account from one place is
@@ -33,14 +34,18 @@ import org.springframework.stereotype.Component;
  *       password reset still works while it holds.</li>
  * </ul>
  *
+ * <p>And one on reset requests, per client: every request counts, whether or not the address has an
+ * account, and the refusal depends only on the client. Counting only the requests that send an email would
+ * make the limit arrive sooner for addresses that have accounts, which would itself say who has one.
+ *
  * <p>Counted by the address as typed, whether or not it has an account, so a refusal says no more about who
  * shops here than sign-in's own answer does. Stored as hashes: the table never holds the addresses people
  * typed, many of them mistakes or other people's, nor where they typed them from.
  */
 @Component
-public class SignInThrottle {
+public class AttemptThrottle {
 
-	private static final Logger log = LoggerFactory.getLogger(SignInThrottle.class);
+	private static final Logger log = LoggerFactory.getLogger(AttemptThrottle.class);
 
 	/** One limit: at most {@code failures} in {@code window}. */
 	record Limit(String scope, int failures, Duration window) {
@@ -51,8 +56,11 @@ public class SignInThrottle {
 	private final Limit pair;
 	private final Limit client;
 	private final Limit account;
+	private final Limit resetClient;
 
-	public SignInThrottle(JdbcTemplate jdbc, MeterRegistry meters,
+	public AttemptThrottle(JdbcTemplate jdbc, MeterRegistry meters,
+			@Value("${flashcart.password-reset.limit.client.requests:10}") int resetRequests,
+			@Value("${flashcart.password-reset.limit.client.window:PT1H}") Duration resetWindow,
 			@Value("${flashcart.sign-in.limit.account-and-client.failures:5}") int pairFailures,
 			@Value("${flashcart.sign-in.limit.account-and-client.window:PT15M}") Duration pairWindow,
 			@Value("${flashcart.sign-in.limit.client.failures:30}") int clientFailures,
@@ -64,6 +72,28 @@ public class SignInThrottle {
 		this.pair = new Limit("account-and-client", pairFailures, pairWindow);
 		this.client = new Limit("client", clientFailures, clientWindow);
 		this.account = new Limit("account", accountFailures, accountWindow);
+		this.resetClient = new Limit("reset-client", resetRequests, resetWindow);
+	}
+
+	/**
+	 * Refuses a reset request from a client that has made too many. Checked before the address is looked up,
+	 * and the refusal names no address, so it says nothing about any account. ADR 0060.
+	 *
+	 * @throws TooManyAttemptsException saying when trying again is worth it
+	 */
+	public void checkResetRequest(String clientAddress) {
+		Optional<Long> blocked = blockedFor(resetClient, key(resetClient, null, clientAddress));
+		if (blocked.isPresent()) {
+			meters.counter("flashcart.user.password-reset.throttled").increment();
+			log.info("Password reset request refused: too many from this client; retry in {}s", blocked.get());
+			throw new TooManyAttemptsException("Too many password reset requests from here. Try again later.",
+					blocked.get());
+		}
+	}
+
+	/** Counts one reset request against its client, whatever the address and whatever happened next. */
+	public void resetRequested(String clientAddress) {
+		jdbc.update("insert into throttled_attempts (key_hash) values (?)", key(resetClient, null, clientAddress));
 	}
 
 	/**
@@ -95,7 +125,7 @@ public class SignInThrottle {
 	/** Counts one failure against all three limits. */
 	public void failed(String email, String clientAddress) {
 		for (Limit limit : List.of(pair, client, account)) {
-			jdbc.update("insert into sign_in_failures (key_hash) values (?)", key(limit, email, clientAddress));
+			jdbc.update("insert into throttled_attempts (key_hash) values (?)", key(limit, email, clientAddress));
 		}
 	}
 
@@ -104,20 +134,22 @@ public class SignInThrottle {
 	 * does not linger. The other two counts stand: one success from one place says nothing about the rest.
 	 */
 	public void succeeded(String email, String clientAddress) {
-		jdbc.update("delete from sign_in_failures where key_hash = ?", key(pair, email, clientAddress));
+		jdbc.update("delete from throttled_attempts where key_hash = ?", key(pair, email, clientAddress));
 	}
 
 	/** Failures older than the longest window can no longer count, and are deleted. */
 	@Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT1M")
 	public void prune() {
-		Duration longest = List.of(pair.window(), client.window(), account.window()).stream()
+		// The longest of all four, the reset limit's included: a shorter one would delete attempts that can
+		// still count against it.
+		Duration longest = List.of(pair.window(), client.window(), account.window(), resetClient.window()).stream()
 				.max(Duration::compareTo).orElseThrow();
 		try {
-			jdbc.update("delete from sign_in_failures where failed_at < now() - make_interval(secs => ?)",
+			jdbc.update("delete from throttled_attempts where attempted_at < now() - make_interval(secs => ?)",
 					longest.toSeconds());
 		}
 		catch (DataAccessException ex) {
-			log.error("Pruning sign-in failures failed; will retry on the next tick", ex);
+			log.error("Pruning throttled attempts failed; will retry on the next tick", ex);
 		}
 	}
 
@@ -127,10 +159,10 @@ public class SignInThrottle {
 		// Its wait is computed by the database, against the same clock that stamped it: mixing the JVM's
 		// clock with the database's is a mistake the notice sender has already made once.
 		List<Long> wait = jdbc.queryForList("""
-				select ceil(extract(epoch from failed_at + make_interval(secs => ?) - now()))::bigint
-				  from sign_in_failures
-				 where key_hash = ? and failed_at > now() - make_interval(secs => ?)
-				 order by failed_at desc
+				select ceil(extract(epoch from attempted_at + make_interval(secs => ?) - now()))::bigint
+				  from throttled_attempts
+				 where key_hash = ? and attempted_at > now() - make_interval(secs => ?)
+				 order by attempted_at desc
 				 offset ? limit 1""", Long.class, limit.window().toSeconds(), key, limit.window().toSeconds(),
 				limit.failures() - 1);
 		return wait.isEmpty() ? Optional.empty() : Optional.of(Math.max(1, wait.get(0)));
@@ -141,6 +173,7 @@ public class SignInThrottle {
 		String raw = switch (limit.scope()) {
 			case "account-and-client" -> "pair|" + normalised + "|" + clientAddress;
 			case "client" -> "client|" + clientAddress;
+			case "reset-client" -> "reset-client|" + clientAddress;
 			default -> "account|" + normalised;
 		};
 		try {
