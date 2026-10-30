@@ -35,8 +35,14 @@ import org.springframework.mail.javamail.JavaMailSenderImpl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Resetting a forgotten password by email. See ADR 0057. */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+/**
+ * Resetting a forgotten password by email. See ADR 0057.
+ *
+ * <p>Every request here comes from one client, and there are more of them than the per-client limit allows
+ * (ADR 0060). That limit is SignInThrottleIT's to test, so it is set out of the way here.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+		properties = "flashcart.password-reset.limit.client.requests=1000")
 @AutoConfigureTestRestTemplate
 class PasswordResetIT {
 

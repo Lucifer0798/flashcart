@@ -94,6 +94,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0057](adr/0057-a-forgotten-password-is-not-a-lost-account.md) — A forgotten password is not a lost account
 - [0058](adr/0058-a-guess-costs-more-than-a-hash.md) — A guess costs more than a hash
 - [0059](adr/0059-a-session-ends-within-fifteen-minutes.md) — A session ends within fifteen minutes
+- [0060](adr/0060-the-reset-form-is-not-a-mailing-list.md) — The reset form is not a mailing list
 - [0035](adr/0035-nothing-behind-the-check.md) — Nothing behind the check
 - [0036](adr/0036-anyone-could-set-the-price.md) — Anyone could set the price
 - [0037](adr/0037-the-last-one-unargued.md) — The last one unargued

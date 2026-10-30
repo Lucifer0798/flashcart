@@ -145,10 +145,13 @@ public class UserController {
 					+ "a link that works once, within 30 minutes. Asking again within a minute sends nothing "
 					+ "more. See ADR 0057.")
 	@ApiResponses({
-			@ApiResponse(responseCode = "202", description = "If the address has an account, an email is on its way")
+			@ApiResponse(responseCode = "202", description = "If the address has an account, an email is on its way"),
+			@ApiResponse(responseCode = "429", description = "TOO_MANY_ATTEMPTS -- too many requests from this client, "
+					+ "whatever the addresses. Retry-After says when. See ADR 0060.")
 	})
-	public ResponseEntity<Map<String, String>> requestReset(@Valid @RequestBody PasswordResetRequest request) {
-		resets.request(request.email());
+	public ResponseEntity<Map<String, String>> requestReset(@Valid @RequestBody PasswordResetRequest request,
+			HttpServletRequest http) {
+		resets.request(request.email(), clientAddress(http));
 		return ResponseEntity.accepted().body(Map.of("message",
 				"If that address has an account, we have emailed it a link to reset the password."));
 	}

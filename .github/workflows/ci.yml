@@ -651,6 +651,24 @@ jobs:
           test "$CODE" = "400" || { echo "a used link worked again ($CODE)"; exit 1; }
           echo "reset by email, once"
 
+      - name: One client cannot make the platform send reset emails without limit
+        run: |
+          set -e
+          G=http://localhost:18080
+          # After the reset step on purpose: every request in this job reaches the user service as one
+          # client, the runner as the gateway sees it, so this spends that client's reset budget, and no
+          # later step asks for a reset. See ADR 0060.
+          ask() { curl -s -o /tmp/rr.json -D /tmp/rr.headers -w '%{http_code}' -X POST $G/api/v1/users/password-reset \
+            -H 'Content-Type: application/json' -d "{\"email\":\"ci-stranger-$1-$(date +%s%N)@example.test\"}"; }
+          for i in $(seq 1 12); do
+            CODE=$(ask "$i")
+            if [ "$CODE" = "429" ]; then break; fi
+            test "$CODE" = "202" || { echo "request $i: $CODE"; exit 1; }
+          done
+          echo "refused after $((i - 1)) more request(s): $CODE, $(grep -i '^retry-after' /tmp/rr.headers | tr -d '\r')"
+          test "$CODE" = "429"
+          grep -q '"code":"TOO_MANY_ATTEMPTS"' /tmp/rr.json
+
       - name: A closed account is forgotten, and its leftover token cannot buy
         run: |
           set -e

@@ -131,7 +131,7 @@ class SessionsIT {
 		String email = register();
 		String intruder = (String) signIn(email).get("refreshToken");
 
-		resets.request(email);
+		resets.request(email, "203.0.113.7");
 		String resetId = jdbc.queryForObject("""
 				select r.id::text from password_resets r join users u on u.id = r.user_id where u.email = ?""",
 				String.class, email);
