@@ -63,6 +63,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0041 — The alert that forgot](adr/0041-the-alert-that-forgot.md)
 - [0042 — Every alert went quiet together](adr/0042-every-alert-went-quiet-together.md)
 - [0043 — An alert nobody receives](adr/0043-an-alert-nobody-receives.md)
+- [0061 — The first theft is the one that counts](adr/0061-the-first-theft-is-the-one-that-counts.md)
 
 **An order's whole life**
 - [0030](adr/0030-cancelling-a-paid-order.md) — Cancelling a paid order

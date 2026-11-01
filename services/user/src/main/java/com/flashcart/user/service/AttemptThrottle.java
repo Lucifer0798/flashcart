@@ -73,6 +73,12 @@ public class AttemptThrottle {
 		this.client = new Limit("client", clientFailures, clientWindow);
 		this.account = new Limit("account", accountFailures, accountWindow);
 		this.resetClient = new Limit("reset-client", resetRequests, resetWindow);
+		// Registered at zero now, for the reason Sessions gives: a counter born at 1 is invisible to the
+		// increase() the alerts take of it, so the first refusal after a restart would not count. ADR 0061.
+		for (Limit limit : List.of(pair, client, account)) {
+			meters.counter("flashcart.user.sign-in.throttled", "limit", limit.scope());
+		}
+		meters.counter("flashcart.user.password-reset.throttled");
 	}
 
 	/**

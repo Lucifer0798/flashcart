@@ -288,3 +288,87 @@ tests:
       - eval_time: 25m
         alertname: CancellationsUnanswered
         exp_alerts: []
+
+  # --- RefreshTokenReused (ADR 0061) ----------------------------------------------------------------
+
+  - name: one reused refresh token is enough
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_refresh_reused_total{service="user"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RefreshTokenReused
+        exp_alerts:
+          - exp_labels: { severity: warning, service: user }
+
+  # Why the counter is registered at zero. A series that first appears already at 1 has no earlier
+  # sample to increase from, so increase() reads 0 and the alert stays silent for exactly the theft it
+  # exists for. Kept as a test so the reason does not live only in a comment.
+  - name: a counter born at 1 is invisible to increase(), which is why it is registered at zero
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_refresh_reused_total{service="user"}'
+        values: '_ _ 1 1 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RefreshTokenReused
+        exp_alerts: []
+
+  - name: no reuse, no alert
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_refresh_reused_total{service="user"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RefreshTokenReused
+        exp_alerts: []
+
+  # --- SignInsThrottled (ADR 0061) ------------------------------------------------------------------
+
+  - name: an attack across limits adds up and warns
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_sign_in_throttled_total{service="user", limit="client"}'
+        values: '0 2 4 6 8'
+      - series: 'flashcart_user_sign_in_throttled_total{service="user", limit="account-and-client"}'
+        values: '0 1 2 3 4'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SignInsThrottled
+        exp_alerts:
+          - exp_labels: { severity: warning }
+
+  - name: a few refusals from one forgetful user do not
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_sign_in_throttled_total{service="user", limit="account-and-client"}'
+        values: '0 1 2 3 3 3'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SignInsThrottled
+        exp_alerts: []
+
+  # --- ResetRequestsThrottled (ADR 0061) ------------------------------------------------------------
+
+  - name: one client refused for asking too often warns
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_password_reset_throttled_total{service="user"}'
+        values: '0 0 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ResetRequestsThrottled
+        exp_alerts:
+          - exp_labels: { severity: warning, service: user }
+
+  - name: resets that stay inside the limit do not
+    interval: 1m
+    input_series:
+      - series: 'flashcart_user_password_reset_throttled_total{service="user"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ResetRequestsThrottled
+        exp_alerts: []

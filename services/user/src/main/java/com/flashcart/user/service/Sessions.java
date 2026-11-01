@@ -15,6 +15,7 @@ import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.user.domain.User;
 import com.flashcart.user.repository.UserRepository;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,6 +62,12 @@ public class Sessions {
 		this.tokens = tokens;
 		this.meters = meters;
 		this.refreshTtl = refreshTtl;
+		// Registered now, at zero, not on first use. A counter born at 1 has no earlier sample, and
+		// increase() reads its first value as the baseline: the first theft after every restart -- quite
+		// possibly the only one -- would never fire RefreshTokenReused. ADR 0061.
+		Counter.builder("flashcart.user.refresh.reused")
+				.description("Refresh tokens presented again after use; each one ended a session as stolen")
+				.register(meters);
 	}
 
 	public Duration refreshTtl() {
