@@ -184,3 +184,54 @@ groups:
             flashcart-shipping-cancel consumer group is not lagging, then look for the commands in
             the DLQ. Affected orders:
             select order_number, updated_at from orders where status = 'CANCELLATION_REQUESTED';
+
+      - alert: RefreshTokenReused
+        # A refresh token presented after it was already used. The client that rotated it never sends it
+        # again, so a second presentation means somebody else holds a copy: a stolen session. The user
+        # service has already revoked the whole family (ADR 0059), so nothing here is still open -- this is
+        # for a person to look at what was stolen and how, while the logs still say. One is enough.
+        #
+        # The counter is registered at zero at startup. Created on first use, it would be born at 1, and
+        # increase() reads a series' first sample as its baseline: the first theft after a restart would
+        # never fire this. See ADR 0061.
+        expr: increase(flashcart_user_refresh_reused_total[15m]) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "user: a refresh token was used twice; a session was stolen and has been ended"
+          description: >
+            Somebody presented a refresh token that had already been exchanged. The whole session it
+            belonged to was revoked automatically, and its owner must sign in again. Find which one in
+            the user service's logs ("presented a used token again; revoking the whole family"), then
+            the access log and orders for that account around the same time.
+
+      - alert: SignInsThrottled
+        # Many sign-ins refused for too many recent failures (ADR 0058): password guessing or credential
+        # stuffing in progress. A real user locked out by their own typos accounts for a handful; ten in
+        # ten minutes is somebody trying. The throttle is already holding them off, so this is a ticket,
+        # not a page -- to look at where it comes from, and whether one account is the target.
+        expr: sum(increase(flashcart_user_sign_in_throttled_total[10m])) > 10
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "user: {{ $value | humanize }} sign-ins throttled in 10 minutes"
+          description: >
+            Sign-ins are being refused faster than mistyped passwords explain. By limit:
+            flashcart_user_sign_in_throttled_total{limit=...} -- "account-and-client" is one place
+            guessing one account, "client" is one place trying many (credential stuffing), "account"
+            is many places on one account, which can also keep its owner out for an hour.
+
+      - alert: ResetRequestsThrottled
+        # One client asked for more than ten password resets in an hour (ADR 0060). Nobody who forgot a
+        # password needs that many; somebody trying to make the platform email a list does. The limit is
+        # already holding, so this is a ticket to see who and whether the mail sender's reputation needs
+        # watching.
+        expr: increase(flashcart_user_password_reset_throttled_total[10m]) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "user: password-reset requests are being refused for one client asking too often"
+          description: >
+            A client went past ten reset requests an hour, which looks like the reset form being used
+            to email strangers. The refused requests sent nothing. The user service logs each refusal
+            ("Password reset request refused").

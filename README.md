@@ -573,6 +573,13 @@ is wrong on its own terms, never a metric merely being high. A threshold nobody 
 threshold that gets silenced. Each also has a test — a case that must fire and a healthy one that must
 not — run by `infra/prometheus/test-rules.sh` in CI ([ADR 0042](docs/adr/0042-every-alert-went-quiet-together.md)).
 
+Three of them watch for an attack: `RefreshTokenReused` (a stolen session, already ended), `SignInsThrottled`
+(password guessing or credential stuffing) and `ResetRequestsThrottled` (the reset form used to mail a list).
+All are warnings, because the defence has already acted, and a person should look at who and how. Their
+counters are registered at zero at startup. A counter created on first use is born at 1, which `increase()`
+reads as no change, so the first event after a restart would never fire them. See
+[ADR 0061](docs/adr/0061-the-first-theft-is-the-one-that-counts.md).
+
 There is deliberately **no tracing yet**. Correlation IDs already stitch a checkout together in the
 logs, and a tracing backend earns its container once Phase 11 is injecting failures worth tracing —
 see [ADR 0018](docs/adr/0018-metrics-answer-questions-the-logs-cannot.md).

@@ -66,3 +66,4 @@ when someone revisits it in six months.
 | [0058](0058-a-guess-costs-more-than-a-hash.md) | A guess costs more than a hash | Accepted |
 | [0059](0059-a-session-ends-within-fifteen-minutes.md) | A session ends within fifteen minutes | Accepted |
 | [0060](0060-the-reset-form-is-not-a-mailing-list.md) | The reset form is not a mailing list | Accepted |
+| [0061](0061-the-first-theft-is-the-one-that-counts.md) | The first theft is the one that counts | Accepted |

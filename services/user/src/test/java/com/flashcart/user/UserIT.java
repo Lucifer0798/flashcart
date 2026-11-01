@@ -1,7 +1,7 @@
 package com.flashcart.user;
 
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.common.security.AccessTokens;
@@ -11,6 +11,7 @@ import com.flashcart.user.api.dto.UserDtos.RegisterRequest;
 import com.flashcart.user.api.dto.UserDtos.SignInRequest;
 import com.flashcart.user.api.dto.UserDtos.TokenResponse;
 import com.flashcart.user.api.dto.UserDtos.UserResponse;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -53,6 +54,9 @@ class UserIT {
 
 	@Autowired
 	private UserRepository users;
+
+	@Autowired
+	private MeterRegistry meters;
 
 	// --- who may reach what (ADR 0037) -------------------------------------------------------------
 
@@ -300,6 +304,20 @@ class UserIT {
 		// absent means: had it been read as true, it would have taken the default from the first.
 		assertThat(first.getBody()).containsEntry("isDefault", true);
 		assertThat(second.getBody()).containsEntry("isDefault", false);
+	}
+
+	@Test
+	@DisplayName("the security counters exist at zero from startup, so the alerts on them can see the first event")
+	void securityCountersStartAtZero() {
+		// Nothing in this class reuses a refresh token or gets throttled, so a counter that is here was
+		// registered at startup rather than created by an event. One born at 1 on first use would be
+		// invisible to the increase() its alert takes (ADR 0061).
+		assertThat(meters.find("flashcart.user.refresh.reused").counter()).isNotNull()
+				.satisfies(counter -> assertThat(counter.count()).isZero());
+		for (String limit : List.of("account-and-client", "client", "account")) {
+			assertThat(meters.find("flashcart.user.sign-in.throttled").tag("limit", limit).counter()).as(limit).isNotNull();
+		}
+		assertThat(meters.find("flashcart.user.password-reset.throttled").counter()).isNotNull();
 	}
 
 	@Test
