@@ -134,6 +134,24 @@ class PasswordResetIT {
 	}
 
 	@Test
+	@DisplayName("the owner is emailed once their password has been changed, so a reset that was not theirs is seen")
+	void theOwnerIsToldOfTheChange() {
+		String email = register();
+		request(email);
+		sender.sendDue();
+		String token = tokenIn(mail.sent.get(0));
+		mail.sent.clear();
+
+		assertThat(confirm(token, NEW).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+		sender.sendDue();
+
+		assertThat(mail.sent).hasSize(1);
+		assertThat(mail.sent.get(0).getTo()).containsExactly(email);
+		assertThat(mail.sent.get(0).getSubject()).isEqualTo("Your FlashCart password was changed");
+		assertThat(mail.sent.get(0).getText()).contains("If it wasn't, reset your password again now");
+	}
+
+	@Test
 	@DisplayName("asking for an address with no account looks exactly the same, and sends nothing")
 	void askingRevealsNothing() {
 		String email = register();

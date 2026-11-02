@@ -143,6 +143,19 @@ public class AttemptThrottle {
 		jdbc.update("delete from throttled_attempts where key_hash = ?", key(pair, email, clientAddress));
 	}
 
+	/**
+	 * After a password reset: the account-wide failures for this address, and this client's for it, no
+	 * longer count. ADR 0058 named the reset as the owner's way back while an attack holds the account
+	 * limit, but that limit counts by address, not by password, so before this a reset left the owner
+	 * locked out for up to an hour. Only somebody who can read the address's mail can confirm a reset, so
+	 * this cannot be used to clear an attack's count. Other clients' counts for the address cannot be
+	 * found -- each is hashed with its client -- and they hold only those clients back. ADR 0062.
+	 */
+	public void clearAfterReset(String email, String clientAddress) {
+		jdbc.update("delete from throttled_attempts where key_hash in (?, ?)", key(account, email, clientAddress),
+				key(pair, email, clientAddress));
+	}
+
 	/** Failures older than the longest window can no longer count, and are deleted. */
 	@Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT1M")
 	public void prune() {

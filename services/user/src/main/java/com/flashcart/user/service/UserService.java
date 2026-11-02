@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import com.flashcart.common.error.BadRequestException;
 import com.flashcart.common.error.ConflictException;
 import com.flashcart.common.error.ResourceNotFoundException;
 import com.flashcart.common.error.UnauthenticatedException;
@@ -51,6 +52,11 @@ public class UserService {
 	@Transactional
 	public User register(String email, String rawPassword, String displayName) {
 		String normalised = email.trim().toLowerCase();
+		// A domain reserved never to receive mail (RFC 2606), and the one a closed account's placeholder lives
+		// at. Holding one would make that account's closure fail. The database refuses it too. ADR 0062.
+		if (normalised.endsWith(".invalid")) {
+			throw new BadRequestException("EMAIL_UNDELIVERABLE", "That address cannot receive email");
+		}
 		if (users.existsByEmail(normalised)) {
 			throw new ConflictException("EMAIL_TAKEN", "An account already exists for that email");
 		}
@@ -128,10 +134,16 @@ public class UserService {
 	 * kept about the account are deleted, and {@code AccountClosed} goes to the outbox. Either all of it
 	 * happens or none of it, and the other services are told only about a closure that committed.
 	 */
-	@Transactional
-	public void close(UUID id, String rawPassword) {
+	// No rollback for a wrong password: the failure it records must outlive the refusal, or a password could
+	// be guessed here at full speed. Nothing else is written before that point. ADR 0062.
+	@Transactional(noRollbackFor = UnauthenticatedException.class)
+	public void close(UUID id, String rawPassword, String clientAddress) {
 		User user = require(id);
+		// The same throttle as sign-in, and the same counts: a password check is a password check, and one
+		// left unthrottled is the way round the others (ADR 0058, ADR 0062).
+		throttle.check(user.getEmail(), clientAddress);
 		if (!passwords.matches(rawPassword, user.getPasswordHash())) {
+			throttle.failed(user.getEmail(), clientAddress);
 			log.info("Refused to close account {}: wrong password", id);
 			throw new UnauthenticatedException();
 		}

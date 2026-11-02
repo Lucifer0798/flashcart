@@ -136,7 +136,7 @@ class SessionsIT {
 				select r.id::text from password_resets r join users u on u.id = r.user_id where u.email = ?""",
 				String.class, email);
 		String link = resets.mint(resetId).orElseThrow();
-		resets.confirm(link.substring(link.indexOf("token=") + "token=".length()), "a-brand-new-password");
+		resets.confirm(link.substring(link.indexOf("token=") + "token=".length()), "a-brand-new-password", "203.0.113.7");
 
 		assertThat(refresh(intruder).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 	}

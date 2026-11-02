@@ -166,8 +166,9 @@ public class UserController {
 			@ApiResponse(responseCode = "400", description = "RESET_TOKEN_INVALID -- unknown, expired or already "
 					+ "used, deliberately not told apart; or the new password is too short")
 	})
-	public ResponseEntity<Void> confirmReset(@Valid @RequestBody PasswordResetConfirmation request) {
-		resets.confirm(request.token(), request.newPassword());
+	public ResponseEntity<Void> confirmReset(@Valid @RequestBody PasswordResetConfirmation request,
+			HttpServletRequest http) {
+		resets.confirm(request.token(), request.newPassword(), clientAddress(http));
 		return ResponseEntity.noContent().build();
 	}
 
@@ -211,8 +212,8 @@ public class UserController {
 					+ "is already closed")
 	})
 	public ResponseEntity<Void> close(@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-			@Valid @RequestBody CloseRequest request) {
-		users.close(caller(authorization), request.password());
+			@Valid @RequestBody CloseRequest request, HttpServletRequest http) {
+		users.close(caller(authorization), request.password(), clientAddress(http));
 		return ResponseEntity.noContent().build();
 	}
 
