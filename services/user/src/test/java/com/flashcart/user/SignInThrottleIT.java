@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.user.service.AttemptThrottle;
+import com.flashcart.user.service.PasswordResets;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -56,6 +57,9 @@ class SignInThrottleIT {
 
 	@Autowired
 	private AttemptThrottle throttle;
+
+	@Autowired
+	private PasswordResets resets;
 
 	@Test
 	@DisplayName("one client guessing one account is stopped, even when it then guesses right; the owner elsewhere is not")
@@ -183,6 +187,50 @@ class SignInThrottleIT {
 		assertThat(signIn(email, PASSWORD, "10.9.9.9, " + real).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 	}
 
+	// --- review fixes (ADR 0062) -----------------------------------------------------------------------
+
+	@Test
+	@DisplayName("a password reset lets the owner back in while an attack holds the account limit")
+	void aResetLiftsTheAccountLockout() {
+		String email = register();
+		for (int i = 0; i < 9; i++) {
+			signIn(email, "wrong-" + i, client());
+		}
+		String owner = client();
+		assertThat(signIn(email, PASSWORD, owner).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+		resets.request(email, owner);
+		String resetId = jdbc.queryForObject("""
+				select r.id::text from password_resets r join users u on u.id = r.user_id where u.email = ?""",
+				String.class, email);
+		String link = resets.mint(resetId).orElseThrow();
+		resets.confirm(link.substring(link.indexOf("token=") + "token=".length()), "a-brand-new-password", owner);
+
+		// Before ADR 0062, still 429: the account limit counts by address, and the reset did not touch it.
+		assertThat(signIn(email, "a-brand-new-password", owner).getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(signIn(email, "a-brand-new-password", client()).getStatusCode()).isEqualTo(HttpStatus.OK);
+	}
+
+	@Test
+	@DisplayName("closing an account checks the password under the same throttle as sign-in")
+	void closingIsThrottled() {
+		String email = register();
+		String here = client();
+		HttpHeaders signedIn = new HttpHeaders();
+		signedIn.setBearerAuth((String) signIn(email, PASSWORD, client()).getBody().get("accessToken"));
+		signedIn.set("X-Forwarded-For", here);
+		for (int i = 0; i < 3; i++) {
+			assertThat(close(signedIn, "wrong-" + i).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		// Refused even with the right password, as sign-in is, and the account is still open.
+		assertThat(close(signedIn, PASSWORD).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+		assertThat(jdbc.queryForObject("select status from users where email = ?", String.class, email))
+				.isEqualTo("ACTIVE");
+		// The same counts: those failures hold sign-in back from here too, so neither path is a way round.
+		assertThat(signIn(email, PASSWORD, here).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+	}
+
 	// --- password reset requests (ADR 0060) -------------------------------------------------------------
 
 	@Test
@@ -271,6 +319,11 @@ class SignInThrottleIT {
 		assertThat(rest.postForEntity("/api/v1/users", Map.of("email", email, "password", PASSWORD, "displayName", "T"),
 				Map.class).getStatusCode()).isEqualTo(HttpStatus.CREATED);
 		return email;
+	}
+
+	private ResponseEntity<Map> close(HttpHeaders headers, String password) {
+		return rest.exchange("/api/v1/users/me/close", HttpMethod.POST, new HttpEntity<>(Map.of("password", password),
+				headers), Map.class);
 	}
 
 	private ResponseEntity<Map> requestReset(String email, String forwardedFor) {

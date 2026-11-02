@@ -705,6 +705,10 @@ id, the token is minted as the email is sent, and only its hash is kept. Neither
 support's view of a customer's emails ever holds a working link. Tokens already issued for signing in
 are not revoked by a reset. See [ADR 0057](docs/adr/0057-a-forgotten-password-is-not-a-lost-account.md).
 
+A reset also lifts the account-wide sign-in lockout an attacker may be holding, and emails the owner that
+the password changed, so a reset that was not theirs does not go unseen. See
+[ADR 0062](docs/adr/0062-the-gaps-between-the-pieces.md).
+
 One client may ask for **10 resets an hour**, whatever the addresses, so the form cannot be used to make
 the platform email strangers. Past that, `429 TOO_MANY_ATTEMPTS` with `Retry-After`. Every request counts,
 including those for addresses with no account, so the limit says nothing about who has one. See

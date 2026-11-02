@@ -28,6 +28,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The user service against a real PostgreSQL.
@@ -57,6 +58,9 @@ class UserIT {
 
 	@Autowired
 	private MeterRegistry meters;
+
+	@Autowired
+	private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
 	// --- who may reach what (ADR 0037) -------------------------------------------------------------
 
@@ -124,6 +128,21 @@ class UserIT {
 	}
 
 	// --- registration ---------------------------------------------------------------------------
+
+	@Test
+	@DisplayName("an address at .invalid cannot be registered, so nobody can hold a closed account's placeholder")
+	void undeliverableAddressesAreRefused() {
+		for (String email : List.of("closed-" + UUID.randomUUID() + "@closed.invalid", "someone@example.INVALID")) {
+			ResponseEntity<Map> refused = rest.postForEntity("/api/v1/users",
+					new RegisterRequest(email, "a-sufficiently-long-password", "Squatter"), Map.class);
+			assertThat(refused.getStatusCode()).as(email).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(refused.getBody()).as(email).containsEntry("code", "EMAIL_UNDELIVERABLE");
+		}
+		// And the database, for an UPDATE typed by hand: only a closed account may hold one.
+		UserResponse open = register(uniqueEmail());
+		assertThatThrownBy(() -> jdbc.update("update users set email = 'x@nowhere.invalid' where id = ?::uuid",
+				open.id().toString())).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+	}
 
 	@Test
 	@DisplayName("registering returns the account without ever echoing the password")

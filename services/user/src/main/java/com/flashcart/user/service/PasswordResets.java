@@ -143,7 +143,7 @@ public class PasswordResets {
 	 * account no longer active -- is the same 400.
 	 */
 	@Transactional
-	public void confirm(String token, String newPassword) {
+	public void confirm(String token, String newPassword, String clientAddress) {
 		// Claimed and spent in one statement, so two uses racing each other cannot both succeed.
 		List<UUID> claimed = jdbc.queryForList("""
 				update password_resets r set used_at = now()
@@ -163,6 +163,13 @@ public class PasswordResets {
 		// Any other link still in somebody's inbox stops working too.
 		int others = jdbc.update("update password_resets set used_at = now() where user_id = ? and used_at is null",
 				userId);
+		// The attack the reset escaped stops holding the owner out (ADR 0062).
+		throttle.clearAfterReset(user.getEmail(), clientAddress);
+		// And the owner is told. A reset is how an account is taken over as well as how it is recovered, and
+		// this email is the owner's one signal if it was not them. Keyed by the reset, so one email per reset.
+		Instant now = Instant.now();
+		notices.receive(new Notice("password-changed:" + userId + ":" + now.toEpochMilli(), NoticeKind.PASSWORD_CHANGED,
+				userId.toString(), null, now, Map.of(), now.plus(Duration.ofDays(1))));
 		log.info("Password reset for {}; {} other outstanding reset(s) cancelled", userId, others);
 	}
 
