@@ -93,6 +93,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0034](adr/0034-who-read-my-data.md) — Who read my data
 - [0056](adr/0056-a-customer-sees-that-staff-looked.md) — A customer sees that staff looked
 - [0062](adr/0062-the-gaps-between-the-pieces.md) — The gaps between the pieces
+- [0063](adr/0063-changing-a-password-you-know.md) — Changing a password you know
 - [0057](adr/0057-a-forgotten-password-is-not-a-lost-account.md) — A forgotten password is not a lost account
 - [0058](adr/0058-a-guess-costs-more-than-a-hash.md) — A guess costs more than a hash
 - [0059](adr/0059-a-session-ends-within-fifteen-minutes.md) — A session ends within fifteen minutes

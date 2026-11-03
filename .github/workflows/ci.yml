@@ -592,6 +592,32 @@ jobs:
           test "$(refresh "$THIRD")" = "401" || { echo "a session outlived signing out everywhere"; exit 1; }
           echo "refreshed once, reuse caught, signed out everywhere"
 
+      - name: A signed-in password change ends the old sessions and hands over a new one
+        run: |
+          set -e
+          G=http://localhost:18080
+          # Through the gateway. The change is a signed-in path in the user service's filter, and it answers
+          # with the session to carry on with. See ADR 0063.
+          EMAIL="ci-change-$(date +%s)@example.test"; OLD="the-original-password"; NEW="a-brand-new-password"
+          curl -sf -o /dev/null -X POST $G/api/v1/users -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$EMAIL\",\"password\":\"$OLD\",\"displayName\":\"CI Change\"}"
+          field() { python3 -c "import json,sys; print(json.load(sys.stdin)['$1'])"; }
+          SESSION=$(curl -sf -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$OLD\"}")
+          ACCESS=$(echo "$SESSION" | field accessToken); OLD_REFRESH=$(echo "$SESSION" | field refreshToken)
+
+          CODE=$(curl -s -o /tmp/c.json -w '%{http_code}' -X POST $G/api/v1/users/me/password -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $ACCESS" -d "{\"currentPassword\":\"$OLD\",\"newPassword\":\"$NEW\"}")
+          test "$CODE" = "200" || { echo "change: $CODE $(cat /tmp/c.json)"; exit 1; }
+          NEW_REFRESH=$(field refreshToken < /tmp/c.json)
+
+          refresh() { curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/sessions/refresh -H 'Content-Type: application/json' -d "{\"refreshToken\":\"$1\"}"; }
+          test "$(refresh "$OLD_REFRESH")" = "401" || { echo "the old session outlived the change"; exit 1; }
+          test "$(refresh "$NEW_REFRESH")" = "200"
+          signin() { curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$1\"}"; }
+          test "$(signin "$NEW")" = "200"
+          test "$(signin "$OLD")" = "401"
+          echo "changed while signed in; the old session ended, the new one works"
+
       - name: Guessing a password is throttled at the edge, per client, as the gateway sees it
         run: |
           set -e

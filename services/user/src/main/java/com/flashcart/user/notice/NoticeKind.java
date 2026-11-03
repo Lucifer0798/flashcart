@@ -104,8 +104,15 @@ public enum NoticeKind {
 	PASSWORD_CHANGED {
 		@Override
 		Email render(String name, String orderNumber, Map<String, Object> payload, Instant sendBefore) {
-			// The owner's one signal that a reset was not theirs. It says what to do, because the person
-			// reading it may have just lost the account. ADR 0062.
+			// The owner's one signal that a change was not theirs. It says what to do, because the person
+			// reading it may have just lost the account. ADR 0062, and ADR 0063 for a change made signed in.
+			if ("signed-in".equals(payload.get("via"))) {
+				return new Email("Your FlashCart password was changed",
+						"The password for this account was just changed by someone signed in to it, and every other "
+								+ "device has been signed out.\n\nIf that was you, there is nothing to do.\n\nIf it "
+								+ "wasn't, reset your password now with \"Forgot password\": whoever did this was "
+								+ "signed in as you, and knew your old password.", name);
+			}
 			return new Email("Your FlashCart password was changed",
 					"The password for this account was just changed with a reset link, and every device that was "
 							+ "signed in has been signed out.\n\nIf that was you, there is nothing to do.\n\nIf it "
