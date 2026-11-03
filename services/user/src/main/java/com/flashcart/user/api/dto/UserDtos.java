@@ -88,6 +88,11 @@ public final class UserDtos {
 			@NotBlank @Size(min = 12, max = 200) String newPassword) {
 	}
 
+	/** The current password, and the one to set instead. Length only, as at registration. ADR 0063. */
+	public record ChangePasswordRequest(@NotBlank @Size(max = 200) String currentPassword,
+			@NotBlank @Size(min = 12, max = 200) String newPassword) {
+	}
+
 	/** The current password, asked for again because closing cannot be undone. */
 	public record CloseRequest(@NotBlank String password) {
 	}

@@ -1,7 +1,9 @@
 package com.flashcart.user.service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.common.error.BadRequestException;
@@ -15,6 +17,8 @@ import com.flashcart.common.event.message.AccountClosed;
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.user.domain.Address;
 import com.flashcart.user.domain.User;
+import com.flashcart.user.notice.NoticeKind;
+import com.flashcart.user.notice.Notices;
 import com.flashcart.user.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,11 +41,13 @@ public class UserService {
 	private final EventPublisher events;
 	private final AttemptThrottle throttle;
 	private final Sessions sessions;
+	private final Notices notices;
 
 	public UserService(UserRepository users, PasswordEncoder passwords, AccessTokens tokens, JdbcTemplate jdbc,
-			EventPublisher events, AttemptThrottle throttle, Sessions sessions) {
+			EventPublisher events, AttemptThrottle throttle, Sessions sessions, Notices notices) {
 		this.throttle = throttle;
 		this.sessions = sessions;
+		this.notices = notices;
 		this.users = users;
 		this.passwords = passwords;
 		this.tokens = tokens;
@@ -107,6 +113,40 @@ public class UserService {
 	 * @throws UnauthenticatedException for a closed account: its tokens stay valid until they expire, and
 	 *                                  the account they name is no longer one anybody can use (ADR 0053)
 	 */
+	/**
+	 * Changes the password of an account somebody is signed in to. See ADR 0063.
+	 *
+	 * <p>The current password is asked for as well as the token, so a stolen session cannot lock its owner
+	 * out by changing the password, and it is checked under the sign-in throttle with the same counts, as
+	 * closing an account is (ADR 0062). Every session ends -- whoever else had the old password may have
+	 * one -- and the caller is handed a new one, because an access token does not say which refresh token
+	 * is this caller's. The owner is emailed, as for a reset.
+	 *
+	 * @return the session to carry on with
+	 */
+	// No rollback for a wrong password, so the failure it records outlives the refusal (ADR 0062).
+	@Transactional(noRollbackFor = UnauthenticatedException.class)
+	public Sessions.Session changePassword(UUID id, String currentPassword, String newPassword, String clientAddress) {
+		User user = require(id);
+		throttle.check(user.getEmail(), clientAddress);
+		if (!passwords.matches(currentPassword, user.getPasswordHash())) {
+			throttle.failed(user.getEmail(), clientAddress);
+			log.info("Refused to change the password of {}: wrong current password", id);
+			throw new UnauthenticatedException();
+		}
+		if (passwords.matches(newPassword, user.getPasswordHash())) {
+			throw new BadRequestException("PASSWORD_UNCHANGED", "The new password is the same as the current one");
+		}
+		throttle.succeeded(user.getEmail(), clientAddress);
+		user.changePassword(passwords.encode(newPassword));
+		sessions.revokeAll(id, "password changed");
+		Instant now = Instant.now();
+		notices.receive(new Notices.Notice("password-changed:" + id + ":" + now.toEpochMilli(), NoticeKind.PASSWORD_CHANGED,
+				id.toString(), null, now, Map.of("via", "signed-in"), now.plus(Duration.ofDays(1))));
+		log.info("Password changed for {} by a signed-in caller; every other session ended", id);
+		return sessions.start(user);
+	}
+
 	/** Every session of this account ends at its next refresh, this one included. ADR 0059. */
 	@Transactional
 	public void signOutEverywhere(UUID id) {

@@ -9,6 +9,7 @@ import com.flashcart.common.error.UnauthenticatedException;
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.user.api.dto.UserDtos.AddressRequest;
 import com.flashcart.user.api.dto.UserDtos.AddressResponse;
+import com.flashcart.user.api.dto.UserDtos.ChangePasswordRequest;
 import com.flashcart.user.api.dto.UserDtos.CloseRequest;
 import com.flashcart.user.api.dto.UserDtos.PasswordResetConfirmation;
 import com.flashcart.user.api.dto.UserDtos.PasswordResetRequest;
@@ -117,6 +118,24 @@ public class UserController {
 	public ResponseEntity<Void> signOut(@Valid @RequestBody RefreshRequest request) {
 		sessions.signOut(request.refreshToken());
 		return ResponseEntity.noContent().build();
+	}
+
+	@PostMapping("/me/password")
+	@Operation(summary = "Change the password of the signed-in account",
+			description = "Needs the current password as well as the token, checked under the sign-in "
+					+ "throttle. Every session ends, this one's refresh token included, and the response is a "
+					+ "new session to carry on with. The owner is emailed. See ADR 0063.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "200", description = "Changed; a new access and refresh token"),
+			@ApiResponse(responseCode = "400", description = "PASSWORD_UNCHANGED, or a new password too short"),
+			@ApiResponse(responseCode = "401", description = "INVALID_CREDENTIALS -- the current password is wrong"),
+			@ApiResponse(responseCode = "429", description = "TOO_MANY_ATTEMPTS -- the sign-in throttle holds")
+	})
+	public TokenResponse changePassword(
+			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+			@Valid @RequestBody ChangePasswordRequest request, HttpServletRequest http) {
+		return response(users.changePassword(caller(authorization), request.currentPassword(), request.newPassword(),
+				clientAddress(http)));
 	}
 
 	@PostMapping("/me/sign-out-everywhere")

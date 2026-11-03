@@ -169,7 +169,7 @@ public class PasswordResets {
 		// this email is the owner's one signal if it was not them. Keyed by the reset, so one email per reset.
 		Instant now = Instant.now();
 		notices.receive(new Notice("password-changed:" + userId + ":" + now.toEpochMilli(), NoticeKind.PASSWORD_CHANGED,
-				userId.toString(), null, now, Map.of(), now.plus(Duration.ofDays(1))));
+				userId.toString(), null, now, Map.of("via", "reset"), now.plus(Duration.ofDays(1))));
 		log.info("Password reset for {}; {} other outstanding reset(s) cancelled", userId, others);
 	}
 

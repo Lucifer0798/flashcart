@@ -151,6 +151,67 @@ class PasswordResetIT {
 		assertThat(mail.sent.get(0).getText()).contains("If it wasn't, reset your password again now");
 	}
 
+	// --- changing a known password while signed in (ADR 0063) -----------------------------------------
+
+	@Test
+	@DisplayName("a signed-in owner changes their password: every old session ends, this caller gets a new one, and is told")
+	void changingAKnownPassword() {
+		String email = register();
+		Map<String, Object> laptop = session(email, OLD);
+		Map<String, Object> phone = session(email, OLD);
+
+		ResponseEntity<Map> changed = changePassword((String) phone.get("accessToken"), OLD, NEW, "203.0.113.20");
+
+		assertThat(changed.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(signIn(email, NEW)).isEqualTo(HttpStatus.OK);
+		assertThat(signIn(email, OLD)).isEqualTo(HttpStatus.UNAUTHORIZED);
+		// Every session that existed ends, the caller's own included, and the caller carries on with the new one.
+		assertThat(refresh((String) laptop.get("refreshToken"))).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(refresh((String) phone.get("refreshToken"))).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(refresh((String) changed.getBody().get("refreshToken"))).isEqualTo(HttpStatus.OK);
+
+		sender.sendDue();
+		assertThat(mail.sent).hasSize(1);
+		assertThat(mail.sent.get(0).getTo()).containsExactly(email);
+		assertThat(mail.sent.get(0).getSubject()).isEqualTo("Your FlashCart password was changed");
+		assertThat(mail.sent.get(0).getText()).contains("changed by someone signed in to it");
+	}
+
+	@Test
+	@DisplayName("a wrong current password, the same password again, a short one or no token change nothing")
+	void changeRefusals() {
+		String email = register();
+		String token = (String) session(email, OLD).get("accessToken");
+
+		ResponseEntity<Map> wrong = changePassword(token, "not-the-password", NEW, "203.0.113.21");
+		assertThat(wrong.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(wrong.getBody()).containsEntry("code", "INVALID_CREDENTIALS");
+		ResponseEntity<Map> same = changePassword(token, OLD, OLD, "203.0.113.21");
+		assertThat(same.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+		assertThat(same.getBody()).containsEntry("code", "PASSWORD_UNCHANGED");
+		assertThat(changePassword(token, OLD, "short", "203.0.113.21").getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+		assertThat(changePassword(null, OLD, NEW, "203.0.113.21").getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+		assertThat(signIn(email, OLD)).isEqualTo(HttpStatus.OK);
+		sender.sendDue();
+		assertThat(mail.sent).isEmpty();
+	}
+
+	@Test
+	@DisplayName("guessing the current password is throttled like sign-in, so a stolen session cannot find it")
+	void changeIsThrottled() {
+		String email = register();
+		String token = (String) session(email, OLD).get("accessToken");
+		for (int i = 0; i < 5; i++) {
+			assertThat(changePassword(token, "guess-" + i, NEW, "203.0.113.22").getStatusCode())
+					.isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		// Refused even with the right one, and the password is unchanged.
+		assertThat(changePassword(token, OLD, NEW, "203.0.113.22").getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+		assertThat(signIn(email, OLD)).isEqualTo(HttpStatus.OK);
+	}
+
 	@Test
 	@DisplayName("asking for an address with no account looks exactly the same, and sends nothing")
 	void askingRevealsNothing() {
@@ -321,6 +382,29 @@ class PasswordResetIT {
 		assertThat(rest.postForEntity("/api/v1/users", Map.of("email", email, "password", OLD, "displayName", "Forgetful"),
 				Map.class).getStatusCode()).isEqualTo(HttpStatus.CREATED);
 		return email;
+	}
+
+	@SuppressWarnings("unchecked")
+	private Map<String, Object> session(String email, String password) {
+		ResponseEntity<Map> response = rest.postForEntity("/api/v1/users/sessions", Map.of("email", email, "password", password),
+				Map.class);
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		return response.getBody();
+	}
+
+	private ResponseEntity<Map> changePassword(String accessToken, String current, String next, String client) {
+		HttpHeaders headers = new HttpHeaders();
+		if (accessToken != null) {
+			headers.setBearerAuth(accessToken);
+		}
+		headers.set("X-Forwarded-For", client);
+		return rest.exchange("/api/v1/users/me/password", HttpMethod.POST,
+				new HttpEntity<>(Map.of("currentPassword", current, "newPassword", next), headers), Map.class);
+	}
+
+	private HttpStatus refresh(String refreshToken) {
+		return HttpStatus.valueOf(rest.postForEntity("/api/v1/users/sessions/refresh", Map.of("refreshToken", refreshToken),
+				Map.class).getStatusCode().value());
 	}
 
 	private String idOf(String email) {

@@ -679,6 +679,11 @@ is withdrawn is the next one, so every session ends within fifteen minutes. A re
 again, so a granted or revoked staff role takes effect within the same window. See
 [ADR 0059](docs/adr/0059-a-session-ends-within-fifteen-minutes.md).
 
+To change a password you know, `POST /api/v1/users/me/password` with `currentPassword` and `newPassword`.
+The current password is checked under the sign-in throttle. Every session ends, including this one's refresh
+token, and the response is a new session to carry on with. The owner is emailed that the password changed.
+See [ADR 0063](docs/adr/0063-changing-a-password-you-know.md).
+
 ### Guessing a password
 
 Failed sign-ins are limited three ways: **5 per 15 minutes** for one account from one client, **30 per 15

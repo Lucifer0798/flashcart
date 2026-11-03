@@ -68,3 +68,4 @@ when someone revisits it in six months.
 | [0060](0060-the-reset-form-is-not-a-mailing-list.md) | The reset form is not a mailing list | Accepted |
 | [0061](0061-the-first-theft-is-the-one-that-counts.md) | The first theft is the one that counts | Accepted |
 | [0062](0062-the-gaps-between-the-pieces.md) | The gaps between the pieces | Accepted |
+| [0063](0063-changing-a-password-you-know.md) | Changing a password you know | Accepted |
