@@ -863,6 +863,14 @@ and only an announcement already too old to send is safe to forget
 curl "localhost:18080/api/v1/user/_notices?email=shopper@example.test" -H "Authorization: Bearer $SUPPORT"
 ```
 
+Each email carries its `key`, and support can **send it again** with
+`POST /api/v1/user/_notices/{key}/resend`, but only an email that is still true. Order emails and "password
+was changed" can always go again. A back-in-stock email can go only while its hold lasts. A reset link is
+never resent: the customer asks for a new one. Nothing goes to a closed account. A stuck email is retried at
+once. A sent or skipped one is queued again as a new email, so the original keeps its history. Every resend
+is recorded, and the customer sees it in their own access log. See
+[ADR 0064](docs/adr/0064-sending-it-again.md).
+
 **An operator may read another customer's order, and not cancel it.** Reading discloses facts the
 payment and parcel already expose — the customer, the order number, the amount, the shipped lines —
 so refusing it withheld a flash-sale id while leaving support unable to answer "where is my order".

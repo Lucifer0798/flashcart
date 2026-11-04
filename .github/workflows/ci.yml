@@ -487,6 +487,19 @@ jobs:
           echo "the shopper sees: $SAW"
           test "$SAW" = "READ_NOTICES False"
 
+          # And support can send the refund email again, which arrives as a second copy (ADR 0064).
+          KEY=$(curl -sf "$G/api/v1/user/_notices?email=$ME&orderNumber=$ORDER" -H "Authorization: Bearer $SUPPORT" \
+            | python3 -c "import json,sys; print(next(n['key'] for n in json.load(sys.stdin) if n['kind'] == 'REFUNDED'))")
+          CODE=$(curl -s -o /tmp/rs.json -w '%{http_code}' -X POST "$G/api/v1/user/_notices/$KEY/resend" -H "Authorization: Bearer $SUPPORT")
+          echo "resend $KEY: $CODE $(cat /tmp/rs.json | head -c 120)"
+          test "$CODE" = "202"
+          for i in $(seq 1 30); do
+            COPIES=$(search | python3 -c "import json,sys; print(len(json.load(sys.stdin)['messages']))")
+            if [ "$COPIES" = "2" ]; then break; fi
+            sleep 2
+          done
+          test "$COPIES" = "2" || { echo "the resent refund email never arrived ($COPIES)"; exit 1; }
+
       - name: A sold-out SKU's queue hears when stock comes back, and gets the unit
         run: |
           set -e

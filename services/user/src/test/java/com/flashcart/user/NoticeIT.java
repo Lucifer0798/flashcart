@@ -558,6 +558,133 @@ class NoticeIT {
 				shopper.id())).isZero();
 	}
 
+	// --- support resends (ADR 0064) -------------------------------------------------------------------
+
+	@Test
+	@DisplayName("a sent order email is sent again as a new one, and the original keeps its history")
+	void resendingASentEmail() {
+		Shopper shopper = register();
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE), "FC-RSND0001", shopper.id()));
+		sender.sendDue();
+		assertThat(mail.sent).hasSize(1);
+
+		ResponseEntity<Map> resent = resend("order-confirmed:FC-RSND0001", support());
+		assertThat(resent.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		assertThat(resent.getBody()).containsEntry("outcome", "QUEUED");
+		String copy = (String) ((Map<?, ?>) resent.getBody().get("email")).get("key");
+		assertThat(copy).startsWith("order-confirmed:FC-RSND0001:resend:");
+		sender.sendDue();
+
+		assertThat(mail.sent).hasSize(2);
+		assertThat(mail.sent.get(1).getSubject()).isEqualTo("Order FC-RSND0001 confirmed");
+		assertThat(row("order-confirmed:FC-RSND0001")).containsEntry("status", "SENT");
+		assertThat(row(copy)).containsEntry("status", "SENT");
+	}
+
+	@Test
+	@DisplayName("an email stuck behind a refusing mail server is retried now, in place, not at the end of its backoff")
+	void retryingAStuckEmail() {
+		Shopper shopper = register();
+		mail.down = true;
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE), "FC-RSND0002", shopper.id()));
+		sender.sendDue();
+		mail.down = false;
+		sender.sendDue();
+		assertThat(mail.sent).isEmpty();
+
+		assertThat(resend("order-confirmed:FC-RSND0002", support()).getBody()).containsEntry("outcome", "RETRIED");
+		sender.sendDue();
+
+		assertThat(mail.sent).hasSize(1);
+		assertThat(jdbc.queryForObject("select count(*) from notices where order_number = 'FC-RSND0002'", Integer.class))
+				.isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("an order email skipped as stale goes again, since what it says is still true")
+	void resendingAStaleOrderEmail() {
+		Shopper shopper = register();
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE, Instant.now().minus(Duration.ofDays(2))),
+				"FC-RSND0003", shopper.id()));
+		sender.sendDue();
+		assertThat(row("order-confirmed:FC-RSND0003")).containsEntry("skip_reason", "STALE");
+
+		assertThat(resend("order-confirmed:FC-RSND0003", support()).getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		sender.sendDue();
+
+		assertThat(mail.sent).hasSize(1);
+	}
+
+	@Test
+	@DisplayName("a back-in-stock email goes again while its hold lasts, and not once the unit has gone to the next in line")
+	void backInStockOnlyWhileHeld() {
+		Shopper shopper = register();
+		UUID held = UUID.randomUUID();
+		listener.onBackInStock(backInStock(held, shopper.id(), future()));
+		sender.sendDue();
+		assertThat(resend("back-in-stock:" + held, support()).getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		sender.sendDue();
+		assertThat(mail.sent).hasSize(2);
+
+		UUID lapsed = UUID.randomUUID();
+		listener.onBackInStock(backInStock(lapsed, shopper.id(), future()));
+		sender.sendDue();
+		jdbc.update("update notices set send_before = now() - interval '1 minute' where notice_key = ?",
+				"back-in-stock:" + lapsed);
+		ResponseEntity<Map> refused = resend("back-in-stock:" + lapsed, support());
+		assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(refused.getBody()).containsEntry("code", "HOLD_LAPSED");
+	}
+
+	@Test
+	@DisplayName("a reset link is never sent again, and nothing goes to an account that is not open")
+	void whatIsNeverResent() {
+		Shopper shopper = register();
+		jdbc.update("""
+				insert into notices (notice_key, kind, customer_id, occurred_at, payload, status, sent_at)
+				values ('password-reset:probe-1', 'PASSWORD_RESET', ?, now(), '{"resetId":"x"}', 'SENT', now())""",
+				shopper.id());
+		ResponseEntity<Map> reset = resend("password-reset:probe-1", support());
+		assertThat(reset.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(reset.getBody()).containsEntry("code", "NOT_RESENDABLE");
+
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE), "FC-RSND0005", shopper.id()));
+		sender.sendDue();
+		jdbc.update("update users set status = 'DISABLED' where id = ?::uuid", shopper.id());
+		ResponseEntity<Map> gone = resend("order-confirmed:FC-RSND0005", support());
+		assertThat(gone.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+		assertThat(gone.getBody()).containsEntry("code", "NO_RECIPIENT");
+
+		assertThat(resend("order-confirmed:FC-NOSUCH", support()).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+	}
+
+	@Test
+	@DisplayName("only support resends, every resend is recorded, and the customer can see that staff did it")
+	void resendsAreSupportsAndRecorded() {
+		Shopper shopper = register();
+		listener.onOrderConfirmed(new OrderConfirmed(meta(OrderConfirmed.TYPE), "FC-RSND0006", shopper.id()));
+		sender.sendDue();
+
+		assertThat(resend("order-confirmed:FC-RSND0006", bearer(shopper.id())).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+		assertThat(resend("order-confirmed:FC-RSND0006", bearer("wh-1", AccessTokens.WAREHOUSE)).getStatusCode())
+				.isEqualTo(HttpStatus.FORBIDDEN);
+		// The handler refuses on its own too, called directly, since over HTTP the filter answers first.
+		String customerToken = "Bearer " + tokens.issue(shopper.id(), shopper.email(), List.of());
+		assertThatThrownBy(() -> support.resend(customerToken, "order-confirmed:FC-RSND0006"))
+				.isInstanceOf(OperatorRequiredException.class);
+		String staff = "support-" + UUID.randomUUID();
+		assertThat(resend("order-confirmed:FC-RSND0006", bearer(staff, AccessTokens.SUPPORT)).getStatusCode())
+				.isEqualTo(HttpStatus.ACCEPTED);
+
+		assertThat(jdbc.queryForList("select operator_id, action, resource_id from operator_access_log where customer_id = ?",
+				shopper.id())).containsExactly(Map.of("operator_id", staff, "action", "RESEND_NOTICE",
+						"resource_id", "order-confirmed:FC-RSND0006"));
+		ResponseEntity<List> mine = rest.exchange("/api/v1/user/_access-log/mine", HttpMethod.GET,
+				new HttpEntity<>(bearer(shopper.id())), List.class);
+		assertThat(((Map<?, ?>) mine.getBody().get(0)).get("description"))
+				.isEqualTo("A member of staff sent one of our emails to you again");
+	}
+
 	// --- retention (ADR 0052) ----------------------------------------------------------------------
 
 	@Test
@@ -677,6 +804,11 @@ class NoticeIT {
 				values (?, 'ORDER_CONFIRMED', ?, ?, ?, ?, ?, now() + interval '1 day')""",
 				key, customerId, when, status, "SKIPPED".equals(status) ? "STALE" : null,
 				"SENT".equals(status) ? when : null);
+	}
+
+	private ResponseEntity<Map> resend(String key, HttpHeaders headers) {
+		return rest.exchange("/api/v1/user/_notices/" + key + "/resend", HttpMethod.POST, new HttpEntity<>(headers),
+				Map.class);
 	}
 
 	private HttpHeaders support() {

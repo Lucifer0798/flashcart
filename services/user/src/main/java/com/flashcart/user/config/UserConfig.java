@@ -130,6 +130,7 @@ public class UserConfig {
 						// this only keeps everyone else from reaching it.
 						Map.of(AccessTokens.SUPPORT, List.of(
 								"GET /api/v1/user/_notices",
+								"POST /api/v1/user/_notices/*/resend",
 								"GET /api/v1/user/_access-log"))));
 		registration.addUrlPatterns("/*");
 		// After the correlation id filter, so a refusal is still traceable to a request.
