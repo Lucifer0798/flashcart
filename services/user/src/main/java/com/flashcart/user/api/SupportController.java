@@ -1,6 +1,8 @@
 package com.flashcart.user.api;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.common.error.BadRequestException;
@@ -10,6 +12,7 @@ import com.flashcart.common.security.CallerIdentity;
 import com.flashcart.common.security.OperatorAccessLog;
 import com.flashcart.common.security.OperatorAccessLogReader;
 import com.flashcart.user.notice.NoticeHistory;
+import com.flashcart.user.notice.NoticeResends;
 import com.flashcart.user.repository.UserRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -20,8 +23,11 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -42,14 +48,19 @@ public class SupportController {
 	/** What a member of staff reading a customer's emails is recorded as having done. */
 	public static final String READ_NOTICES = "READ_NOTICES";
 
+	/** What a member of staff sending a customer's email again is recorded as having done. ADR 0064. */
+	public static final String RESEND_NOTICE = "RESEND_NOTICE";
+
 	private final CallerIdentity caller;
 	private final OperatorAccessLog accessLog;
 	private final OperatorAccessLogReader accessLogReader;
 	private final NoticeHistory notices;
+	private final NoticeResends resends;
 	private final UserRepository users;
 
 	public SupportController(CallerIdentity caller, OperatorAccessLog accessLog,
-			OperatorAccessLogReader accessLogReader, NoticeHistory notices, UserRepository users) {
+			OperatorAccessLogReader accessLogReader, NoticeHistory notices, NoticeResends resends, UserRepository users) {
+		this.resends = resends;
 		this.caller = caller;
 		this.accessLog = accessLog;
 		this.accessLogReader = accessLogReader;
@@ -93,6 +104,41 @@ public class SupportController {
 		// Before the read, not after: the record exists before anything is disclosed (ADR 0025).
 		accessLog.record(staff, READ_NOTICES, orderNumber, customer);
 		return notices.forCustomer(customer, orderNumber, limit);
+	}
+
+	@PostMapping("/_notices/{key}/resend")
+	@Operation(summary = "Send a customer's email again",
+			description = "Support only. Only an email that is still true: order emails and \"password was "
+					+ "changed\" always; a back-in-stock email only while its hold lasts; a reset link never, since "
+					+ "the customer can ask for a new one; nothing to a closed account. One still waiting is retried "
+					+ "now; one sent or skipped is queued again as a new email, keeping the original's history. "
+					+ "Recorded in the access log before anything is sent. See ADR 0064.")
+	@ApiResponses({
+			@ApiResponse(responseCode = "202", description = "Retried, or queued again; the email that will go"),
+			@ApiResponse(responseCode = "401", description = "No token, or one that does not verify"),
+			@ApiResponse(responseCode = "403", description = "OPERATOR_REQUIRED -- not support"),
+			@ApiResponse(responseCode = "404", description = "No such email"),
+			@ApiResponse(responseCode = "409", description = "NOT_RESENDABLE, HOLD_LAPSED or NO_RECIPIENT")
+	})
+	public ResponseEntity<Map<String, Object>> resend(
+			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+			@PathVariable String key) {
+		String staff = caller.require(authorization);
+		if (!caller.maySeeAnotherCustomer(authorization)) {
+			throw new OperatorRequiredException("Sending a customer's email again requires support");
+		}
+		String owner = resends.ownerOf(key);
+		if (owner == null) {
+			throw ResourceNotFoundException.of("Email", key);
+		}
+		// Recorded first, as every staff action on a customer's data is (ADR 0025): the customer can see that
+		// it happened (ADR 0056), whether or not the rules then allow it.
+		accessLog.record(staff, RESEND_NOTICE, key, owner);
+		NoticeResends.Resend done = resends.resend(key);
+		Map<String, Object> body = new LinkedHashMap<>();
+		body.put("outcome", done.outcome().name());
+		body.put("email", notices.one(done.key()).orElseThrow());
+		return ResponseEntity.accepted().body(body);
 	}
 
 	@GetMapping("/_access-log")

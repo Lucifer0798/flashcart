@@ -6,6 +6,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -33,6 +34,7 @@ public class NoticeHistory {
 	/**
 	 * One email, as support needs to see it.
 	 *
+	 * @param key           which email this is, to name it to resend (ADR 0064)
 	 * @param subject       the subject line, which is what a customer searching their inbox will look for
 	 * @param body          the text, without the greeting. Rendered now from what was stored, not kept
 	 *                      from the send: the same words unless the wording has changed since
@@ -42,7 +44,7 @@ public class NoticeHistory {
 	 *                      succeeds: with {@code attempts}, it is why a sent email went out late
 	 * @param nextAttemptAt when it will next be tried; null unless pending
 	 */
-	public record Entry(String kind, String subject, String body, String orderNumber, String status,
+	public record Entry(String key, String kind, String subject, String body, String orderNumber, String status,
 			String skipReason, int attempts, String lastError, Instant occurredAt, Instant receivedAt,
 			Instant sentAt, Instant nextAttemptAt, Instant sendBefore) {
 	}
@@ -50,7 +52,7 @@ public class NoticeHistory {
 	/** Newest first, by when it happened. {@code orderNumber} narrows to one order when given. */
 	public List<Entry> forCustomer(String customerId, String orderNumber, int limit) {
 		return jdbc.query("""
-				select kind, order_number, payload::text as payload, status, skip_reason, attempts, last_error,
+				select notice_key, kind, order_number, payload::text as payload, status, skip_reason, attempts, last_error,
 				       occurred_at, created_at, sent_at, next_attempt_at, send_before
 				  from notices
 				 where customer_id = ?
@@ -58,6 +60,15 @@ public class NoticeHistory {
 				 order by occurred_at desc, notice_key
 				 limit ?""",
 				(rs, row) -> entry(rs), customerId, orderNumber, orderNumber, limit);
+	}
+
+	/** One email, by its key, or empty. */
+	public Optional<Entry> one(String key) {
+		return jdbc.query("""
+				select notice_key, kind, order_number, payload::text as payload, status, skip_reason, attempts, last_error,
+				       occurred_at, created_at, sent_at, next_attempt_at, send_before
+				  from notices
+				 where notice_key = ?""", (rs, row) -> entry(rs), key).stream().findFirst();
 	}
 
 	private Entry entry(ResultSet rs) throws SQLException {
@@ -68,7 +79,7 @@ public class NoticeHistory {
 		// The name only appears in the greeting, which text() adds and this leaves out.
 		NoticeKind.Email email = kind.render(null, orderNumber, payload, sendBefore);
 		String status = rs.getString("status");
-		return new Entry(kind.name(), email.subject(), email.body(), orderNumber, status,
+		return new Entry(rs.getString("notice_key"), kind.name(), email.subject(), email.body(), orderNumber, status,
 				rs.getString("skip_reason"), rs.getInt("attempts"), rs.getString("last_error"),
 				instant(rs.getTimestamp("occurred_at")), instant(rs.getTimestamp("created_at")),
 				instant(rs.getTimestamp("sent_at")),

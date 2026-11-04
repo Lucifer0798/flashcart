@@ -120,6 +120,7 @@ public class OperatorAccessLogReader {
 			"READ_SHIPMENT", "A member of staff viewed one of your parcels",
 			"READ_SHIPMENT_LIST", "A member of staff viewed your parcels",
 			"READ_NOTICES", "A member of staff viewed the emails we sent you",
+			"RESEND_NOTICE", "A member of staff sent one of our emails to you again",
 			ACTION, "A member of staff viewed this record of who has looked at your data");
 
 	private static final String MINE = """
