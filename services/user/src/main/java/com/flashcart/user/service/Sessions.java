@@ -35,9 +35,10 @@ import org.springframework.transaction.annotation.Transactional;
  * access tokens are short, fifteen minutes, and what can be withdrawn is the means of getting the next one.
  *
  * <p>A refresh token is 32 random bytes, kept here only as its SHA-256. It works once: exchanging it marks
- * it used and returns a new one in the same family. A used token coming back means somebody else holds a
- * copy -- the client that rotated it would never present it again -- so the whole family is revoked, the
- * thief's copy and the owner's with it, and the owner signs in again.
+ * it used and returns a new one in the same family. A used token coming back after a few seconds means
+ * somebody else holds a copy -- the client that rotated it would not present it again -- so the whole family
+ * is revoked, the thief's copy and the owner's with it, and the owner signs in again. Within those few
+ * seconds it is two tabs racing, and it is only refused (ADR 0065).
  */
 @Service
 public class Sessions {
@@ -53,15 +54,18 @@ public class Sessions {
 	private final AccessTokens tokens;
 	private final MeterRegistry meters;
 	private final Duration refreshTtl;
+	private final Duration reuseGrace;
 	private final SecureRandom random = new SecureRandom();
 
 	public Sessions(JdbcTemplate jdbc, UserRepository users, AccessTokens tokens, MeterRegistry meters,
-			@Value("${flashcart.security.refresh.ttl:P30D}") Duration refreshTtl) {
+			@Value("${flashcart.security.refresh.ttl:P30D}") Duration refreshTtl,
+			@Value("${flashcart.security.refresh.reuse-grace:PT10S}") Duration reuseGrace) {
 		this.jdbc = jdbc;
 		this.users = users;
 		this.tokens = tokens;
 		this.meters = meters;
 		this.refreshTtl = refreshTtl;
+		this.reuseGrace = reuseGrace;
 		// Registered now, at zero, not on first use. A counter born at 1 has no earlier sample, and
 		// increase() reads its first value as the baseline: the first theft after every restart -- quite
 		// possibly the only one -- would never fire RefreshTokenReused. ADR 0061.
@@ -151,12 +155,26 @@ public class Sessions {
 		return new Session(tokens.issue(user.getId().toString(), user.getEmail(), user.getRoles()), refresh);
 	}
 
-	/** A token already used, presented again: somebody else has a copy. End the whole family. */
+	/**
+	 * A token already used, presented again: somebody else has a copy, so end the whole family.
+	 *
+	 * <p>Unless it was used moments ago. Two tabs refreshing at once present the same token, and the one that
+	 * loses the race is not a thief: ending the session signed the user out and raised a theft alert for
+	 * having two tabs open. Inside the grace window the answer is still a 401, so no token is issued, but the
+	 * session stands and nothing is counted. A real copy is still caught the first time it, or the token it
+	 * was stolen from, is presented after the window. See ADR 0065.
+	 */
 	private void reuseCheck(String hash) {
-		List<UUID> reused = jdbc.queryForList(
-				"select family_id from refresh_tokens where token_hash = ? and used_at is not null and revoked_at is null",
-				UUID.class, hash);
-		for (UUID family : reused) {
+		List<Map<String, Object>> reused = jdbc.queryForList("""
+				select family_id, used_at > now() - make_interval(secs => ?) as within_grace
+				  from refresh_tokens
+				 where token_hash = ? and used_at is not null and revoked_at is null""", reuseGrace.toSeconds(), hash);
+		for (Map<String, Object> row : reused) {
+			UUID family = (UUID) row.get("family_id");
+			if (Boolean.TRUE.equals(row.get("within_grace"))) {
+				log.info("Refresh token family {} presented a just-rotated token; within the grace window", family);
+				continue;
+			}
 			meters.counter("flashcart.user.refresh.reused").increment();
 			log.warn("Refresh token family {} presented a used token again; revoking the whole family", family);
 			revokeFamily(family, "a used token was presented again");

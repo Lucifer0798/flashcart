@@ -671,8 +671,10 @@ curl -X POST localhost:18080/api/v1/users/sessions/refresh -H 'Content-Type: app
   -d '{"refreshToken":"<from sign-in or the last refresh>"}'
 ```
 
-Each refresh token works **once** and comes back replaced. If one that was already used is presented again,
-someone else has a copy, so the whole session ends. `POST /api/v1/users/sessions/sign-out` with a refresh
+Each refresh token works **once** and comes back replaced. If one that was already used is presented again
+more than ten seconds later, someone else has a copy, so the whole session ends. Within those ten seconds it
+is two tabs racing: the loser gets 401, should re-read the new token and retry, and the session stands
+([ADR 0065](docs/adr/0065-two-tabs-are-not-a-thief.md)). `POST /api/v1/users/sessions/sign-out` with a refresh
 token ends that session. `POST /api/v1/users/me/sign-out-everywhere` ends all of them, and so do a password
 reset and closing the account. Every service verifies access tokens itself, so none can be withdrawn. What
 is withdrawn is the next one, so every session ends within fifteen minutes. A refresh reads the account

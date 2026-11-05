@@ -70,3 +70,4 @@ when someone revisits it in six months.
 | [0062](0062-the-gaps-between-the-pieces.md) | The gaps between the pieces | Accepted |
 | [0063](0063-changing-a-password-you-know.md) | Changing a password you know | Accepted |
 | [0064](0064-sending-it-again.md) | Sending it again | Accepted |
+| [0065](0065-two-tabs-are-not-a-thief.md) | Two tabs are not a thief | Accepted |

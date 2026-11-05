@@ -1,12 +1,16 @@
 package com.flashcart.user;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
 
 import com.flashcart.common.security.AccessTokens;
 import com.flashcart.user.service.PasswordResets;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -57,6 +61,9 @@ class SessionsIT {
 	@Autowired
 	private ObjectMapper json;
 
+	@Autowired
+	private MeterRegistry meters;
+
 	@Test
 	@DisplayName("signing in gives a fifteen-minute access token and a thirty-day refresh token, kept only as a hash")
 	void signingInStartsASession() {
@@ -74,7 +81,7 @@ class SessionsIT {
 	}
 
 	@Test
-	@DisplayName("a refresh token works once and comes back replaced; the same token twice ends the whole session")
+	@DisplayName("a refresh token works once and comes back replaced; the same token much later ends the whole session")
 	void refreshRotatesAndCatchesReuse() {
 		Map<String, Object> first = signIn(register());
 		String original = (String) first.get("refreshToken");
@@ -85,9 +92,39 @@ class SessionsIT {
 		assertThat(next).isNotEqualTo(original);
 		assertThat(tokens.subject((String) renewed.getBody().get("accessToken"))).isPresent();
 
-		// The original, again. Its owner rotated it and would never send it twice, so this is a copy.
+		// The original again, a minute later. Its owner rotated it and would not send it now, so this is a copy.
+		aged(original);
 		assertThat(refresh(original).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 		// And the copy's existence ends the session the owner holds too: they sign in again.
+		assertThat(refresh(next).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+	}
+
+	@Test
+	@DisplayName("two tabs refreshing at once: the loser is refused, but the session stands and no theft is counted")
+	void concurrentRefreshIsNotTheft() {
+		String original = (String) signIn(register()).get("refreshToken");
+		double before = meters.get("flashcart.user.refresh.reused").counter().count();
+
+		ResponseEntity<Map> winner = refresh(original);
+		assertThat(winner.getStatusCode()).isEqualTo(HttpStatus.OK);
+		// The other tab, moments later, with the same token. No token for it; it re-reads the shared one.
+		assertThat(refresh(original).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+		assertThat(meters.get("flashcart.user.refresh.reused").counter().count()).isEqualTo(before);
+		assertThat(refresh((String) winner.getBody().get("refreshToken")).getStatusCode()).isEqualTo(HttpStatus.OK);
+	}
+
+	@Test
+	@DisplayName("past the grace window a reused token is theft: counted, and the session ends")
+	void reusePastTheWindowIsTheft() {
+		String original = (String) signIn(register()).get("refreshToken");
+		String next = (String) refresh(original).getBody().get("refreshToken");
+		double before = meters.get("flashcart.user.refresh.reused").counter().count();
+		aged(original);
+
+		assertThat(refresh(original).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+		assertThat(meters.get("flashcart.user.refresh.reused").counter().count()).isEqualTo(before + 1);
 		assertThat(refresh(next).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 	}
 
@@ -210,6 +247,22 @@ class SessionsIT {
 
 	private ResponseEntity<Map> refresh(String refreshToken) {
 		return rest.postForEntity("/api/v1/users/sessions/refresh", Map.of("refreshToken", refreshToken), Map.class);
+	}
+
+	/** As if this token had been rotated a minute ago, past the grace window. */
+	private void aged(String refreshToken) {
+		assertThat(jdbc.update("update refresh_tokens set used_at = now() - interval '1 minute' where token_hash = ?",
+				sha256(refreshToken))).isEqualTo(1);
+	}
+
+	private static String sha256(String value) {
+		try {
+			return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+					.digest(value.getBytes(StandardCharsets.UTF_8)));
+		}
+		catch (NoSuchAlgorithmException ex) {
+			throw new IllegalStateException(ex);
+		}
 	}
 
 	private HttpStatusCode post(String path, HttpHeaders headers) {

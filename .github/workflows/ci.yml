@@ -597,6 +597,14 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' $G/api/v1/users/me -H "Authorization: Bearer $ACCESS")" = "200"
           test "$(refresh "$FIRST")" = "401" || { echo "a used refresh token worked again"; exit 1; }
 
+          # Moments later that is two tabs racing: refused, but the session stands (ADR 0065).
+          test "$(refresh "$SECOND")" = "200" || { echo "a concurrent refresh ended the session"; exit 1; }
+          LATEST=$(field refreshToken < /tmp/r.json)
+          # Past the ten-second grace window the same reuse is theft, and it ends the session.
+          sleep 11
+          test "$(refresh "$FIRST")" = "401"
+          test "$(refresh "$LATEST")" = "401" || { echo "a session outlived a stolen token's reuse"; exit 1; }
+
           # That reuse ended the session, so sign in afresh, then sign out everywhere.
           SESSION=$(curl -sf -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}")
           ACCESS=$(echo "$SESSION" | field accessToken); THIRD=$(echo "$SESSION" | field refreshToken)
