@@ -29,6 +29,8 @@ So the fix and the log are one change.
 - `GET /api/v1/inventory/_access-log` is support's reader ([ADR 0034](0034-who-read-my-data.md)).
 - `GET /api/v1/inventory/_access-log/mine` is the customer's: that staff looked, what at and when, and not who
   ([ADR 0056](0056-a-customer-sees-that-staff-looked.md)).
+- The inventory file from [ADR 0066](0066-your-data-as-a-file.md) gains the `staffAccess` section the other four
+  already have.
 
 ### The read is recorded first, then fetches its lines
 
@@ -68,6 +70,8 @@ gets a 403.
   reservation with two lines comes back as one, with both lines, newest first, and nobody else's. The row names the
   reader, the action and the customer, and carries the correlation id. Tokens holding exactly one role show who is
   admitted and who is refused at each path.
+- `DataExportIT`: after a real warehouse read, the customer's file has one `staffAccess` entry with the four fields
+  and no staff id. A customer nobody looked at has an empty list. Removing the section turns that test red.
 - Mutations, each one predicted before it ran and each caught by the test that names it: lines not fetched (the
   original 500); read not recorded; recorded under the wrong customer; recorded after the read; a recording failure
   swallowed; a member of staff's own read recorded; a blank customer allowed; the capability check added, which turns
@@ -96,8 +100,5 @@ inventory, and so does support's.
 - **Support cannot make this read, and the warehouse can.** Everywhere else, reading another customer's data is
   support's work. Whether the warehouse needs a customer's whole list, or only stock and a single reservation, is a
   question about the job. This change does not settle it.
-- **The inventory export's `staffAccess` section.** The data-export work (ADR 0066, PR #67) was still open when this
-  was written, and its controller says it has no such section because this log did not exist. It can now read
-  `OperatorAccessLogReader.mine`, like the other four.
 - **The order service's log has no retention sweep.** Payment, shipping, user and now inventory have one; order never
   did, so its rows are kept for ever whatever `AUDIT_RETENTION` says.
