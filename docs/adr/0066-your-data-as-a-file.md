@@ -37,7 +37,7 @@ filter as signed-in by exact match.
 | order | `orders` (each with its full `history`), `staffAccess` |
 | payment | `payments`, `staffAccess` |
 | shipping | `shipments`, `staffAccess` |
-| inventory | `waitlist`, `reservations`, `saleLimits` |
+| inventory | `waitlist`, `reservations`, `saleLimits`, `staffAccess` |
 
 ### What is left out is decided, not forgotten
 
@@ -104,13 +104,11 @@ Downloading your own data is not recorded in `operator_access_log`, which is a r
 
 ## What this leaves open
 
-- **The inventory service keeps no access log, and its one staff read of a customer is broken.** Its file has no
-  `staffAccess` section because there is nothing to read. That is a gap and not a decision. Writing this export also
-  found that `GET /api/v1/inventory/reservations?customerId=` answers 500 for any customer with a reservation: it
-  reads lazy lines outside a transaction, and no test ever called it with one. It is deliberately left broken here,
-  and the export has its own finder. Fixing only the crash would turn it into a working read of a customer's data
-  that nothing records, against [ADR 0025](0025-record-what-an-operator-reads.md). The fix and the log belong in one
-  change.
+- **One staff read in inventory is still not recorded.** Writing this export found that the inventory service kept
+  no access log and that `GET /api/v1/inventory/reservations?customerId=` answered 500 for any customer with a
+  reservation. [ADR 0067](0067-the-warehouses-read-goes-on-the-record.md) fixed the read and added the log in one
+  change, so the inventory file has `staffAccess` like the others. That record covers the listing only:
+  `GET /api/v1/inventory/reservations/{reservationKey}` is not recorded, and ADR 0067 names it as open.
 - **A download leaves no trace the customer can see.** A stolen token's export shows up in request logs and nowhere
   else. An email saying "your data was downloaded" is the obvious answer if that starts to matter.
 - **No web page offers it.** This is the API; there is no customer front end in this repository to put a button on.

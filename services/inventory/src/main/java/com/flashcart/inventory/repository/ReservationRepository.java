@@ -21,9 +21,10 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
 	@EntityGraph(attributePaths = "lines")
 	Optional<Reservation> findById(UUID id);
 
-	List<Reservation> findByCustomerIdOrderByCreatedAtDesc(String customerId);
-
-	/** With its lines, for a reader outside any transaction: the customer's own file (ADR 0066). */
+	/**
+	 * With its lines, for a reader outside any transaction. Open-in-view is off, so the lazy collection
+	 * cannot be read after the service method returns. See ADR 0067.
+	 */
 	@EntityGraph(attributePaths = "lines")
 	List<Reservation> findWithLinesByCustomerIdOrderByCreatedAtDesc(String customerId);
 

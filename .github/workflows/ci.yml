@@ -1040,6 +1040,53 @@ jobs:
           echo "shipping audit rows for $ORDER:    $SAUDIT"
           test "$SAUDIT" = "1"
 
+      - name: Staff reading a customer's reservations is on the record
+        run: |
+          set -e
+          . scripts/ci-sign-in.sh
+
+          # The shopper has checked out by now, so this customer really has reservations. That is the one
+          # case this endpoint answered 500 for, and nothing called it with one (ADR 0067).
+          OWNER=$(curl -sf "$G/api/v1/orders" -H "Authorization: Bearer $TOKEN" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['customerId'])")
+          test -n "$OWNER"
+
+          CODE=$(curl -s -o /tmp/held.json -w '%{http_code}' "$G/api/v1/inventory/reservations?customerId=$OWNER" -H "Authorization: Bearer $WAREHOUSE")
+          echo "warehouse reading their reservations: $CODE"
+          test "$CODE" = "200"
+          HELD=$(python3 -c "import json; r=json.load(open('/tmp/held.json')); print(len(r) if r and all(x['lines'] for x in r) else 0)")
+          echo "reservations, each with its lines:    $HELD"
+          test "$HELD" -gt 0
+
+          # In inventory's own database, because the table is per service.
+          ROWS=$(docker compose exec -T postgres psql -U flashcart -d flashcart_inventory -tAc "select count(*) from operator_access_log where customer_id = '$OWNER' and action = 'READ_RESERVATION_LIST'" | tr -d '[:space:]')
+          echo "recorded:                             $ROWS"
+          test "$ROWS" = "1"
+
+          # A shopper may not make this read, and the warehouse may not read who looked.
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$G/api/v1/inventory/reservations?customerId=$OWNER" -H "Authorization: Bearer $TOKEN")
+          echo "shopper reading reservations:         $CODE"
+          test "$CODE" = "403"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$G/api/v1/inventory/_access-log?customerId=$OWNER" -H "Authorization: Bearer $WAREHOUSE")
+          echo "warehouse reading the access log:     $CODE"
+          test "$CODE" = "403"
+
+          # Support can see who, newest first, and its own read comes first.
+          SEEN=$(curl -sf "$G/api/v1/inventory/_access-log?customerId=$OWNER" -H "Authorization: Bearer $SUPPORT" \
+            | python3 -c "import json,sys; print(' '.join(e['action'] for e in json.load(sys.stdin)))")
+          echo "support sees:                         $SEEN"
+          test "$SEEN" = "READ_ACCESS_LOG READ_RESERVATION_LIST"
+
+          # The customer can see that staff looked, and not who (ADR 0056).
+          SAW=$(curl -sf "$G/api/v1/inventory/_access-log/mine" -H "Authorization: Bearer $TOKEN" \
+            | python3 -c "import json,sys; e=json.load(sys.stdin); print(e[1]['action'], e[1]['description'].endswith('viewed your reservations'), any('operatorId' in x for x in e))")
+          echo "the shopper sees:                     $SAW"
+          test "$SAW" = "READ_RESERVATION_LIST True False"
+
+          # And compose's retention reached the service. Unset, it would keep everything and say so.
+          docker compose logs inventory | grep -q 'Operator access records are kept for 365 day' \
+            || { echo "inventory did not pick up flashcart.audit.retention"; exit 1; }
+
       - name: The outbox drained
         run: |
           set -e
