@@ -89,6 +89,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0024](adr/0024-the-development-operator-is-not-schema.md) — The development operator is not schema
 - [0025](adr/0025-record-what-an-operator-reads.md) — Record what an operator reads
 - [0026](adr/0026-deleting-an-audit-record-is-a-decision.md) — Deleting an audit record is a decision
+- [0069](adr/0069-the-order-services-log-was-kept-for-ever.md) — The order service's log was kept for ever
 - [0028](adr/0028-looking-is-not-acting.md) — Looking is not acting
 - [0029](adr/0029-an-operator-read-was-a-silence.md) — An operator read was a silence
 - [0034](adr/0034-who-read-my-data.md) — Who read my data
