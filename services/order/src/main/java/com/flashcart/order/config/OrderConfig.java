@@ -17,6 +17,7 @@ import com.flashcart.common.security.CallerIdentity;
 import com.flashcart.common.security.CustomerDataAccess;
 import com.flashcart.common.security.OperatorAccessLog;
 import com.flashcart.common.security.OperatorAccessLogReader;
+import com.flashcart.common.security.OperatorAccessRetention;
 import com.flashcart.common.security.OperatorFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -171,5 +172,17 @@ public class OrderConfig {
 	@Bean
 	public CustomerDataAccess customerDataAccess(CallerIdentity caller, OperatorAccessLog accessLog) {
 		return new CustomerDataAccess(caller, accessLog);
+	}
+
+	/**
+	 * Off unless configured: an audit trail that silently deletes itself because nobody set a
+	 * property is the decision ADR 0026 said should not be made silently. It arrived here long after
+	 * the table did; see ADR 0069.
+	 */
+	@Bean
+	public OperatorAccessRetention operatorAccessRetention(JdbcTemplate jdbc,
+			@org.springframework.beans.factory.annotation.Value("${flashcart.audit.retention:#{null}}") java.time.Duration retention,
+			@org.springframework.beans.factory.annotation.Value("${flashcart.audit.retention-batch-size:500}") int batchSize) {
+		return new OperatorAccessRetention(jdbc, retention, batchSize);
 	}
 }

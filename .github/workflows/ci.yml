@@ -1105,6 +1105,14 @@ jobs:
           echo "order recorded $CLAIMS processed event(s)"
           test "$CLAIMS" -gt 0
 
+      - name: Compose's audit retention reached the order service
+        run: |
+          set -e
+          # Compose's setting does nothing unless the service reads it, and this one had no sweep to read
+          # it for (ADR 0069). Unset, the service says it keeps everything, so that line is not this one.
+          docker compose logs order | grep 'Operator access records are kept for 365 day' \
+            || { echo "order did not pick up flashcart.audit.retention"; docker compose logs order | grep -i 'audit retention\|access records' || true; exit 1; }
+
       - name: The platform is observable
         run: |
           set -e

@@ -207,6 +207,9 @@ services:
       <<: *service-env
       SERVER_PORT: 8082
       JWT_SECRET: ${JWT_SECRET:-flashcart-development-secret-do-not-use-anywhere-real}
+      # This stack deletes this service's records of staff reads once they are a year old, as it does
+      # the others'. Until ADR 0069 this service had no sweep and kept them for ever. See ADR 0026.
+      FLASHCART_AUDIT_RETENTION: ${AUDIT_RETENTION:-P365D}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_order
       SPRING_DATASOURCE_USERNAME: flashcart
       SPRING_DATASOURCE_PASSWORD: flashcart
