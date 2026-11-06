@@ -807,7 +807,7 @@ It accepts only roles that exist — the database refuses anything else too — 
 sign-in. Point it at a database other than the compose stack's with `DATABASE_URL`. See
 [ADR 0047](docs/adr/0047-staff-roles-on-the-record.md).
 
-**Every operator read of somebody else's data is recorded.** Order, payment, shipping and user each keep an
+**Every operator read of somebody else's data is recorded.** Order, payment, shipping, user and inventory each keep an
 `operator_access_log` in their own database: who looked, whose data it was, what they looked at, and
 the correlation id that ties it to the logs and the trace. A customer reading their own is not
 recorded — that is the ordinary path, and auditing it would bury the rows that matter.
@@ -823,7 +823,7 @@ from operator_access_log where customer_id = ? order by read_at desc;
 ```
 
 **The customer can see it too: that staff looked, and when, but not who.** Each service answers for its
-own log at `GET /api/v1/{order,payment,shipping,user}/_access-log/mine`, with any signed-in token. The
+own log at `GET /api/v1/{order,payment,shipping,user,inventory}/_access-log/mine`, with any signed-in token. The
 token decides whose entries come back, and the request names nobody. Each entry says what was looked at,
 in words ("A member of staff viewed one of your payments"), and when. It leaves out the staff member's
 id and the correlation id. Support can still see who, from their own reader. See
@@ -881,7 +881,10 @@ recorded. See [ADR 0028](docs/adr/0028-looking-is-not-acting.md).
 
 **What is still open, said plainly.** Per-service ports are still published, so each service checks
 for itself rather than trusting the gateway. And "who read my data" is one `GET .../_access-log` per
-service, four of them now, for support and for the customer alike, because each service keeps its own log.
+service, five of them now, for support and for the customer alike, because each service keeps its own log.
+Inventory is the fifth: the warehouse's read of a customer's reservations is recorded like any other, and
+support reads that log rather than the warehouse. See
+[ADR 0067](docs/adr/0067-the-warehouses-read-goes-on-the-record.md).
 
 ## Breaking it on purpose
 

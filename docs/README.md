@@ -93,6 +93,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0029](adr/0029-an-operator-read-was-a-silence.md) — An operator read was a silence
 - [0034](adr/0034-who-read-my-data.md) — Who read my data
 - [0056](adr/0056-a-customer-sees-that-staff-looked.md) — A customer sees that staff looked
+- [0067](adr/0067-the-warehouses-read-goes-on-the-record.md) — The warehouse's read goes on the record
 - [0062](adr/0062-the-gaps-between-the-pieces.md) — The gaps between the pieces
 - [0063](adr/0063-changing-a-password-you-know.md) — Changing a password you know
 - [0065](adr/0065-two-tabs-are-not-a-thief.md) — Two tabs are not a thief
