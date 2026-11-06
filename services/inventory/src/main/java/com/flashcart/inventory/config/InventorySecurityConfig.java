@@ -92,6 +92,8 @@ public class InventorySecurityConfig {
 								"POST /api/v1/inventory/waitlist",
 								"GET /api/v1/inventory/waitlist/mine",
 								"DELETE /api/v1/inventory/waitlist/*",
+								// Your own data as a file (ADR 0066). The handler takes whose from the token; the request names nobody.
+								"GET /api/v1/inventory/_export/mine",
 								// Your own entries in this service's access log (ADR 0056). The reader takes whose
 								// they are from the token; the request names nobody.
 								"GET /api/v1/inventory/_access-log/mine"),

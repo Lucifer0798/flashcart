@@ -142,6 +142,8 @@ public class OrderConfig {
 								// Your own entries in this service's access log (ADR 0056). The reader takes
 								// whose they are from the token; the request names nobody.
 								"GET /api/v1/order/_access-log/mine",
+								// Your own data as a file (ADR 0066). The handler takes whose from the token; the request names nobody.
+								"GET /api/v1/order/_export/mine",
 								// A customer may stop their own order. Whether an operator may stop
 								// somebody else's is ADR 0028's open question, and the handler's
 								// ownership check is what keeps it closed either way.

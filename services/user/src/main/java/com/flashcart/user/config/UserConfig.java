@@ -125,7 +125,9 @@ public class UserConfig {
 								"POST /api/v1/users/me/sign-out-everywhere",
 								"POST /api/v1/users/me/password",
 								// Your own entries in this service's access log (ADR 0056).
-								"GET /api/v1/user/_access-log/mine"),
+								"GET /api/v1/user/_access-log/mine",
+								// Your own data as a file (ADR 0066). The handler takes whose from the token; the request names nobody.
+								"GET /api/v1/user/_export/mine"),
 						// Support's reads (ADR 0051). The handler checks the role again and records the read;
 						// this only keeps everyone else from reaching it.
 						Map.of(AccessTokens.SUPPORT, List.of(

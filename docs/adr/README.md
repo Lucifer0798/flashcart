@@ -71,4 +71,5 @@ when someone revisits it in six months.
 | [0063](0063-changing-a-password-you-know.md) | Changing a password you know | Accepted |
 | [0064](0064-sending-it-again.md) | Sending it again | Accepted |
 | [0065](0065-two-tabs-are-not-a-thief.md) | Two tabs are not a thief | Accepted |
+| [0066](0066-your-data-as-a-file.md) | Your data, as a file | Accepted |
 | [0067](0067-the-warehouses-read-goes-on-the-record.md) | The warehouse's read goes on the record | Accepted |
