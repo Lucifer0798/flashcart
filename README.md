@@ -721,6 +721,24 @@ the platform email strangers. Past that, `429 TOO_MANY_ATTEMPTS` with `Retry-Aft
 including those for addresses with no account, so the limit says nothing about who has one. See
 [ADR 0060](docs/adr/0060-the-reset-form-is-not-a-mailing-list.md).
 
+### Downloading your data
+
+```bash
+for service in user order payment shipping inventory; do
+  curl -OJ "localhost:18080/api/v1/$service/_export/mine" -H "Authorization: Bearer $TOKEN"
+done
+```
+
+Each service hands over what it holds about you as a JSON file: your profile and addresses, the emails we
+kept, your sessions and password resets, your orders with their history, payments, parcels, waitlist places
+and held stock, and when staff looked. It takes five calls because five services hold it, and one being down
+costs only that one file. The token decides whose data comes back, and the request names nobody.
+
+**Some things are deliberately left out.** There is no password or token hash and no working reset link. Mail-server
+errors and retry counts are about our mail rather than you. Who on staff looked, or changed a role, stays with
+support. **Download before closing an account:** closing erases who you were, and the user service then has
+nothing to give you. See [ADR 0066](docs/adr/0066-your-data-as-a-file.md).
+
 ### Closing an account
 
 ```bash

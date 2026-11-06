@@ -23,6 +23,10 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
 
 	List<Reservation> findByCustomerIdOrderByCreatedAtDesc(String customerId);
 
+	/** With its lines, for a reader outside any transaction: the customer's own file (ADR 0066). */
+	@EntityGraph(attributePaths = "lines")
+	List<Reservation> findWithLinesByCustomerIdOrderByCreatedAtDesc(String customerId);
+
 	/**
 	 * Claim expired holds that touch this SKU, for the lazy reclaim on the reserve path.
 	 *

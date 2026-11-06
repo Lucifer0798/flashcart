@@ -1014,6 +1014,59 @@ class OrderIT {
 				.isIn(HttpStatus.UNAUTHORIZED, HttpStatus.FORBIDDEN);
 	}
 
+	// --- downloading what we hold (ADR 0066) -----------------------------------------------------------
+
+	@Test
+	@DisplayName("the file holds the caller's orders with their history and when staff looked, and nobody else's")
+	@SuppressWarnings("unchecked")
+	void theExportHoldsTheCallersOwn() {
+		signedInAs("export-o-other");
+		String theirs = place("export-o-other", "WEA-WT-001", 1).orderNumber();
+		signedInAs("export-o-mine");
+		String mine = place("export-o-mine", "AUD-HP-001", 2).orderNumber();
+		jdbc.update("insert into operator_access_log (operator_id, action, resource_id, customer_id) values "
+				+ "('support-1', 'READ_ORDER', ?, 'export-o-mine'), ('support-1', 'READ_ORDER', ?, 'export-o-other')",
+				mine, theirs);
+
+		// The parameter is ignored: whose comes from the token.
+		ResponseEntity<Map> export = rest.getForEntity("/api/v1/order/_export/mine?customerId=export-o-other", Map.class);
+
+		assertThat(export.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(export.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION))
+				.isEqualTo("attachment; filename=\"flashcart-order-export.json\"");
+		assertThat(export.getBody()).containsEntry("service", "order").containsEntry("customerId", "export-o-mine");
+		assertThat((List<Map<String, Object>>) export.getBody().get("orders")).singleElement().satisfies(entry -> {
+			assertThat((Map<String, Object>) entry.get("order")).containsEntry("orderNumber", mine);
+			assertThat((List<?>) entry.get("history")).isNotEmpty();
+		});
+		assertThat((List<Map<String, Object>>) export.getBody().get("staffAccess")).singleElement()
+				.satisfies(access -> assertThat(access).containsEntry("resourceId", mine)
+						.containsOnlyKeys("action", "description", "resourceId", "readAt"));
+		assertThat(export.getBody().toString()).doesNotContain(theirs).doesNotContain("support-1");
+	}
+
+	@Test
+	@DisplayName("downloading your own file is not recorded as staff looking")
+	void downloadingYourOwnFileIsNotRecorded() {
+		signedInAs("export-o-quiet");
+		place("export-o-quiet", "AUD-HP-001", 1);
+
+		assertThat(rest.getForEntity("/api/v1/order/_export/mine", Map.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		assertThat(auditRows("export-o-quiet")).isZero();
+	}
+
+	@Test
+	@DisplayName("a token that does not verify cannot download anything")
+	void aForgedTokenCannotDownload() {
+		rest.getRestTemplate().getInterceptors().removeIf(i -> i instanceof BearerToken);
+		HttpHeaders forged = new HttpHeaders();
+		forged.set(HttpHeaders.AUTHORIZATION, "Bearer not-a-real-token");
+
+		assertThat(rest.exchange("/api/v1/order/_export/mine", HttpMethod.GET, new HttpEntity<>(forged), Map.class)
+				.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+	}
+
 	@Test
 	@DisplayName("a customer can see when staff looked at their orders, and at what -- not who")
 	void aCustomerReadsTheirOwnAccessLog() {
