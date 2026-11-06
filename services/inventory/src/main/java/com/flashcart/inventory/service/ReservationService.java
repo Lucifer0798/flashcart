@@ -383,12 +383,7 @@ public class ReservationService {
 		return require(reservationKey);
 	}
 
-	@Transactional(readOnly = true)
-	public List<Reservation> forCustomer(String customerId) {
-		return reservations.findByCustomerIdOrderByCreatedAtDesc(customerId);
-	}
-
-	/** A customer's reservations with their lines loaded, to read after this transaction ends. ADR 0066. */
+	/** A customer's reservations with their lines loaded, to read after this transaction ends. ADR 0067. */
 	@Transactional(readOnly = true)
 	public List<Reservation> forCustomerWithLines(String customerId) {
 		return reservations.findWithLinesByCustomerIdOrderByCreatedAtDesc(customerId);

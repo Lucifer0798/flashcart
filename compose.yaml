@@ -317,6 +317,9 @@ services:
     environment:
       <<: *service-env
       SERVER_PORT: 8085
+      # Since ADR 0067 this service keeps a record of staff reads as well; it is kept as long as the
+      # others' are. See ADR 0026.
+      FLASHCART_AUDIT_RETENTION: ${AUDIT_RETENTION:-P365D}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flashcart_inventory
       SPRING_DATASOURCE_USERNAME: flashcart
       SPRING_DATASOURCE_PASSWORD: flashcart

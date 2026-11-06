@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.flashcart.common.security.AccessTokens;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -53,6 +54,34 @@ class DataExportIT extends AbstractInventoryIT {
 		assertThat((List<Map<String, Object>>) export.getBody().get("saleLimits")).singleElement()
 				.satisfies(limit -> assertThat(limit).containsEntry("sku", onSale).containsEntry("consumedUnits", 2));
 		assertThat(export.getBody().toString()).doesNotContain("export-i-other");
+	}
+
+	@Test
+	@DisplayName("the file says when staff looked and not who, and an empty list when nobody has")
+	@SuppressWarnings("unchecked")
+	void theFileSaysWhenStaffLooked() {
+		String sku = uniqueSku("EXP-LOOK");
+		createStock(sku, 5);
+		assertThat(reserve(uniqueKey("exp"), "export-i-looked-at", sku, 1).getStatusCode().is2xxSuccessful()).isTrue();
+
+		HttpHeaders warehouse = new HttpHeaders();
+		warehouse.set(HttpHeaders.AUTHORIZATION,
+				"Bearer " + tokens.issue("export-i-warehouse", "wh@example.test", List.of(AccessTokens.WAREHOUSE)));
+		assertThat(rest.exchange("/api/v1/inventory/reservations?customerId=export-i-looked-at", HttpMethod.GET,
+				new HttpEntity<>(warehouse), List.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		Map<String, Object> file = rest.exchange(PATH, HttpMethod.GET, new HttpEntity<>(as("export-i-looked-at")), Map.class)
+				.getBody();
+		assertThat((List<Map<String, Object>>) file.get("staffAccess")).singleElement().satisfies(entry -> {
+			assertThat(entry).containsOnlyKeys("action", "description", "resourceId", "readAt");
+			assertThat(entry).containsEntry("action", "READ_RESERVATION_LIST")
+					.containsEntry("description", "A member of staff viewed your reservations");
+		});
+		assertThat(file.toString()).doesNotContain("export-i-warehouse");
+
+		Map<String, Object> untouched = rest.exchange(PATH, HttpMethod.GET,
+				new HttpEntity<>(as("export-i-never-looked-at")), Map.class).getBody();
+		assertThat((List<?>) untouched.get("staffAccess")).isEmpty();
 	}
 
 	@Test

@@ -16,14 +16,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
  *
  * <h2>One per service, because there is one table per service</h2>
  *
- * The log lives in three databases: order, payment and shipping each write their own on the same
- * connection the read came from, which is what lets a failure to record fail the read (ADR 0025). A
- * single aggregating endpoint would have to call the other two synchronously, and this platform does
- * not do that for a reason.
+ * The log lives in five databases: order, payment, shipping, user and inventory each write their own on
+ * the same connection the read came from, which is what lets a failure to record fail the read (ADR
+ * 0025). A single aggregating endpoint would have to call the others synchronously, and this platform
+ * does not do that for a reason.
  *
- * <p>So each service exposes its own, and "who read my data" is three requests. That cost is real and
- * ADR 0028 named it when the third table appeared. The reader does not hide it; it makes each third
- * answerable without a database client.
+ * <p>So each service exposes its own, and "who read my data" is one request per service. That cost is
+ * real and ADR 0028 named it when the third table appeared. The reader does not hide it; it makes each
+ * part answerable without a database client.
  *
  * <h2>The read is itself recorded, before it answers</h2>
  *
@@ -111,17 +111,18 @@ public class OperatorAccessLogReader {
 	public record CustomerEntry(String action, String description, String resourceId, Instant readAt) {
 	}
 
-	private static final Map<String, String> SAID_AS = Map.of(
-			"READ_ORDER", "A member of staff viewed one of your orders",
-			"READ_ORDER_HISTORY", "A member of staff viewed the history of one of your orders",
-			"READ_ORDER_LIST", "A member of staff viewed your orders",
-			"READ_PAYMENT", "A member of staff viewed one of your payments",
-			"READ_PAYMENT_LIST", "A member of staff viewed your payments",
-			"READ_SHIPMENT", "A member of staff viewed one of your parcels",
-			"READ_SHIPMENT_LIST", "A member of staff viewed your parcels",
-			"READ_NOTICES", "A member of staff viewed the emails we sent you",
-			"RESEND_NOTICE", "A member of staff sent one of our emails to you again",
-			ACTION, "A member of staff viewed this record of who has looked at your data");
+	private static final Map<String, String> SAID_AS = Map.ofEntries(
+			Map.entry("READ_ORDER", "A member of staff viewed one of your orders"),
+			Map.entry("READ_ORDER_HISTORY", "A member of staff viewed the history of one of your orders"),
+			Map.entry("READ_ORDER_LIST", "A member of staff viewed your orders"),
+			Map.entry("READ_PAYMENT", "A member of staff viewed one of your payments"),
+			Map.entry("READ_PAYMENT_LIST", "A member of staff viewed your payments"),
+			Map.entry("READ_SHIPMENT", "A member of staff viewed one of your parcels"),
+			Map.entry("READ_SHIPMENT_LIST", "A member of staff viewed your parcels"),
+			Map.entry("READ_RESERVATION_LIST", "A member of staff viewed your reservations"),
+			Map.entry("READ_NOTICES", "A member of staff viewed the emails we sent you"),
+			Map.entry("RESEND_NOTICE", "A member of staff sent one of our emails to you again"),
+			Map.entry(ACTION, "A member of staff viewed this record of who has looked at your data"));
 
 	private static final String MINE = """
 			select action, resource_id, read_at

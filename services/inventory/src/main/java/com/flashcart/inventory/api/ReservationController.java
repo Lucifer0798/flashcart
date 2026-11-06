@@ -5,6 +5,8 @@ import java.time.Duration;
 import java.util.List;
 
 import com.flashcart.common.error.ResourceNotFoundException;
+import com.flashcart.common.security.CallerIdentity;
+import com.flashcart.common.security.OperatorAccessLog;
 import com.flashcart.inventory.api.dto.ReleaseRequest;
 import com.flashcart.inventory.api.dto.ReservationResponse;
 import com.flashcart.inventory.api.dto.ReserveRequest;
@@ -14,11 +16,14 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,10 +33,18 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Reservations", description = "Hold stock, then commit or release it")
 public class ReservationController {
 
-	private final ReservationService reservations;
+	/** What a member of staff listing a customer's reservations is recorded as having done. */
+	static final String READ_LIST = "READ_RESERVATION_LIST";
 
-	public ReservationController(ReservationService reservations) {
+	private final ReservationService reservations;
+	private final CallerIdentity caller;
+	private final OperatorAccessLog accessLog;
+
+	public ReservationController(ReservationService reservations, CallerIdentity caller,
+			OperatorAccessLog accessLog) {
 		this.reservations = reservations;
+		this.caller = caller;
+		this.accessLog = accessLog;
 	}
 
 	@PostMapping
@@ -68,10 +81,25 @@ public class ReservationController {
 		return ReservationResponse.from(reservations.get(reservationKey));
 	}
 
+	/**
+	 * Staff reading what a customer has held and bought, so it is on the record before it answers.
+	 *
+	 * <p>Records through {@link OperatorAccessLog} rather than {@code CustomerDataAccess.subjectOf}, which
+	 * asks for the capability SUPPORT holds. This read has always been the warehouse's (ADR 0038), and going
+	 * through that check would quietly refuse the role the filter lets in. See ADR 0067.
+	 */
 	@GetMapping
-	@Operation(summary = "List a customer's reservations, newest first")
-	public List<ReservationResponse> forCustomer(@RequestParam String customerId) {
-		return reservations.forCustomer(customerId).stream().map(ReservationResponse::from).toList();
+	@Operation(summary = "List a customer's reservations, newest first",
+			description = "Warehouse or operator. Recorded before it answers, unless it is your own, and a read "
+					+ "that cannot be recorded is refused. The customer can see that staff looked. See ADR 0067.")
+	public List<ReservationResponse> forCustomer(
+			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+			@RequestParam @NotBlank String customerId) {
+		String reader = caller.require(authorization);
+		if (!customerId.equals(reader)) {
+			accessLog.record(reader, READ_LIST, null, customerId);
+		}
+		return reservations.forCustomerWithLines(customerId).stream().map(ReservationResponse::from).toList();
 	}
 
 	@PostMapping("/{reservationKey}/commit")
