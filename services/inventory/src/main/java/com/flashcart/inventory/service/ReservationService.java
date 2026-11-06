@@ -388,6 +388,12 @@ public class ReservationService {
 		return reservations.findByCustomerIdOrderByCreatedAtDesc(customerId);
 	}
 
+	/** A customer's reservations with their lines loaded, to read after this transaction ends. ADR 0066. */
+	@Transactional(readOnly = true)
+	public List<Reservation> forCustomerWithLines(String customerId) {
+		return reservations.findWithLinesByCustomerIdOrderByCreatedAtDesc(customerId);
+	}
+
 	/**
 	 * Take over this customer's live waitlist holds on the line's SKU, up to the quantity wanted.
 	 *

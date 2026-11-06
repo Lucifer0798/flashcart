@@ -500,6 +500,16 @@ jobs:
           done
           test "$COPIES" = "2" || { echo "the resent refund email never arrived ($COPIES)"; exit 1; }
 
+          # And the shopper can take a copy of all of it, as five files (ADR 0066).
+          for SERVICE in user order payment shipping inventory; do
+            CODE=$(curl -s -D /tmp/export-headers -o "/tmp/export-$SERVICE.json" -w '%{http_code}' \
+              "$G/api/v1/$SERVICE/_export/mine" -H "Authorization: Bearer $TOKEN")
+            test "$CODE" = "200" || { echo "the $SERVICE export answered $CODE"; head -c 300 "/tmp/export-$SERVICE.json"; exit 1; }
+            grep -qi "content-disposition: attachment; filename=\"flashcart-$SERVICE-export.json\"" /tmp/export-headers \
+              || { echo "the $SERVICE export is not a file"; cat /tmp/export-headers; exit 1; }
+          done
+          python3 scripts/ci-export-check.py "$ORDER" /tmp/export-user.json /tmp/export-order.json /tmp/export-payment.json /tmp/export-shipping.json
+
       - name: A sold-out SKU's queue hears when stock comes back, and gets the unit
         run: |
           set -e

@@ -1,5 +1,6 @@
 package com.flashcart.inventory.repository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -12,6 +13,8 @@ import org.springframework.data.repository.query.Param;
 public interface CustomerSaleLimitRepository extends JpaRepository<CustomerSaleLimit, UUID> {
 
 	Optional<CustomerSaleLimit> findByCustomerIdAndFlashSaleIdAndSku(String customerId, UUID flashSaleId, String sku);
+
+	List<CustomerSaleLimit> findByCustomerId(String customerId);
 
 	/**
 	 * Charge {@code quantity} units against this customer's cap for the sale, atomically, or do

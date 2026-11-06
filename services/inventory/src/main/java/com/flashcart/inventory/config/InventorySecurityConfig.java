@@ -57,7 +57,9 @@ public class InventorySecurityConfig {
 						List.of(
 								"POST /api/v1/inventory/waitlist",
 								"GET /api/v1/inventory/waitlist/mine",
-								"DELETE /api/v1/inventory/waitlist/*"),
+								"DELETE /api/v1/inventory/waitlist/*",
+								// Your own data as a file (ADR 0066). The handler takes whose from the token; the request names nobody.
+								"GET /api/v1/inventory/_export/mine"),
 						// All fifteen. Nothing else this service exposes beyond public availability is anything
 						// but warehouse work, so the whole of it is one role's -- which is why /** is honest here
 						// and would not be anywhere else. See ADR 0038.
