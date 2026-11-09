@@ -73,3 +73,4 @@ when someone revisits it in six months.
 | [0065](0065-two-tabs-are-not-a-thief.md) | Two tabs are not a thief | Accepted |
 | [0066](0066-your-data-as-a-file.md) | Your data, as a file | Accepted |
 | [0067](0067-the-warehouses-read-goes-on-the-record.md) | The warehouse's read goes on the record | Accepted |
+| [0069](0069-the-order-services-log-was-kept-for-ever.md) | The order service's log was kept for ever | Accepted |

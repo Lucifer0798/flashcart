@@ -102,3 +102,5 @@ inventory, and so does support's.
   question about the job. This change does not settle it.
 - **The order service's log has no retention sweep.** Payment, shipping, user and now inventory have one; order never
   did, so its rows are kept for ever whatever `AUDIT_RETENTION` says.
+
+*The order service's sweep was since added by [ADR 0069](0069-the-order-services-log-was-kept-for-ever.md).*
