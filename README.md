@@ -980,6 +980,13 @@ Two tiers, deliberately separated:
 CI runs both tiers, then builds all seven images, brings the whole compose stack up, and smoke-tests
 it through the gateway — because a green unit suite proves nothing about the routing table.
 
+**Tests are safe to run with the stack up.** Each service's `application.yml` defaults to the stack's
+ports, so each has `src/test/resources/config/application.yml` pointing Kafka and PostgreSQL at port 1
+instead, with listeners and topic declaration off. A suite that needs either brings a Testcontainers one.
+Without that, a test run joined the running stack's consumer groups and published into its topics, and
+every test stayed green. `scripts/test-isolation-check.py` fails the build if a module loses the file. See
+[ADR 0070](docs/adr/0070-a-test-run-is-not-a-customer.md).
+
 ---
 
 ## Stack

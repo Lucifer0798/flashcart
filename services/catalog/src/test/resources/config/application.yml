@@ -1,0 +1,12 @@
+# Test-only overrides, layered over src/main/resources/application.yml (classpath:/config/ is read in
+# addition to the classpath root, and wins). A suite's own @TestPropertySource or service connection wins
+# over this in turn.
+#
+# application.yml's defaults are the compose stack's host ports, so a test that kept them reached a running
+# stack on this machine: its listeners joined the stack's consumer groups and its outbox published into the
+# stack's topics. Port 1 has nothing on it, so a suite that needs a broker or a database has to bring its
+# own. scripts/test-isolation-check.py fails the build if this file goes missing. See ADR 0070.
+spring:
+  datasource:
+    # A suite that forgot its PostgreSQL container fails to start, instead of running Flyway on the stack's.
+    url: jdbc:postgresql://localhost:1/no-database-outside-a-container

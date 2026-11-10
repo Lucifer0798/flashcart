@@ -91,6 +91,10 @@ public final class ConsumerFactories {
 		// Filtered records are acknowledged rather than left uncommitted; without this the offset
 		// never advances past a message this listener does not want, and it is redelivered forever.
 		factory.setAckDiscarded(true);
+		// spring.kafka.listener.auto-startup configures Boot's own factory, and this one is hand-built, so
+		// until it was copied here the property did nothing. Suites that set it to false to keep their
+		// listeners off the broker joined the compose stack's consumer groups anyway. See ADR 0070.
+		factory.setAutoStartup(properties.getListener().isAutoStartup());
 		// Set here rather than left to spring.kafka.listener.observation-enabled, because that
 		// property configures Boot's own auto-configured factory and this one is hand-built. Without
 		// it every consumer starts a fresh rootless trace and the bus becomes the place traces go to

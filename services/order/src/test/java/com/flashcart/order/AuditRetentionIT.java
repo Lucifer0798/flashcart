@@ -35,9 +35,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestPropertySource(properties = {
 		"flashcart.order.reconciler.enabled=false",
 		// Nowhere, on purpose. The default is localhost:19092, so on a machine running the compose stack
-		// these listeners would join its consumer groups and could take its messages.
-		// spring.kafka.listener.auto-startup does not prevent that: ConsumerFactories builds its own
-		// listener factories, and they do not read it.
+		// these listeners would join its consumer groups and could take its messages. The module's test
+		// config now says the same for every suite (ADR 0070); this stays as the record of where it was
+		// first found.
 		"spring.kafka.bootstrap-servers=localhost:1",
 		// No broker in this suite, and the relay would fail every send.
 		"flashcart.outbox.relay.initial-delay=PT1H"

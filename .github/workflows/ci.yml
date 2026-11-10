@@ -47,6 +47,12 @@ jobs:
           # and nothing noticed. Both lists are hand-written, so both are checked.
           python3 scripts/adr-index-check.py
 
+      - name: No service's tests can reach a stack running on the same machine
+        run: |
+          # The user service's suites joined a running stack's consumer groups and published into its topics,
+          # and every test stayed green. CI has no stack, so only this can notice a module losing the guard.
+          python3 scripts/test-isolation-check.py
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5
