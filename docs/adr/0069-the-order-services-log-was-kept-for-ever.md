@@ -53,3 +53,6 @@ worked example rather than a default.
   own listener factories and does not read it, and the default broker is `localhost:19092`. A first run of
   `AuditRetentionIT` joined a running compose stack's consumer groups and caused a rebalance, so this test now points
   at a dead address. `OrderIT` and `OutboxIT` still set the property, and their comments still say it turns listeners off.
+
+*The property now works, and every module's tests point at a dead broker by default: see
+[ADR 0070](0070-a-test-run-is-not-a-customer.md), which found the user service's suites doing the same to a running stack.*

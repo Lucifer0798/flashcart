@@ -52,7 +52,13 @@ import static org.awaitility.Awaitility.await;
  * <p>So this does exactly one thing: publishes a real command, lets the real listener consume it, and
  * waits for the real reply on a real topic.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+		// The one suite with a broker of its own, so it switches back on what the module's test config turns
+		// off everywhere else (ADR 0070). Its service connection already points Kafka at the container.
+		"spring.kafka.listener.auto-startup=true",
+		"flashcart.kafka.declare-topics=true",
+		"flashcart.outbox.relay.initial-delay=PT5S"
+})
 @AutoConfigureTestRestTemplate
 class InventoryKafkaIT {
 
