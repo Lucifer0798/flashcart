@@ -32,10 +32,14 @@ public class UserConfig {
 	 *
 	 * <p>Deliberately slow, which is the point of it, and the reason sign-in runs the encoder even
 	 * for an email that does not exist — see {@code UserService.signIn}.
+	 *
+	 * <p>No more hashes at once than there are cores, so a sale's worth of sign-ins queues for the CPU instead
+	 * of starving the connection pool. 0, the default, means the cores this JVM can see. See ADR 0071.
 	 */
 	@Bean
-	public PasswordEncoder passwordEncoder() {
-		return new BCryptPasswordEncoder();
+	public PasswordEncoder passwordEncoder(@Value("${flashcart.passwords.concurrency:0}") int concurrency) {
+		int permits = concurrency > 0 ? concurrency : Runtime.getRuntime().availableProcessors();
+		return new BoundedPasswordEncoder(new BCryptPasswordEncoder(), permits);
 	}
 
 	@Bean

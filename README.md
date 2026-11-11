@@ -617,6 +617,21 @@ now fails the run when its own tally disagrees with the database.
 Full detail, including the retention policy for the Phase 8 tables, is in
 [docs/load-testing.md](docs/load-testing.md).
 
+**And when the sale opens, everyone signs in at once.**
+
+```bash
+./load/sign-in.sh 3000 0    # 3,000 shoppers, nobody mistypes
+./load/sign-in.sh 1000 5    # 1,000 shoppers, 5% mistype once first
+```
+
+All of them arrive from one address, as people behind an office or a carrier's NAT do. Two things broke.
+With everyone hashing at once, the user service's connection pool ran dry while the database sat idle, and 40–90
+of 3,000 shoppers with the right password were turned away. The gateway also reported the overload as a `500`.
+Password checks are now capped at the core count, and the gateway answers with `503` and `Retry-After`. Both
+3,000 runs since got everyone in. **Still open:** when 5% mistype, the per-client throttle locks out 31–40% of
+everyone behind that address, right passwords included. See
+[ADR 0071](docs/adr/0071-everyone-signs-in-at-once.md).
+
 ## Who is asking
 
 ```bash
