@@ -75,3 +75,4 @@ when someone revisits it in six months.
 | [0067](0067-the-warehouses-read-goes-on-the-record.md) | The warehouse's read goes on the record | Accepted |
 | [0069](0069-the-order-services-log-was-kept-for-ever.md) | The order service's log was kept for ever | Accepted |
 | [0070](0070-a-test-run-is-not-a-customer.md) | A test run is not a customer | Accepted |
+| [0071](0071-everyone-signs-in-at-once.md) | Everyone signs in at once | Accepted |

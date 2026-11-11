@@ -144,3 +144,16 @@ from a bug in the order service. `UpstreamUnavailableException` now maps to `503
 
 Both were invisible to the load harness, which only ever asked the platform to do too much, never to
 do without.
+
+## Sign-in, when the sale opens
+
+`load/sign-in.sh [shoppers] [typo-percent]` seeds that many accounts and has them all sign in at once, then
+refresh once. It checks sessions, tokens and failure rows against PostgreSQL, and fails the run if they
+disagree. It refuses to run if the user service has sign-in or pool overrides, because its results are labelled
+as defaults. Afterwards it removes every account, session and failure row it made. The results and the two fixes
+they led to are in [ADR 0071](adr/0071-everyone-signs-in-at-once.md).
+
+Its books disagreed twice before they were right, and both times the harness was at fault, not the platform:
+
+- Two counts were joined with a space and then had whitespace stripped, so "200 400" read as 200400 for both.
+- The failure-row arithmetic forgot that a shopper who mistypes and then gets in clears their own pair row.
