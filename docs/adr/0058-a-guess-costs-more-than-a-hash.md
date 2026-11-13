@@ -109,5 +109,9 @@ stuffing a leaked password list through one machine stops after thirty tries.
 
 **Still open.**
 
+- *Many shoppers behind one address shared the per-client count, and at a sale their typos locked them all out.
+  [ADR 0072](0072-an-address-earns-its-typos.md) credits an address for the established accounts that sign in
+  from it.*
+
 - Support can see an email is stuck but cannot resend it ([ADR 0051](0051-support-can-see-what-we-told-them.md)).
 - A password reset or an account closure does not end sessions already signed in ([ADR 0057](0057-a-forgotten-password-is-not-a-lost-account.md)).

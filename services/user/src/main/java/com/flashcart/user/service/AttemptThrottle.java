@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -28,7 +29,9 @@ import org.springframework.stereotype.Component;
  *   <li><strong>One account, one client</strong> -- tight. Somebody guessing one account from one place is
  *       stopped quickly, and the account's real owner, signing in from somewhere else, is not.</li>
  *   <li><strong>One client, any accounts</strong> -- looser. Credential stuffing tries many accounts once
- *       each, which the first limit never sees.</li>
+ *       each, which the first limit never sees. Credited for the established accounts that signed in from
+ *       the same client, so many honest shoppers behind one address are not locked out by each other's
+ *       typos (ADR 0072).</li>
  *   <li><strong>One account, any clients</strong> -- loosest. A guess spread across many machines. This is
  *       the one an attacker could use to lock somebody out by failing on purpose, so it is set high and a
  *       password reset still works while it holds.</li>
@@ -57,6 +60,8 @@ public class AttemptThrottle {
 	private final Limit client;
 	private final Limit account;
 	private final Limit resetClient;
+	private final int creditCap;
+	private final Duration creditMinimumAge;
 
 	public AttemptThrottle(JdbcTemplate jdbc, MeterRegistry meters,
 			@Value("${flashcart.password-reset.limit.client.requests:10}") int resetRequests,
@@ -66,13 +71,17 @@ public class AttemptThrottle {
 			@Value("${flashcart.sign-in.limit.client.failures:30}") int clientFailures,
 			@Value("${flashcart.sign-in.limit.client.window:PT15M}") Duration clientWindow,
 			@Value("${flashcart.sign-in.limit.account.failures:50}") int accountFailures,
-			@Value("${flashcart.sign-in.limit.account.window:PT1H}") Duration accountWindow) {
+			@Value("${flashcart.sign-in.limit.account.window:PT1H}") Duration accountWindow,
+			@Value("${flashcart.sign-in.limit.client.credit-cap:300}") int creditCap,
+			@Value("${flashcart.sign-in.limit.client.credit-minimum-account-age:P1D}") Duration creditMinimumAge) {
 		this.jdbc = jdbc;
 		this.meters = meters;
 		this.pair = new Limit("account-and-client", pairFailures, pairWindow);
 		this.client = new Limit("client", clientFailures, clientWindow);
 		this.account = new Limit("account", accountFailures, accountWindow);
 		this.resetClient = new Limit("reset-client", resetRequests, resetWindow);
+		this.creditCap = creditCap;
+		this.creditMinimumAge = creditMinimumAge;
 		// Registered at zero now, for the reason Sessions gives: a counter born at 1 is invisible to the
 		// increase() the alerts take of it, so the first refusal after a restart would not count. ADR 0061.
 		for (Limit limit : List.of(pair, client, account)) {
@@ -88,7 +97,7 @@ public class AttemptThrottle {
 	 * @throws TooManyAttemptsException saying when trying again is worth it
 	 */
 	public void checkResetRequest(String clientAddress) {
-		Optional<Long> blocked = blockedFor(resetClient, key(resetClient, null, clientAddress));
+		Optional<Long> blocked = blockedFor(resetClient, key(resetClient, null, clientAddress), 0);
 		if (blocked.isPresent()) {
 			meters.counter("flashcart.user.password-reset.throttled").increment();
 			log.info("Password reset request refused: too many from this client; retry in {}s", blocked.get());
@@ -112,7 +121,17 @@ public class AttemptThrottle {
 		long wait = 0;
 		String scope = null;
 		for (Limit limit : List.of(pair, client, account)) {
-			Optional<Long> blocked = blockedFor(limit, key(limit, email, clientAddress));
+			String key = key(limit, email, clientAddress);
+			Optional<Long> blocked = blockedFor(limit, key, 0);
+			// The credit is only worth counting once the limit would hold without it, which almost no sign-in
+			// reaches. Counted on every one, it was a scan of the address's successes per request, and at a sale
+			// those are the requests already short of connections. ADR 0072.
+			if (blocked.isPresent() && limit == client) {
+				int credit = credit(clientAddress);
+				if (credit > 0) {
+					blocked = blockedFor(limit, key, credit);
+				}
+			}
 			if (blocked.isPresent() && blocked.get() > wait) {
 				wait = blocked.get();
 				scope = limit.scope();
@@ -138,9 +157,47 @@ public class AttemptThrottle {
 	/**
 	 * A success from this client clears this client's count for the account, so a mistyped password or two
 	 * does not linger. The other two counts stand: one success from one place says nothing about the rest.
+	 *
+	 * <p>And an established account proving its password here credits this client: see {@link #credit}.
+	 *
+	 * @param accountCreatedAt when the account was registered; one younger than the minimum age earns nothing
 	 */
-	public void succeeded(String email, String clientAddress) {
-		jdbc.update("delete from throttled_attempts where key_hash = ?", key(pair, email, clientAddress));
+	public void succeeded(String email, String clientAddress, Instant accountCreatedAt) {
+		// One statement, not two: at a sale every success is a request already short of connections, and each
+		// statement here takes one from the pool (ADR 0071). A data-modifying CTE runs whether or not it is read.
+		// The age is judged against the database's clock, as everything else here is.
+		jdbc.update("""
+				with cleared as (delete from throttled_attempts where key_hash = ?)
+				insert into sign_in_successes (client_hash, pair_hash)
+				select ?, ? where ?::timestamptz <= now() - make_interval(secs => ?)""",
+				key(pair, email, clientAddress), key(client, email, clientAddress), key(pair, email, clientAddress),
+				// An offset, not a Timestamp: a Timestamp is read in the session's zone, which would move the
+				// threshold by however many hours that zone is from UTC.
+				accountCreatedAt.atOffset(java.time.ZoneOffset.UTC), creditMinimumAge.toSeconds());
+	}
+
+	/**
+	 * How many more failures this client may have before the per-client limit holds: the distinct established
+	 * accounts that signed in from it within the window, up to the cap. ADR 0072.
+	 *
+	 * <p>Many people behind one address, an office or a mobile carrier's NAT, mostly sign in successfully, and
+	 * with a sale opening their typos alone passed thirty in seconds and locked out everyone there, right
+	 * passwords included. Credential stuffing from one address mostly fails. Counting the accounts that got in
+	 * tells the two apart where counting failures cannot.
+	 *
+	 * <p>Two guards keep it from being bought. An account registered less than a day before earns nothing, so
+	 * accounts made for an attack do not count during it. And the credit is capped, so even accounts prepared
+	 * a day ahead buy at most that many more guesses per window.
+	 */
+	private int credit(String clientAddress) {
+		// Stops at the cap: past it, more accounts change nothing, and a busy address can have thousands.
+		Integer accounts = jdbc.queryForObject("""
+				select count(*) from (
+				  select distinct pair_hash from sign_in_successes
+				   where client_hash = ? and succeeded_at > now() - make_interval(secs => ?)
+				   limit ?) credited""",
+				Integer.class, key(client, null, clientAddress), client.window().toSeconds(), creditCap);
+		return accounts == null ? 0 : accounts;
 	}
 
 	/**
@@ -166,15 +223,23 @@ public class AttemptThrottle {
 		try {
 			jdbc.update("delete from throttled_attempts where attempted_at < now() - make_interval(secs => ?)",
 					longest.toSeconds());
+			// Credit counts only within the client window, so nothing older can matter.
+			jdbc.update("delete from sign_in_successes where succeeded_at < now() - make_interval(secs => ?)",
+					client.window().toSeconds());
 		}
 		catch (DataAccessException ex) {
 			log.error("Pruning throttled attempts failed; will retry on the next tick", ex);
 		}
 	}
 
-	/** Seconds until this limit lets one more attempt through, or empty if it already would. */
-	private Optional<Long> blockedFor(Limit limit, String key) {
-		// The failure that has to age out before there is room: the limit-th most recent one in the window.
+	/**
+	 * Seconds until this limit lets one more attempt through, or empty if it already would.
+	 *
+	 * @param credit failures this key may have beyond the limit; 0 for every limit but the client one
+	 */
+	private Optional<Long> blockedFor(Limit limit, String key, int credit) {
+		// The failure that has to age out before there is room: the (limit + credit)-th most recent one in the
+		// window. The wait assumes the credit stays; it can only end sooner if more accounts sign in here.
 		// Its wait is computed by the database, against the same clock that stamped it: mixing the JVM's
 		// clock with the database's is a mistake the notice sender has already made once.
 		List<Long> wait = jdbc.queryForList("""
@@ -183,7 +248,7 @@ public class AttemptThrottle {
 				 where key_hash = ? and attempted_at > now() - make_interval(secs => ?)
 				 order by attempted_at desc
 				 offset ? limit 1""", Long.class, limit.window().toSeconds(), key, limit.window().toSeconds(),
-				limit.failures() - 1);
+				limit.failures() + credit - 1);
 		return wait.isEmpty() ? Optional.empty() : Optional.of(Math.max(1, wait.get(0)));
 	}
 
