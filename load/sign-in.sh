@@ -43,7 +43,7 @@ if [ -n "$OVERRIDES" ]; then
 	echo "$OVERRIDES"
 	exit 1
 fi
-echo "--> user service: default limits (30 failures per client per 15 min) and pool size (10)"
+echo "--> user service: default limits (30 failures per client per 15 min, credit up to 300) and pool size (10)"
 
 # Armed before anything is created, so a run that fails halfway leaves nothing behind either.
 SAMPLER=""
@@ -54,6 +54,7 @@ cleanup() {
 delete from refresh_tokens where user_id in (select id from users where email like :'prefix' || '-%');
 delete from users where email like :'prefix' || '-%';
 delete from throttled_attempts where attempted_at >= :'started'::timestamptz;
+delete from sign_in_successes where succeeded_at >= :'started'::timestamptz;
 SQL
 	echo "--> removed the run's accounts, sessions and failure rows"
 }
@@ -73,9 +74,12 @@ if [ "$CODE" != "201" ]; then
 fi
 
 psql_user -v prefix="$PREFIX" -v shoppers="$SHOPPERS" <<'SQL'
-insert into users (id, email, password_hash, display_name)
+-- Registered a week ago: the shoppers at a sale mostly have accounts already, and an account less than a day
+-- old earns its address no credit against the per-client limit (ADR 0072).
+insert into users (id, email, password_hash, display_name, created_at)
 select gen_random_uuid(), :'prefix' || '-' || g || '@example.test',
-       (select password_hash from users where email = :'prefix' || '-0@example.test'), 'Load ' || g
+       (select password_hash from users where email = :'prefix' || '-0@example.test'), 'Load ' || g,
+       now() - interval '7 days'
   from generate_series(1, :shoppers) g;
 SQL
 SEEDED=$(psql_user -v prefix="$PREFIX" <<'SQL' | tr -d '[:space:]'

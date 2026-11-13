@@ -125,6 +125,8 @@ upstream failure, a committed response rewritten, and `Retry-After` dropped.
 ## What this leaves open
 
 - **The shared-address lockout above.** It is the most serious thing this found, and it is the next change.
+  *Since fixed by [ADR 0072](0072-an-address-earns-its-typos.md), whose same-day comparison also found `main`
+  shedding 8–801 of 3,000: the two clean runs above were a good day, not a guarantee.*
 - **A wait for a core is invisible.** No metric counts requests waiting for a permit. If sign-in is slow in
   production, nothing would say it was waiting for the CPU and not the database.
 - **One service, one machine.** Several user-service instances would share the throttle table and each have their own

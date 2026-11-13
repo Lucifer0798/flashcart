@@ -103,7 +103,7 @@ public class UserService {
 			throw new UnauthenticatedException();
 		}
 
-		throttle.succeeded(email, clientAddress);
+		throttle.succeeded(email, clientAddress, user.getCreatedAt());
 		return sessions.start(user);
 	}
 
@@ -137,7 +137,7 @@ public class UserService {
 		if (passwords.matches(newPassword, user.getPasswordHash())) {
 			throw new BadRequestException("PASSWORD_UNCHANGED", "The new password is the same as the current one");
 		}
-		throttle.succeeded(user.getEmail(), clientAddress);
+		throttle.succeeded(user.getEmail(), clientAddress, user.getCreatedAt());
 		user.changePassword(passwords.encode(newPassword));
 		sessions.revokeAll(id, "password changed");
 		Instant now = Instant.now();

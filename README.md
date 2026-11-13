@@ -627,10 +627,12 @@ Full detail, including the retention policy for the Phase 8 tables, is in
 All of them arrive from one address, as people behind an office or a carrier's NAT do. Two things broke.
 With everyone hashing at once, the user service's connection pool ran dry while the database sat idle, and 40–90
 of 3,000 shoppers with the right password were turned away. The gateway also reported the overload as a `500`.
-Password checks are now capped at the core count, and the gateway answers with `503` and `Retry-After`. Both
-3,000 runs since got everyone in. **Still open:** when 5% mistype, the per-client throttle locks out 31–40% of
-everyone behind that address, right passwords included. See
-[ADR 0071](docs/adr/0071-everyone-signs-in-at-once.md).
+Password checks are now capped at the core count, and the gateway answers with `503` and `Retry-After`. That made
+shedding at 3,000 rare, not impossible: across later runs, `main` shed 8–801 of 3,000 on this machine. See
+[ADR 0071](docs/adr/0071-everyone-signs-in-at-once.md). And when 5% mistyped, the per-client throttle locked out
+31–40% of everyone behind the address, right passwords included. An address is now credited for the
+established accounts that get in from it, and since then 1,000 of 1,000 get in. See
+[ADR 0072](docs/adr/0072-an-address-earns-its-typos.md).
 
 ## Who is asking
 
@@ -705,7 +707,10 @@ See [ADR 0063](docs/adr/0063-changing-a-password-you-know.md).
 
 Failed sign-ins are limited three ways: **5 per 15 minutes** for one account from one client, **30 per 15
 minutes** from one client across any accounts (credential stuffing), and **50 per hour** for one account
-from anywhere. Past a limit the answer is `429 TOO_MANY_ATTEMPTS` with `Retry-After`, even for the right
+from anywhere. The per-client limit grows by one for every established account, at least a day old, that
+signed in successfully from that client in the window, up to 300 more. Many shoppers behind one office or
+carrier address are then not locked out by each other's typos, and a stuffer, whose guesses mostly fail,
+earns almost nothing. See [ADR 0072](docs/adr/0072-an-address-earns-its-typos.md). Past a limit the answer is `429 TOO_MANY_ATTEMPTS` with `Retry-After`, even for the right
 password, and before BCrypt runs. A success clears that client's count for the account. An address with
 no account is throttled exactly like one with an account, and the table keeps only hashes. The client is
 the gateway's own `X-Forwarded-For` entry, the right-most one, so a guesser cannot pick a new address for

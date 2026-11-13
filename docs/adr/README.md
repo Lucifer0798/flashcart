@@ -76,3 +76,4 @@ when someone revisits it in six months.
 | [0069](0069-the-order-services-log-was-kept-for-ever.md) | The order service's log was kept for ever | Accepted |
 | [0070](0070-a-test-run-is-not-a-customer.md) | A test run is not a customer | Accepted |
 | [0071](0071-everyone-signs-in-at-once.md) | Everyone signs in at once | Accepted |
+| [0072](0072-an-address-earns-its-typos.md) | An address earns its typos | Accepted |

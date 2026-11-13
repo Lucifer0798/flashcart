@@ -25,7 +25,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Failed sign-ins are limited. See ADR 0058.
+ * Failed sign-ins are limited. See ADR 0058, and ADR 0072 for the credit a shared address earns.
  *
  * <p>Small limits, so each case takes a handful of requests rather than fifty. Clients are told apart by
  * {@code X-Forwarded-For}, as the gateway tells the service, because these requests all come from here.
@@ -34,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 		"flashcart.sign-in.limit.account-and-client.failures=3",
 		"flashcart.sign-in.limit.client.failures=6",
 		"flashcart.sign-in.limit.account.failures=9",
+		// Small, so the cap is reached in a handful of sign-ins rather than three hundred. ADR 0072.
+		"flashcart.sign-in.limit.client.credit-cap=4",
 		"flashcart.password-reset.limit.client.requests=3",
 		// Longer than every sign-in window, so pruning by the sign-in windows alone would be caught.
 		"flashcart.password-reset.limit.client.window=PT2H" })
@@ -306,6 +308,133 @@ class SignInThrottleIT {
 				.isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 	}
 
+	// --- many shoppers behind one address (ADR 0072) --------------------------------------------------
+
+	@Test
+	@DisplayName("an office's typos do not lock out its shoppers: each established account that got in buys one more failure")
+	void aSharedAddressIsCreditedForItsShoppers() {
+		String office = client();
+		List<String> staff = List.of(established(), established(), established(), established());
+		// Three accounts in: the limit of six now holds at nine.
+		for (String email : staff.subList(0, 3)) {
+			assertThat(signIn(email, PASSWORD, office).getStatusCode()).isEqualTo(HttpStatus.OK);
+		}
+		fail(office, 8);
+		// Without the credit this would have been refused two failures ago.
+		assertThat(signIn(staff.get(3), PASSWORD, office).getStatusCode()).isEqualTo(HttpStatus.OK);
+		// Four in, so ten. The ninth failure still leaves room.
+		fail(office, 1);
+		assertThat(signIn(staff.get(0), PASSWORD, office).getStatusCode()).isEqualTo(HttpStatus.OK);
+		// The tenth closes it, for everybody there, right passwords included.
+		fail(office, 1);
+		assertThat(signIn(staff.get(0), PASSWORD, office).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+	}
+
+	@Test
+	@DisplayName("accounts registered for the attack earn nothing: only accounts at least a day old count")
+	void newAccountsEarnNoCredit() {
+		String stuffer = client();
+		Integer before = jdbc.queryForObject("select count(*) from sign_in_successes", Integer.class);
+		for (int i = 0; i < 3; i++) {
+			// Just registered, as an attacker's would be, and signed in from the attacking address.
+			assertThat(signIn(register(), PASSWORD, stuffer).getStatusCode()).isEqualTo(HttpStatus.OK);
+		}
+		// Not a row for any of them.
+		assertThat(jdbc.queryForObject("select count(*) from sign_in_successes", Integer.class)).isEqualTo(before);
+
+		fail(stuffer, 6);
+
+		assertThat(signIn(established(), PASSWORD, stuffer).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+	}
+
+	@Test
+	@DisplayName("the credit is per account, not per sign-in: one account signing in again and again buys one failure")
+	void creditCountsAccountsNotSignIns() {
+		String place = client();
+		String regular = established();
+		for (int i = 0; i < 4; i++) {
+			assertThat(signIn(regular, PASSWORD, place).getStatusCode()).isEqualTo(HttpStatus.OK);
+		}
+		fail(place, 6);
+		// One account, so seven: the sixth failure leaves room for one more.
+		assertThat(signIn(regular, PASSWORD, place).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		fail(place, 1);
+
+		assertThat(signIn(regular, PASSWORD, place).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+	}
+
+	@Test
+	@DisplayName("the credit is capped, so accounts prepared a day ahead still buy only so many guesses")
+	void creditIsCapped() {
+		String place = client();
+		List<String> accounts = List.of(established(), established(), established(), established(), established(),
+				established());
+		for (String email : accounts) {
+			assertThat(signIn(email, PASSWORD, place).getStatusCode()).isEqualTo(HttpStatus.OK);
+		}
+		// Six accounts in, but the cap is four: ten, not twelve.
+		fail(place, 9);
+		assertThat(signIn(accounts.get(0), PASSWORD, place).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		fail(place, 1);
+
+		assertThat(signIn(accounts.get(0), PASSWORD, place).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+	}
+
+	@Test
+	@DisplayName("only sign-ins from the same address count, so accounts that got in elsewhere earn a stuffer nothing")
+	void creditIsPerAddress() {
+		String stuffer = client();
+		String elsewhere = client();
+		for (int i = 0; i < 3; i++) {
+			assertThat(signIn(established(), PASSWORD, elsewhere).getStatusCode()).isEqualTo(HttpStatus.OK);
+		}
+
+		fail(stuffer, 6);
+
+		assertThat(signIn(established(), PASSWORD, stuffer).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+	}
+
+	@Test
+	@DisplayName("the credit does not loosen the tight limit: one account guessed from a busy office is still stopped")
+	void creditLeavesThePairLimitAlone() {
+		String office = client();
+		for (int i = 0; i < 4; i++) {
+			assertThat(signIn(established(), PASSWORD, office).getStatusCode()).isEqualTo(HttpStatus.OK);
+		}
+		String target = established();
+
+		for (int i = 0; i < 3; i++) {
+			assertThat(signIn(target, "a-wrong-password", office).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		assertThat(signIn(target, PASSWORD, office).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+		// The office as a whole is fine: three failures against a limit of ten.
+		assertThat(signIn(established(), PASSWORD, office).getStatusCode()).isEqualTo(HttpStatus.OK);
+	}
+
+	@Test
+	@DisplayName("credit ages out with the window and is pruned, and like the failures it is kept only as hashes")
+	void creditAgesOutAndIsHashed() {
+		String place = client();
+		String email = established();
+		assertThat(signIn(email, PASSWORD, place).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		List<Map<String, Object>> rows = jdbc.queryForList("select client_hash, pair_hash from sign_in_successes");
+		assertThat(rows).isNotEmpty().allSatisfy(row -> assertThat(row.values()).allSatisfy(value -> {
+			assertThat((String) value).matches("[0-9a-f]{64}").doesNotContain(place).doesNotContain(email);
+		}));
+
+		jdbc.update("update sign_in_successes set succeeded_at = now() - interval '16 minutes'");
+		fail(place, 6);
+		assertThat(signIn(email, PASSWORD, place).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+		throttle.prune();
+		assertThat(jdbc.queryForObject("select count(*) from sign_in_successes where succeeded_at < now() - interval '15 minutes'",
+				Integer.class)).isZero();
+	}
+
 	// --- helpers ------------------------------------------------------------------------------------
 
 	private static String client() {
@@ -319,6 +448,21 @@ class SignInThrottleIT {
 		assertThat(rest.postForEntity("/api/v1/users", Map.of("email", email, "password", PASSWORD, "displayName", "T"),
 				Map.class).getStatusCode()).isEqualTo(HttpStatus.CREATED);
 		return email;
+	}
+
+	/** An account registered two days ago, as most shoppers' are by the time a sale opens. */
+	private String established() {
+		String email = register();
+		jdbc.update("update users set created_at = now() - interval '2 days' where email = ?", email);
+		return email;
+	}
+
+	/** That many failed sign-ins from this client, each for a different address, as stuffing or typos look. */
+	private void fail(String clientAddress, int times) {
+		for (int i = 0; i < times; i++) {
+			assertThat(signIn("typo-" + UUID.randomUUID() + "@example.test", "password123456", clientAddress)
+					.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
 	}
 
 	private ResponseEntity<Map> close(HttpHeaders headers, String password) {
