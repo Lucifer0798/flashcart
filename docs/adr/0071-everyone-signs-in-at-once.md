@@ -129,5 +129,6 @@ upstream failure, a committed response rewritten, and `Retry-After` dropped.
   shedding 8–801 of 3,000: the two clean runs above were a good day, not a guarantee.*
 - **A wait for a core is invisible.** No metric counts requests waiting for a permit. If sign-in is slow in
   production, nothing would say it was waiting for the CPU and not the database.
+  *Since measured, along with every customer turned away, by [ADR 0073](0073-turned-away-is-a-fact.md).*
 - **One service, one machine.** Several user-service instances would share the throttle table and each have their own
   pool and cores. None of that was measured.
