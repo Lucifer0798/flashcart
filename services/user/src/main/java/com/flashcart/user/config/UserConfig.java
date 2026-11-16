@@ -37,9 +37,10 @@ public class UserConfig {
 	 * of starving the connection pool. 0, the default, means the cores this JVM can see. See ADR 0071.
 	 */
 	@Bean
-	public PasswordEncoder passwordEncoder(@Value("${flashcart.passwords.concurrency:0}") int concurrency) {
+	public PasswordEncoder passwordEncoder(@Value("${flashcart.passwords.concurrency:0}") int concurrency,
+			MeterRegistry meters) {
 		int permits = concurrency > 0 ? concurrency : Runtime.getRuntime().availableProcessors();
-		return new BoundedPasswordEncoder(new BCryptPasswordEncoder(), permits);
+		return new BoundedPasswordEncoder(new BCryptPasswordEncoder(), permits, meters);
 	}
 
 	@Bean

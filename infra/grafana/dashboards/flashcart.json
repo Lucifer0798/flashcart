@@ -336,6 +336,100 @@
           "legendFormat": "re-asked"
         }
       ]
+    },
+    {
+      "type": "row",
+      "title": "Sign-in at sale start — waiting for a core, or for a connection?",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Password checks queued for a core",
+      "description": "Password checks are capped at the cores the user service can see (ADR 0071), so a burst of sign-ins queues here rather than starving the connection pool. A queue at a sale opening is the cap doing its job. A queue that never empties means more sign-ins than the cores can hash: more cores or instances, not a bigger pool.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "targets": [
+        {
+          "expr": "sum (flashcart_user_password_checks_waiting)",
+          "legendFormat": "waiting"
+        },
+        {
+          "expr": "sum (flashcart_user_password_checks_in_progress)",
+          "legendFormat": "hashing"
+        },
+        {
+          "expr": "sum (flashcart_user_password_checks_slots)",
+          "legendFormat": "slots"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "How long a password check waited for a core",
+      "description": "Every check is timed, including those that waited for nothing, so the median is the typical sign-in. Seconds here, with the queue beside it full, is the CPU. Seconds of sign-in with nothing here is somewhere else, usually the database.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(flashcart_user_password_checks_wait_seconds_bucket[1m])))",
+          "legendFormat": "median"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(flashcart_user_password_checks_wait_seconds_bucket[1m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests turned away, and where",
+      "description": "Two ways a busy service turns customers away, both answered 503 with Retry-After. \"pool\" is the service itself, its connection pool empty for two seconds (RequestsShedForConnections). \"gateway\" is the service dropping or refusing the connection, so the gateway answered for it (UpstreamUnavailable). At 3,000 simultaneous sign-ins every refusal came the second way. Inventory sheds the first way by design under a stampede.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 59
+      },
+      "targets": [
+        {
+          "expr": "sum by (service) (increase(hikaricp_connections_timeout_total[1m]))",
+          "legendFormat": "{{service}}: pool"
+        },
+        {
+          "expr": "sum by (upstream) (increase(flashcart_gateway_upstream_unavailable_total[1m]))",
+          "legendFormat": "{{upstream}}: gateway"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests waiting for a database connection",
+      "description": "Threads queued for a pooled connection. Brief spikes are normal. A queue that stays up is the step before the panel beside it: requests that wait two seconds are turned away.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "targets": [
+        {
+          "expr": "sum by (service) (hikaricp_connections_pending)",
+          "legendFormat": "{{service}}"
+        }
+      ]
     }
   ]
 }

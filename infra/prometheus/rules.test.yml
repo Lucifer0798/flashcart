@@ -372,3 +372,105 @@ tests:
       - eval_time: 10m
         alertname: ResetRequestsThrottled
         exp_alerts: []
+
+  # --- RequestsShedForConnections (ADR 0073) ---------------------------------------------------------
+
+  - name: a service that turned requests away for want of a connection warns, naming the service
+    interval: 1m
+    input_series:
+      - series: 'hikaricp_connections_timeout_total{service="user", pool="HikariPool-1"}'
+        values: '0 0 0 12 12'
+      - series: 'hikaricp_connections_timeout_total{service="order", pool="HikariPool-1"}'
+        values: '0x4'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: RequestsShedForConnections
+        exp_alerts:
+          - exp_labels: { severity: warning, service: user }
+
+  - name: a pool that never timed out does not, however busy
+    interval: 1m
+    input_series:
+      - series: 'hikaricp_connections_timeout_total{service="user", pool="HikariPool-1"}'
+        values: '0x10'
+      - series: 'hikaricp_connections_pending{service="user", pool="HikariPool-1"}'
+        values: '0 5 9 7 3 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RequestsShedForConnections
+        exp_alerts: []
+
+  - name: shedding that stopped five minutes ago no longer warns
+    interval: 1m
+    input_series:
+      - series: 'hikaricp_connections_timeout_total{service="inventory", pool="HikariPool-1"}'
+        values: '0 4 4 4 4 4 4 4 4 4 4'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RequestsShedForConnections
+        exp_alerts:
+          - exp_labels: { severity: warning, service: inventory }
+      - eval_time: 10m
+        alertname: RequestsShedForConnections
+        exp_alerts: []
+
+  - name: a restart that resets the counter is not mistaken for shedding
+    interval: 1m
+    input_series:
+      - series: 'hikaricp_connections_timeout_total{service="user", pool="HikariPool-1"}'
+        values: '7 7 7 0 0 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RequestsShedForConnections
+        exp_alerts: []
+
+  # --- UpstreamUnavailable (ADR 0073) -----------------------------------------------------------------
+
+  - name: the gateway turning requests away for a service that dropped them warns, naming the service
+    interval: 1m
+    input_series:
+      - series: 'flashcart_gateway_upstream_unavailable_total{service="gateway", upstream="user"}'
+        values: '0 0 0 127 127'
+      - series: 'flashcart_gateway_upstream_unavailable_total{service="gateway", upstream="order"}'
+        values: '0x4'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: UpstreamUnavailable
+        exp_alerts:
+          - exp_labels: { severity: warning, upstream: user }
+
+  - name: every route at zero does not
+    interval: 1m
+    input_series:
+      - series: 'flashcart_gateway_upstream_unavailable_total{service="gateway", upstream="user"}'
+        values: '0x10'
+      - series: 'flashcart_gateway_upstream_unavailable_total{service="gateway", upstream="unrouted"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UpstreamUnavailable
+        exp_alerts: []
+
+  - name: a gateway restart that resets the count is not mistaken for refusals
+    interval: 1m
+    input_series:
+      - series: 'flashcart_gateway_upstream_unavailable_total{service="gateway", upstream="user"}'
+        values: '40 40 40 0 0 0'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: UpstreamUnavailable
+        exp_alerts: []
+
+  - name: refusals that stopped five minutes ago no longer warn
+    interval: 1m
+    input_series:
+      - series: 'flashcart_gateway_upstream_unavailable_total{service="gateway", upstream="user"}'
+        values: '0 9 9 9 9 9 9 9 9 9 9'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: UpstreamUnavailable
+        exp_alerts:
+          - exp_labels: { severity: warning, upstream: user }
+      - eval_time: 10m
+        alertname: UpstreamUnavailable
+        exp_alerts: []

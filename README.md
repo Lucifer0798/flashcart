@@ -580,6 +580,13 @@ counters are registered at zero at startup. A counter created on first use is bo
 reads as no change, so the first event after a restart would never fire them. See
 [ADR 0061](docs/adr/0061-the-first-theft-is-the-one-that-counts.md).
 
+Two more fire on a customer being turned away with a 503, which needs no threshold: each one is somebody
+told to come back. `RequestsShedForConnections` is a service whose connection pool had nothing free, and
+`UpstreamUnavailable` is the gateway answering for a service that dropped or refused the connection. At a
+sale, the second is the one that fires. The dashboard's "Sign-in at sale start" row shows which, and
+whether password checks were queued for the CPU at the time. See
+[ADR 0073](docs/adr/0073-turned-away-is-a-fact.md).
+
 There is deliberately **no tracing yet**. Correlation IDs already stitch a checkout together in the
 logs, and a tracing backend earns its container once Phase 11 is injecting failures worth tracing —
 see [ADR 0018](docs/adr/0018-metrics-answer-questions-the-logs-cannot.md).

@@ -1,6 +1,11 @@
 package com.flashcart.user.config;
 
+import java.time.Duration;
 import java.util.concurrent.Semaphore;
+
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -19,19 +24,49 @@ import org.springframework.security.crypto.password.PasswordEncoder;
  *
  * <p>The wait has no timeout of its own. Only request threads call this, so at most Tomcat's 200 can be
  * waiting, which at full speed is a second or two of work, and the gateway and the client bound it anyway.
+ *
+ * <p>And it is measured (ADR 0073). A sign-in slow because it queued for a core looks, from outside, exactly like
+ * one slow because the database is: these say which. All three are registered at construction, so a dashboard
+ * shows zero rather than nothing before the first sign-in.
+ *
+ * <ul>
+ *   <li>{@code flashcart.user.password-checks.waiting}: requests queued for a slot right now;</li>
+ *   <li>{@code flashcart.user.password-checks.in-progress}: hashes running, never more than the slots;</li>
+ *   <li>{@code flashcart.user.password-checks.slots}: the cap itself, for the panel beside them;</li>
+ *   <li>{@code flashcart.user.password-checks.wait}: how long each check waited for a slot, as a histogram.</li>
+ * </ul>
  */
 public final class BoundedPasswordEncoder implements PasswordEncoder {
 
 	private final PasswordEncoder delegate;
 	private final Semaphore permits;
+	private final Timer wait;
 
-	public BoundedPasswordEncoder(PasswordEncoder delegate, int concurrency) {
+	public BoundedPasswordEncoder(PasswordEncoder delegate, int concurrency, MeterRegistry meters) {
 		if (concurrency < 1) {
 			throw new IllegalArgumentException("concurrency must be at least 1, was " + concurrency);
 		}
 		this.delegate = delegate;
 		// Fair, so a sign-in that has waited longest is next: unfair would let a fresh arrival overtake it.
-		this.permits = new Semaphore(concurrency, true);
+		Semaphore semaphore = new Semaphore(concurrency, true);
+		this.permits = semaphore;
+		Gauge.builder("flashcart.user.password-checks.waiting", semaphore, Semaphore::getQueueLength)
+				.description("Password checks queued for a slot")
+				.register(meters);
+		Gauge.builder("flashcart.user.password-checks.in-progress", semaphore,
+				held -> concurrency - held.availablePermits())
+				.description("Password checks hashing now")
+				.register(meters);
+		Gauge.builder("flashcart.user.password-checks.slots", () -> concurrency)
+				.description("Password checks allowed at once")
+				.register(meters);
+		this.wait = Timer.builder("flashcart.user.password-checks.wait")
+				.description("Time a password check waited for a slot")
+				// Buckets, so a percentile can be taken across instances and over any window in Prometheus.
+				.publishPercentileHistogram()
+				.minimumExpectedValue(Duration.ofMillis(1))
+				.maximumExpectedValue(Duration.ofSeconds(60))
+				.register(meters);
 	}
 
 	@Override
@@ -63,6 +98,7 @@ public final class BoundedPasswordEncoder implements PasswordEncoder {
 	}
 
 	private void acquire() {
+		long started = System.nanoTime();
 		try {
 			permits.acquire();
 		}
@@ -70,5 +106,8 @@ public final class BoundedPasswordEncoder implements PasswordEncoder {
 			Thread.currentThread().interrupt();
 			throw new IllegalStateException("Interrupted while waiting to check a password", ex);
 		}
+		// Recorded for every check, including the ones that waited no time at all: a histogram of only the
+		// waits would make one slow sign-in in a thousand look like the typical one.
+		wait.record(System.nanoTime() - started, java.util.concurrent.TimeUnit.NANOSECONDS);
 	}
 }

@@ -235,3 +235,39 @@ groups:
             A client went past ten reset requests an hour, which looks like the reset form being used
             to email strangers. The refused requests sent nothing. The user service logs each refusal
             ("Password reset request refused").
+
+      - alert: RequestsShedForConnections
+        # A service turned requests away with 503 because none of its database connections came free within
+        # two seconds (ADR 0071). Each one is a customer refused, so there is no threshold to argue about:
+        # one is a fact worth knowing. Inventory sheds this way by design under a stampede, and that is still
+        # worth seeing. It is a ticket, not a page: shedding is the service protecting itself, as designed.
+        expr: sum by (service) (increase(hikaricp_connections_timeout_total[5m])) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.service }}: {{ $value | humanize }} requests turned away waiting for a database connection"
+          description: >
+            The service's connection pool had nothing free for two seconds, and requests were answered 503
+            with Retry-After rather than queued. The database may be slow, or something may be holding
+            connections too long. For the user service at a sale, the Grafana row "Sign-in at sale start"
+            shows whether password checks were queued for the CPU at the same time: if they were, more cores
+            or instances are the answer (ADR 0071); if they were not, look at the database. The service logs
+            each one ("Shedding a request: no database connection available in time"). A service that drops
+            connections instead turns customers away through the gateway: see UpstreamUnavailable.
+
+      - alert: UpstreamUnavailable
+        # The gateway answered 503 because the service behind a request refused the connection, dropped it, or
+        # never answered (ADR 0071). The other way a busy service turns customers away: at 3,000 simultaneous
+        # sign-ins, every one of 127 refusals came through here and none through the pool. Also what a stopped
+        # service looks like to its customers, alongside ServiceDown.
+        expr: sum by (upstream) (increase(flashcart_gateway_upstream_unavailable_total[5m])) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "gateway: {{ $value | humanize }} requests to {{ $labels.upstream }} answered 503, the service unreachable"
+          description: >
+            The gateway could not get an answer from the service and told the client to retry. If ServiceDown
+            is firing for the same service, that is why. If not, the service is up but dropping connections it
+            has queued too long, which at a sale is load: the Grafana row "Sign-in at sale start" shows whether
+            the user service's password checks were queued at the time. The gateway logs each one ("Upstream
+            unavailable for").
