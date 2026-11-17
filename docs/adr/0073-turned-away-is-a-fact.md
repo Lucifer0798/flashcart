@@ -85,5 +85,7 @@ rule groups by.
 - **Why the user service drops connections rather than answering.** It does so under a burst, and the gateway now
   counts it, but which limit closes them was not established. Tomcat's thread pool and accept queue, and its
   connection timeout, are the candidates.
+  *It was none of them: the gateway's unbounded connection pool flooded the user service's accept queue. See
+  [ADR 0074](0074-the-gateway-was-the-flood.md).*
 - **The pool alert is unseen in production conditions.** It is tested, but this session never produced a pool
   timeout after the cap.

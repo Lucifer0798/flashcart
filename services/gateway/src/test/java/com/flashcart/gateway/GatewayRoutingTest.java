@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.route.Route;
+import org.springframework.cloud.gateway.config.HttpClientProperties;
 import org.springframework.cloud.gateway.route.RouteLocator;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,6 +25,20 @@ class GatewayRoutingTest {
 
 	@Autowired
 	private RouteLocator routeLocator;
+
+	@Autowired
+	private HttpClientProperties httpClient;
+
+	@Test
+	@DisplayName("connections to each service are a fixed pool of 500, not one per request in flight")
+	void theConnectionPoolIsBounded() {
+		// Elastic, the default, opened 3,594 connections at once to the user service at a sale's opening, and the
+		// kernel's resets turned shoppers away. See ADR 0074.
+		assertThat(httpClient.getPool().getType()).isEqualTo(HttpClientProperties.Pool.PoolType.FIXED);
+		assertThat(httpClient.getPool().getMaxConnections()).isEqualTo(500);
+		assertThat(httpClient.getPool().getAcquireTimeout()).isEqualTo(45_000L);
+		assertThat(httpClient.getPool().isMetrics()).isTrue();
+	}
 
 	@Test
 	@DisplayName("all six domain services have a route")

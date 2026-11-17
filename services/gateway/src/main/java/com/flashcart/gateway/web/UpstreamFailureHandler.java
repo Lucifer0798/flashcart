@@ -121,11 +121,20 @@ public class UpstreamFailureHandler implements WebExceptionHandler, Ordered {
 		return exchange.getResponse().writeWith(Mono.just(buffer));
 	}
 
-	/** A connection refused, timed out, reset or closed early, anywhere in the cause chain. */
+	/**
+	 * The gateway's own pool gave up: a request waited longer than the acquire timeout for a connection to its
+	 * service, or the queue for one was full (ADR 0074). Matched by name, because Reactor Netty keeps these in a
+	 * shaded internal package that an upgrade is free to move.
+	 */
+	private static final java.util.Set<String> POOL_REFUSALS =
+			java.util.Set.of("PoolAcquireTimeoutException", "PoolAcquirePendingLimitException");
+
+	/** A connection refused, timed out, reset or closed early, or never handed out, anywhere in the cause chain. */
 	static boolean isUpstreamFailure(Throwable ex) {
 		for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
 			if (cause instanceof PrematureCloseException || cause instanceof ConnectException
-					|| cause instanceof ConnectTimeoutException) {
+					|| cause instanceof ConnectTimeoutException
+					|| POOL_REFUSALS.contains(cause.getClass().getSimpleName())) {
 				return true;
 			}
 			// Netty's native transport reports a reset as an IOException subclass of its own; any I/O failure

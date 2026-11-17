@@ -35,6 +35,9 @@ const refreshErrored = new Counter('refresh_errored');
 
 const signInMs = new Trend('sign_in_ok_ms', true);
 const refreshMs = new Trend('refresh_ok_ms', true);
+// How long a refused shopper waited before being told to come back: a fixed figure would be a timeout
+// somewhere, a spread would be a queue that overflowed. ADR 0074.
+const shedMs = new Trend('sign_in_shed_ms', true);
 
 export const options = {
 	scenarios: {
@@ -47,7 +50,7 @@ export const options = {
 	},
 	// Nothing here fails the run: a refusal is a finding to count, not a broken harness. The runner checks the
 	// counts against PostgreSQL instead.
-	summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
+	summaryTrendStats: ['min', 'avg', 'med', 'p(95)', 'p(99)', 'max'],
 };
 
 function signIn(email, password, name) {
@@ -89,6 +92,7 @@ export default function () {
 		return;
 	} else if (response.status === 503) {
 		shed.add(1);
+		shedMs.add(response.timings.duration);
 		return;
 	} else {
 		errored.add(1);
@@ -127,6 +131,7 @@ export function handleSummary(data) {
 		refreshErrored: count('refresh_errored'),
 		signInMs: trend('sign_in_ok_ms'),
 		refreshMs: trend('refresh_ok_ms'),
+		shedMs: trend('sign_in_shed_ms'),
 		durationMs: data.state.testRunDurationMs,
 	};
 	return {

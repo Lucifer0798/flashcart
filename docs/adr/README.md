@@ -78,3 +78,4 @@ when someone revisits it in six months.
 | [0071](0071-everyone-signs-in-at-once.md) | Everyone signs in at once | Accepted |
 | [0072](0072-an-address-earns-its-typos.md) | An address earns its typos | Accepted |
 | [0073](0073-turned-away-is-a-fact.md) | Turned away is a fact | Accepted |
+| [0074](0074-the-gateway-was-the-flood.md) | The gateway was the flood | Accepted |

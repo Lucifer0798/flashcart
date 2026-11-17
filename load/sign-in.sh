@@ -168,6 +168,9 @@ if s:
     print(f"sign-in ms:                    med {s['med']:.0f}  p95 {s['p(95)']:.0f}  p99 {s['p(99)']:.0f}  max {s['max']:.0f}")
 if r:
     print(f"refresh ms:                    med {r['med']:.0f}  p95 {r['p(95)']:.0f}  max {r['max']:.0f}")
+d = k6.get("shedMs") or {}
+if d.get("max"):
+    print(f"refused after ms:              min {d['min']:.0f}  med {d['med']:.0f}  max {d['max']:.0f}")
 print(f"whole run:                     {k6['durationMs'] / 1000:.1f} s")
 print(f"user service peak CPU:         {peak_cpu}%  (100% is one core)")
 print("--- the books, from PostgreSQL ---")
