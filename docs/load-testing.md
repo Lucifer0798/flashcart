@@ -157,3 +157,7 @@ Its books disagreed twice before they were right, and both times the harness was
 
 - Two counts were joined with a space and then had whitespace stripped, so "200 400" read as 200400 for both.
 - The failure-row arithmetic forgot that a shopper who mistypes and then gets in clears their own pair row.
+
+It also records how long each refused shopper waited before the `503`. A fixed figure points at a timeout,
+and a spread at a queue. That is how [ADR 0074](adr/0074-the-gateway-was-the-flood.md) told the kernel's
+handshake retries running out (17–30 s) from the gateway's own acquire timeout.

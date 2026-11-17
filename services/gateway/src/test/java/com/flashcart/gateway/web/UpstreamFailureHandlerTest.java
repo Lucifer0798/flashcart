@@ -112,6 +112,36 @@ class UpstreamFailureHandlerTest {
 		return meters.get(UpstreamFailureHandler.COUNTER).tag("upstream", upstream).counter().count();
 	}
 
+	/** Stand-ins with the names Reactor Netty's shaded pool uses, which the handler matches by name. */
+	static final class PoolAcquireTimeoutException extends java.util.concurrent.TimeoutException {
+	}
+
+	static final class PoolAcquirePendingLimitException extends RuntimeException {
+	}
+
+	@Test
+	@DisplayName("a request the gateway's own pool gave up on is a 503 too, and is counted")
+	void thePoolGivingUpIsServiceUnavailable() {
+		MockServerWebExchange timedOut = exchange();
+		handler.handle(timedOut, new RuntimeException("wrapped", new PoolAcquireTimeoutException())).block();
+		MockServerWebExchange queueFull = exchange();
+		handler.handle(queueFull, new PoolAcquirePendingLimitException()).block();
+
+		assertThat(timedOut.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+		assertThat(queueFull.getResponse().getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+		assertThat(timedOut.getResponse().getHeaders().getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("1");
+		assertThat(meters.get(UpstreamFailureHandler.COUNTER).tag("upstream", UpstreamFailureHandler.UNROUTED).counter()
+				.count()).isEqualTo(2);
+	}
+
+	@Test
+	@DisplayName("a timeout that is not the pool's still goes to the default handler")
+	void otherTimeoutsPassThrough() {
+		java.util.concurrent.TimeoutException other = new java.util.concurrent.TimeoutException("something else");
+
+		assertThatThrownBy(() -> handler.handle(exchange(), other).block()).hasCause(other);
+	}
+
 	private static MockServerWebExchange exchange() {
 		MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/v1/users/sessions"));
 		exchange.getResponse().getHeaders().set(CorrelationId.HEADER, "corr-1");

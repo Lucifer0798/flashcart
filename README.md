@@ -641,6 +641,13 @@ shedding at 3,000 rare, not impossible: across later runs, `main` shed 8–801 o
 established accounts that get in from it, and since then 1,000 of 1,000 get in. See
 [ADR 0072](docs/adr/0072-an-address-earns-its-typos.md).
 
+The refusals that were left came from the gateway. Its HTTP client opened a new connection for every request
+in flight: 3,594 at once to a user service with 200 threads and an accept queue of 100. The kernel reset
+the overflow after half a minute. The gateway now holds at most 500 connections per service, and the excess
+waits at the gateway, where the dashboard shows it. Since then, 4,000 and 6,000 shoppers have all got in. A
+request still waiting after 45 seconds is answered `503`. See
+[ADR 0074](docs/adr/0074-the-gateway-was-the-flood.md).
+
 ## Who is asking
 
 ```bash

@@ -430,6 +430,27 @@
           "legendFormat": "{{service}}"
         }
       ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests waiting at the gateway for a connection to their service",
+      "description": "The gateway holds at most 500 connections to each service (ADR 0074), so a burst larger than that queues here, in order. A queue at a sale opening is the cap working: before it, the same burst opened thousands of connections and the kernel reset the overflow. A request that waits 45 seconds is answered 503 and counted in UpstreamUnavailable.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 67
+      },
+      "targets": [
+        {
+          "expr": "sum by (remote_address) (reactor_netty_connection_provider_pending_connections{name=\"proxy\"})",
+          "legendFormat": "waiting: {{remote_address}}"
+        },
+        {
+          "expr": "sum by (remote_address) (reactor_netty_connection_provider_active_connections{name=\"proxy\"})",
+          "legendFormat": "in use: {{remote_address}}"
+        }
+      ]
     }
   ]
 }

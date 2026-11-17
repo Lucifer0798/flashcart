@@ -5,6 +5,22 @@ spring:
     gateway:
       server:
         webflux:
+          httpclient:
+            # A fixed pool per service, not the default elastic one, which opens a connection for every
+            # request in flight. At a sale's opening that was 3,594 connections at once to a user service with
+            # 200 request threads and an accept queue of 100. The kernel dropped the overflow, and the
+            # connections it reset reached shoppers as 503s after 10-30 seconds: every refusal at 4,000
+            # shoppers. Capped, the excess waits here, in order, where it is measured, and nobody was refused.
+            # See ADR 0074.
+            pool:
+              type: FIXED
+              # More than any service's 200 request threads, so the gateway never starves a service of work.
+              max-connections: 500
+              # Reactor Netty's own default, written down: past this, a request still waiting for a connection
+              # is answered 503 with Retry-After (UpstreamFailureHandler) instead of waiting longer.
+              acquire-timeout: 45000
+              # reactor_netty_connection_provider_*: the queue at the gateway, on the dashboard.
+              metrics: true
           default-filters:
             # The gateway stamps X-Correlation-Id on the response, and the downstream service echoes
             # the same header on its own response — so without this the caller receives the header
