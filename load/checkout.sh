@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# A sale opens and everyone checks out at once. See ADR 0075.
+# A sale opens and everyone checks out at once. See ADR 0076.
 #
 #   ./load/checkout.sh [shoppers] [stock]
 #

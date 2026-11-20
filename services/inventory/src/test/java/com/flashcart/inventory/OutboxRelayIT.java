@@ -25,7 +25,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The outbox relay against a real broker and a real table, driven by hand. See ADR 0075.
+ * The outbox relay against a real broker and a real table, driven by hand. See ADR 0076.
  *
  * <p>Its own class, because InventoryKafkaIT needs the relay's timer running, and a timer publishing in the
  * background would let a test of "one call drains the queue" pass with the drain broken. Here the timer is
@@ -72,7 +72,7 @@ class OutboxRelayIT {
 			queue(topic, "one-order", n, n);
 		}
 
-		// One tick. Before ADR 0075 this sent one batch of ten and left twenty-five for the next three seconds.
+		// One tick. Before ADR 0076 this sent one batch of ten and left twenty-five for the next three seconds.
 		relay.relay();
 
 		assertThat(jdbc.queryForObject("select count(*) from outbox_messages where published_at is null", Integer.class))

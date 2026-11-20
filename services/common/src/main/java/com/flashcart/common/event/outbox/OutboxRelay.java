@@ -112,7 +112,7 @@ public class OutboxRelay {
 		try {
 			// While a batch comes back full there is more waiting, so go again rather than sleep a second
 			// behind a backlog: one batch a tick capped every service at about fifty messages a second, and a
-			// 3,000-order sale left 7,514 rows waiting in the order service alone (ADR 0075). A batch that
+			// 3,000-order sale left 7,514 rows waiting in the order service alone (ADR 0076). A batch that
 			// comes back short, a send failed or the queue is empty, ends it, so failures still back off by
 			// a tick. Bounded, because the scheduler thread is shared with every other timer in the service.
 			long until = System.nanoTime() + drainBudget.toNanos();
@@ -161,7 +161,7 @@ public class OutboxRelay {
 
 		// The whole batch is handed to the producer before any acknowledgement is awaited, and then every one is
 		// awaited before its row is marked. Awaiting each before sending the next made every message a round
-		// trip to the broker (ADR 0075). Order within a key survives: the producer is idempotent, so several
+		// trip to the broker (ADR 0076). Order within a key survives: the producer is idempotent, so several
 		// requests in flight still land in the order they were sent, and each row is still marked only once the
 		// broker has it.
 		List<InFlight> inFlight = new ArrayList<>(pending.size());

@@ -1,5 +1,5 @@
 // A sale opens: every shopper signs in, then all of them check out at the same moment, and each watches their
-// order until it settles. See load/checkout.sh and ADR 0075.
+// order until it settles. See load/checkout.sh and ADR 0076.
 //
 // Signing in is not what is measured here (ADR 0071 measured it): each shopper signs in first and then waits for
 // START_AT, so the orders, not the sign-ins, arrive together.
