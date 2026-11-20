@@ -1,6 +1,8 @@
 package com.flashcart.common.event.outbox;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -78,13 +80,14 @@ public class OutboxRelay {
 	private final KafkaTemplate<String, String> kafka;
 	private final TransactionTemplate transactions;
 	private final int batchSize;
+	private final Duration drainBudget;
 	private final Counter published;
 	private final Counter sendFailures;
 	private final Tracer tracer;
 
 	public OutboxRelay(JdbcTemplate jdbc, KafkaTemplate<String, String> kafka,
 			PlatformTransactionManager transactionManager, MeterRegistry registry, int batchSize,
-			OpenTelemetry openTelemetry) {
+			Duration drainBudget, OpenTelemetry openTelemetry) {
 		// Injected rather than taken from GlobalOpenTelemetry, which Spring Boot does not reliably
 		// register: the global would hand back a no-op tracer, every hop would be a non-recording
 		// span, and the whole thing would quietly do nothing while compiling perfectly.
@@ -100,15 +103,28 @@ public class OutboxRelay {
 		// query returns, and two instances would happily claim the same rows.
 		this.transactions = new TransactionTemplate(transactionManager);
 		this.batchSize = batchSize;
+		this.drainBudget = drainBudget;
 	}
 
 	@Scheduled(fixedDelayString = "${flashcart.outbox.relay.fixed-delay:PT1S}",
 			initialDelayString = "${flashcart.outbox.relay.initial-delay:PT5S}")
 	public void relay() {
 		try {
-			int published = relayBatch();
-			if (published > 0) {
-				log.debug("Relayed {} outbox message(s)", published);
+			// While a batch comes back full there is more waiting, so go again rather than sleep a second
+			// behind a backlog: one batch a tick capped every service at about fifty messages a second, and a
+			// 3,000-order sale left 7,514 rows waiting in the order service alone (ADR 0075). A batch that
+			// comes back short, a send failed or the queue is empty, ends it, so failures still back off by
+			// a tick. Bounded, because the scheduler thread is shared with every other timer in the service.
+			long until = System.nanoTime() + drainBudget.toNanos();
+			int published;
+			int total = 0;
+			do {
+				published = relayBatch();
+				total += published;
+			}
+			while (published == batchSize && System.nanoTime() < until);
+			if (total > 0) {
+				log.debug("Relayed {} outbox message(s)", total);
 			}
 		}
 		catch (RuntimeException ex) {
@@ -143,10 +159,19 @@ public class OutboxRelay {
 						rs.getObject("created_at", java.time.OffsetDateTime.class).toInstant()),
 				batchSize);
 
-		int sent = 0;
+		// The whole batch is handed to the producer before any acknowledgement is awaited, and then every one is
+		// awaited before its row is marked. Awaiting each before sending the next made every message a round
+		// trip to the broker (ADR 0075). Order within a key survives: the producer is idempotent, so several
+		// requests in flight still land in the order they were sent, and each row is still marked only once the
+		// broker has it.
+		List<InFlight> inFlight = new ArrayList<>(pending.size());
 		for (Pending message : pending) {
-			if (send(message)) {
-				jdbc.update(MARK_PUBLISHED, message.id());
+			inFlight.add(start(message));
+		}
+		int sent = 0;
+		for (InFlight sending : inFlight) {
+			if (finish(sending)) {
+				jdbc.update(MARK_PUBLISHED, sending.message().id());
 				sent++;
 				this.published.increment();
 			}
@@ -154,7 +179,11 @@ public class OutboxRelay {
 		return sent;
 	}
 
-	private boolean send(Pending message) {
+	/** A message handed to the producer, its hop span still open until the broker answers. */
+	private record InFlight(Pending message, Span hop, CompletableFuture<?> ack, Exception refused) {
+	}
+
+	private InFlight start(Pending message) {
 		ProducerRecord<String, String> record =
 				new ProducerRecord<>(message.topic(), message.key(), message.payload());
 		record.headers().add(new RecordHeader("eventType",
@@ -182,31 +211,53 @@ public class OutboxRelay {
 							traceparent.getBytes(StandardCharsets.UTF_8)));
 				}
 
-				// Awaited deliberately, unlike the direct publisher: the row must only be marked
-				// published once the broker has actually acknowledged it. Marking optimistically
+				// Awaited in finish(), deliberately, unlike the direct publisher: the row must only be
+				// marked published once the broker has actually acknowledged it. Marking optimistically
 				// would reintroduce exactly the loss the outbox exists to prevent.
-				kafka.send(record).get();
-				return true;
-			}
-			catch (InterruptedException ex) {
-				Thread.currentThread().interrupt();
-				hop.setStatus(StatusCode.ERROR, "interrupted");
-				return false;
+				return new InFlight(message, hop, kafka.send(record), null);
 			}
 			catch (Exception ex) {
-				sendFailures.increment();
-				hop.setStatus(StatusCode.ERROR, String.valueOf(ex.getMessage()));
-				hop.recordException(ex);
-				jdbc.update(RECORD_FAILURE, ex.getMessage(), message.id());
-				if (message.attempts() > 0 && message.attempts() % 10 == 0) {
-					log.error("Outbox message {} has failed {} times; a saga is stalled behind it",
-							message.eventId(), message.attempts(), ex);
-				}
-				return false;
+				// Refused before it was ever in flight: no metadata within max.block.ms, say.
+				return new InFlight(message, hop, null, ex);
 			}
-			finally {
-				hop.end();
+		}
+	}
+
+	private boolean finish(InFlight sending) {
+		Pending message = sending.message();
+		Span hop = sending.hop();
+		try {
+			if (sending.refused() != null) {
+				throw sending.refused();
 			}
+			sending.ack().get();
+			return true;
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			hop.setStatus(StatusCode.ERROR, "interrupted");
+			return false;
+		}
+		catch (Exception ex) {
+			// The root cause, not the wrapper: Spring's KafkaProducerException says only "Failed to send", and
+			// last_error is what an operator reads to find out why a saga is stuck.
+			Throwable cause = ex;
+			while (cause.getCause() != null && cause.getCause() != cause) {
+				cause = cause.getCause();
+			}
+			String reason = cause.getClass().getSimpleName() + ": " + cause.getMessage();
+			sendFailures.increment();
+			hop.setStatus(StatusCode.ERROR, reason);
+			hop.recordException(cause);
+			jdbc.update(RECORD_FAILURE, reason, message.id());
+			if (message.attempts() > 0 && message.attempts() % 10 == 0) {
+				log.error("Outbox message {} has failed {} times; a saga is stalled behind it",
+						message.eventId(), message.attempts(), cause);
+			}
+			return false;
+		}
+		finally {
+			hop.end();
 		}
 	}
 

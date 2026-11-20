@@ -108,9 +108,11 @@ public class OutboxAutoConfiguration {
 			ObjectProvider<MeterRegistry> registry,
 			ObjectProvider<io.opentelemetry.api.OpenTelemetry> openTelemetry,
 			@org.springframework.beans.factory.annotation.Value(
-					"${flashcart.outbox.relay.batch-size:100}") int batchSize) {
+					"${flashcart.outbox.relay.batch-size:100}") int batchSize,
+			@org.springframework.beans.factory.annotation.Value(
+					"${flashcart.outbox.relay.drain-budget:PT5S}") java.time.Duration drainBudget) {
 		return new OutboxRelay(jdbc, outboxKafkaTemplate, transactionManager, meterRegistry(registry),
-				batchSize,
+				batchSize, drainBudget,
 				// Absent in a service without tracing configured, where a no-op tracer is exactly
 				// right: the relay still sends, and only the trace is poorer for it.
 				openTelemetry.getIfAvailable(io.opentelemetry.api.OpenTelemetry::noop));
