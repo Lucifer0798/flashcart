@@ -397,10 +397,13 @@ jobs:
           # And the shopper was told each step, by email (ADR 0048): confirmed when it was paid, cancelled
           # when shipping stopped it, refunded once payment actually moved the money. Three, in that order,
           # and no more. Polled, because each is its own hop through Kafka and the sender.
+          # Sorted by time, not by the text of Mailpit's Created: it drops trailing zeros from the
+          # milliseconds, so "…32.5Z" sorted after "…32.507Z" and the cancellation, sent 7 ms before the
+          # refund, read as sent after it whenever its milliseconds ended in a zero.
           ME=$(curl -sf -H "Authorization: Bearer $TOKEN" $G/api/v1/users/me | sed -n 's/.*"email":"\([^"]*\)".*/\1/p')
           for i in $(seq 1 30); do
             SUBJECTS=$(curl -s "http://localhost:18025/api/v1/search?query=$(python3 -c "import urllib.parse; print(urllib.parse.quote('to:\"$ME\" subject:\"$ORDER\"'))")" \
-              | python3 -c "import json,sys; print('|'.join(m['Subject'] for m in sorted(json.load(sys.stdin)['messages'], key=lambda m: m['Created'])))")
+              | python3 -c "import json,sys,datetime; when=lambda m: datetime.datetime.fromisoformat(m['Created'].replace('Z','+00:00')); print('|'.join(m['Subject'] for m in sorted(json.load(sys.stdin)['messages'], key=when)))")
             if [ "$(echo "$SUBJECTS" | tr '|' '\n' | grep -c .)" -ge 3 ]; then break; fi
             sleep 2
           done
