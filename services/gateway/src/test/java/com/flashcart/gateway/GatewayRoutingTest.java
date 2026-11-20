@@ -44,6 +44,9 @@ class GatewayRoutingTest {
 		assertThat(httpClient.getPool().getType()).isEqualTo(HttpClientProperties.Pool.PoolType.FIXED);
 		assertThat(httpClient.getPool().getMaxConnections()).isEqualTo(500);
 		assertThat(httpClient.getPool().getAcquireTimeout()).isEqualTo(45_000L);
+		// Below the services' Tomcat keep-alive of 60 seconds, so the gateway closes an idle connection before
+		// Tomcat does, rather than sending a request down one as it closes (ADR 0076).
+		assertThat(httpClient.getPool().getMaxIdleTime()).isEqualTo(java.time.Duration.ofSeconds(30));
 		assertThat(httpClient.getPool().isMetrics()).isTrue();
 	}
 

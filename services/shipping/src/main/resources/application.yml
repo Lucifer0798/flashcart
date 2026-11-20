@@ -29,6 +29,11 @@ spring:
 server:
   port: ${SERVER_PORT:8086}
   shutdown: graceful
+  tomcat:
+    # Room for every connection the gateway may open at once (max-connections 500, ADR 0074): after a quiet
+    # spell its pool is empty, and a burst opens them together. Tomcat's default of 100 overflowed and the
+    # kernel reset what it dropped. scripts/connection-limits-check.py keeps the two in step. ADR 0076.
+    accept-count: 1000
 
 management:
   endpoints:

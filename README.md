@@ -648,6 +648,25 @@ waits at the gateway, where the dashboard shows it. Since then, 4,000 and 6,000 
 request still waiting after 45 seconds is answered `503`. See
 [ADR 0074](docs/adr/0074-the-gateway-was-the-flood.md).
 
+**Then everyone checks out.**
+
+```bash
+./load/checkout.sh 3000 3000    # 3,000 shoppers, enough stock for all of them
+./load/checkout.sh 3000 300     # 3,000 shoppers for 300 units
+```
+
+Every shopper signs in, all of them order at the same moment, and each watches their order until it ships
+or is cancelled. Then the run checks orders, payments, parcels, stock, outboxes and dead letters across five
+services against each other and against what each shopper was told. It fails if anything is oversold or stuck, or if
+anybody was turned away. The books were always right, but the saga was slow. The outbox relay sent one message at a
+time, one batch a second, so 3,000 orders took five minutes to settle and most shoppers gave up watching. It now
+sends a batch at once and drains while behind, and the same sale settles in about two minutes.
+
+Two races came to light after that. The gateway reused connections Tomcat was closing after 60 idle seconds, and an
+empty pool opened 500 connections into an accept queue of 100. The gateway now retires idle connections at 30
+seconds, every service queues 1,000, and `scripts/connection-limits-check.py` keeps the two in step. See
+[ADR 0076](docs/adr/0076-everyone-checks-out-at-once.md).
+
 ## Who is asking
 
 ```bash

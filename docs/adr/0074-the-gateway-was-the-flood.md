@@ -101,6 +101,8 @@ one. Each was caught by the test written for it.
 
 ## What this leaves open
 
+- *Since measured for checkout by [ADR 0076](0076-everyone-checks-out-at-once.md), which also found the
+  accept queue that a warm pool had hidden here.*
 - **Other services were not measured under this change.** The flash-sale harness reserves with 200 virtual users, well
   under 500, and its CI run and the full build pass. No order or inventory burst larger than the pool was tried.
 - **45 seconds is Reactor Netty's number, not one chosen for shoppers.** It is written down here so that it can be

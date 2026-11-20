@@ -145,6 +145,22 @@ from a bug in the order service. `UpstreamUnavailableException` now maps to `503
 Both were invisible to the load harness, which only ever asked the platform to do too much, never to
 do without.
 
+## Checkout, when the sale opens
+
+`load/checkout.sh [shoppers] [stock]` has every shopper sign in, then order at the same moment, and watch their
+order until it settles. It fails the run if any service's books disagree with another's, or with what a shopper was
+told, if anything is oversold or stuck, or if anybody was turned away.
+
+That last condition was added after a run in which most shoppers never reached the shop, because another session was
+recreating the gateway. That run reported its books in agreement, and they were, about the few who got in. A probe
+that cannot see who is missing measures only the survivors.
+
+`load/idle-race.sh [seconds ...]` fills the gateway's pool, leaves it idle, and bursts again. It is how the 60-second
+race with Tomcat in [ADR 0076](adr/0076-everyone-checks-out-at-once.md) was found and shown fixed.
+
+Comparing two builds means alternating them in one session, waiting for the stack to be quiet before each run, and
+checking that no container restarted during it. Numbers from another day are not a baseline.
+
 ## Sign-in, when the sale opens
 
 `load/sign-in.sh [shoppers] [typo-percent]` seeds that many accounts and has them all sign in at once, then
