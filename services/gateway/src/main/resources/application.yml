@@ -93,6 +93,12 @@ logging:
     org.springframework.cloud.gateway: ${GATEWAY_LOG_LEVEL:INFO}
 
 flashcart:
+  gateway:
+    dns:
+      # The longest the gateway keeps a service's address, whatever TTL the DNS server gave it. Docker's is 600 s,
+      # so a service that came back on a new address stayed unreachable through the gateway for up to ten minutes.
+      # See ADR 0075 and UpstreamDnsConfig.
+      cache-max-time-to-live: ${GATEWAY_DNS_CACHE_MAX_TTL:5s}
   security:
     jwt:
       # The gateway verifies with the same secret the user service signs with. See ADR 0021 for why

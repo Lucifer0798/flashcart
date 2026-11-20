@@ -1,9 +1,12 @@
 package com.flashcart.gateway;
 
+import java.time.Duration;
 import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import reactor.netty.http.client.HttpClient;
+import reactor.netty.transport.NameResolverProvider;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -29,6 +32,10 @@ class GatewayRoutingTest {
 	@Autowired
 	private HttpClientProperties httpClient;
 
+	/** The one NettyRoutingFilter sends every proxied request with. */
+	@Autowired
+	private HttpClient routingClient;
+
 	@Test
 	@DisplayName("connections to each service are a fixed pool of 500, not one per request in flight")
 	void theConnectionPoolIsBounded() {
@@ -38,6 +45,19 @@ class GatewayRoutingTest {
 		assertThat(httpClient.getPool().getMaxConnections()).isEqualTo(500);
 		assertThat(httpClient.getPool().getAcquireTimeout()).isEqualTo(45_000L);
 		assertThat(httpClient.getPool().isMetrics()).isTrue();
+	}
+
+	@Test
+	@DisplayName("the client that carries every route keeps a service's address for five seconds at most")
+	void addressesAreLookedUpAgainWithinSeconds() {
+		// Netty's resolver otherwise keeps an answer for its whole TTL, 600 seconds from Docker's DNS, so a service
+		// that came back on a new address was refused through the gateway for up to ten minutes. See ADR 0075.
+		NameResolverProvider resolver = routingClient.configuration().getNameResolverProvider();
+
+		assertThat(resolver).as("a resolver configured on the routing client").isNotNull();
+		assertThat(resolver.cacheMaxTimeToLive()).isEqualTo(Duration.ofSeconds(5));
+		// Only the cap moves. A negative answer is still not cached, so a service that is back is found at once.
+		assertThat(resolver.cacheNegativeTimeToLive()).isEqualTo(Duration.ZERO);
 	}
 
 	@Test
