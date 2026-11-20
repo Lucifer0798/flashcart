@@ -957,6 +957,12 @@ unit twice or swallow a committed message.
 | Inventory dies mid-saga | The command waits on the topic; `processed_events` decides whether it was already applied |
 | Catalog dies during checkout | [ADR 0010](docs/adr/0010-refusal-and-silence-are-different-failures.md) — a silence is not a refusal, so refuse cleanly and strand nothing |
 
+A service that comes back is not always where it was: Docker can give a restarted container a new address. The
+gateway keeps a service's address for at most five seconds (`GATEWAY_DNS_CACHE_MAX_TTL`). Before that cap, it kept
+the address for the 600-second TTL Docker's DNS hands out. After the user service crash-looped onto a new address,
+every request through the gateway was refused for nine minutes after the service was healthy again. See
+[ADR 0075](docs/adr/0075-the-gateway-remembered-the-old-address.md).
+
 ## Following one checkout
 
 Zipkin is on <http://localhost:19411>. A single checkout is **one trace across five services** —
