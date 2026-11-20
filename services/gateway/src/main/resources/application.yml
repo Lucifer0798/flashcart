@@ -19,6 +19,11 @@ spring:
               # Reactor Netty's own default, written down: past this, a request still waiting for a connection
               # is answered 503 with Retry-After (UpstreamFailureHandler) instead of waiting longer.
               acquire-timeout: 45000
+              # Retire a connection after 30 idle seconds, before the service's Tomcat does at 60. Without this,
+              # a burst arriving as Tomcat closed a pool of idle connections was sent down them as they closed:
+              # 110 and 132 of 200 requests reset after 61 idle seconds, none after 59 or 70. Closed by the
+              # gateway, there is no race. See ADR 0076.
+              max-idle-time: 30000
               # reactor_netty_connection_provider_*: the queue at the gateway, on the dashboard.
               metrics: true
           default-filters:

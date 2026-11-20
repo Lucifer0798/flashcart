@@ -53,6 +53,12 @@ jobs:
           # and every test stayed green. CI has no stack, so only this can notice a module losing the guard.
           python3 scripts/test-isolation-check.py
 
+      - name: Every service can take every connection the gateway may open at once
+        run: |
+          # The gateway's pool and each service's accept queue are set in different files. A queue smaller than
+          # the pool overflowed at a sale's opening and reset 44 orders (ADR 0076).
+          python3 scripts/connection-limits-check.py
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5

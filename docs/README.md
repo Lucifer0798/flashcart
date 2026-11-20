@@ -96,6 +96,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0073](adr/0073-turned-away-is-a-fact.md) — Turned away is a fact
 - [0074](adr/0074-the-gateway-was-the-flood.md) — The gateway was the flood
 - [0075](adr/0075-the-gateway-remembered-the-old-address.md) — The gateway remembered the old address
+- [0076](adr/0076-everyone-checks-out-at-once.md) — Everyone checks out at once
 - [0028](adr/0028-looking-is-not-acting.md) — Looking is not acting
 - [0029](adr/0029-an-operator-read-was-a-silence.md) — An operator read was a silence
 - [0034](adr/0034-who-read-my-data.md) — Who read my data

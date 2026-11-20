@@ -80,3 +80,4 @@ when someone revisits it in six months.
 | [0073](0073-turned-away-is-a-fact.md) | Turned away is a fact | Accepted |
 | [0074](0074-the-gateway-was-the-flood.md) | The gateway was the flood | Accepted |
 | [0075](0075-the-gateway-remembered-the-old-address.md) | The gateway remembered the old address | Accepted |
+| [0076](0076-everyone-checks-out-at-once.md) | Everyone checks out at once | Accepted |
