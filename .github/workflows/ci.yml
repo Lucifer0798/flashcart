@@ -147,7 +147,11 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Build all images
-        run: docker compose build
+        run: |
+          # The image build downloads every dependency from Maven Central, which rate-limits busy runner addresses
+          # with 429. .mvn/maven.config retries each download for longer; past that, one more attempt a minute
+          # later, which reuses what the first already fetched. A build that fails on its merits fails twice.
+          docker compose build || { echo "Image build failed; trying once more in 60 s"; sleep 60; docker compose build; }
 
       - name: Start the stack and wait for health
         run: |
