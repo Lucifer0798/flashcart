@@ -18,6 +18,10 @@ COPY services/user/pom.xml       services/user/pom.xml
 COPY services/payment/pom.xml    services/payment/pom.xml
 COPY services/inventory/pom.xml  services/inventory/pom.xml
 COPY services/shipping/pom.xml   services/shipping/pom.xml
+# Maven's settings for downloading, which this build does in full from Central every time in CI. Central answers a
+# busy runner's address with 429 Too Many Requests, and the default of three retries five seconds apart gave up and
+# failed the build. .mvn/maven.config retries for longer, with fewer downloads at once. Local ./mvnw reads it too.
+COPY .mvn .mvn
 RUN --mount=type=cache,target=/root/.m2 mvn -B -q dependency:go-offline -DskipTests
 
 COPY services services
