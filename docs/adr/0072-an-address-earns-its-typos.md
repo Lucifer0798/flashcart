@@ -117,6 +117,8 @@ never pruned it, counted it and then discarded it, stopped a success clearing it
 - **A locked address cannot earn its way out.** The check comes before the password, so once the limit holds, no
   success from there is recorded until failures age out. At a sale, successes accrue far faster than typos, so the
   load runs never reached the limit. A wave of typos arriving before almost any success could still close it.
+  *Since measured by [ADR 0077](0077-a-locked-address-waits-it-out.md): it heals itself in seconds if the first to
+  mistype keep trying, and holds for 15 minutes if they give up. Recorded, not changed.*
 - **Registration is still free.** The age rule and the cap bound what free accounts buy here. They do not make
   accounts cost anything, which would matter for any future rule that counts accounts.
 - **Account age is a proxy.** "A day old" means "not made for this attack". It doesn't mean "trustworthy".

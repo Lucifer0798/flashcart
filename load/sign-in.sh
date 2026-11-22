@@ -2,7 +2,7 @@
 #
 # A sale opens and everyone signs in at once. See ADR 0071.
 #
-#   ./load/sign-in.sh [shoppers] [typo-percent]
+#   ./load/sign-in.sh [shoppers] [typo-percent] [typos-lead-seconds]
 #
 # Seeds that many accounts, then has every one of them sign in at the same moment and refresh once. A share of
 # them mistype their password first. They all arrive from one address, as people behind one office or mobile
@@ -15,6 +15,8 @@ set -euo pipefail
 
 SHOPPERS="${1:-1000}"
 TYPO_PERCENT="${2:-0}"
+# Seconds by which the mistyped attempts go first; see load/scripts/sign-in.js.
+TYPOS_LEAD="${3:-0}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -23,14 +25,14 @@ RUN="$(date +%s)"
 PREFIX="load-signin-$RUN"
 # Not a secret: it opens only the accounts this script makes and then deletes.
 PASSWORD="load-test-password-$RUN"
-LABEL="sign-in-${SHOPPERS}-typos-${TYPO_PERCENT}"
+LABEL="sign-in-${SHOPPERS}-typos-${TYPO_PERCENT}-lead-${TYPOS_LEAD}"
 RESULTS="load/results"
 mkdir -p "$RESULTS"
 
 psql_user() { docker compose exec -T postgres psql -U flashcart -d flashcart_user -X -q -t -A "$@"; }
 
 echo "=============================================================="
-echo " shoppers=$SHOPPERS  typos=$TYPO_PERCENT%  run=$RUN"
+echo " shoppers=$SHOPPERS  typos=$TYPO_PERCENT%  typos lead by ${TYPOS_LEAD}s  run=$RUN"
 echo "=============================================================="
 
 # --- 1. what the user service is actually running with ----------------------------------------------
@@ -116,6 +118,8 @@ MSYS_NO_PATHCONV=1 docker run --rm -i \
 	-e PREFIX="$PREFIX" \
 	-e SHOPPERS="$SHOPPERS" \
 	-e TYPO_PERCENT="$TYPO_PERCENT" \
+	-e TYPOS_LEAD="$TYPOS_LEAD" \
+	-e TYPISTS_GIVE_UP="${TYPISTS_GIVE_UP:-0}" \
 	-e PASSWORD="$PASSWORD" \
 	-e LABEL="$LABEL" \
 	grafana/k6:0.56.0 run --quiet /scripts/sign-in.js \
@@ -168,6 +172,9 @@ if s:
     print(f"sign-in ms:                    med {s['med']:.0f}  p95 {s['p(95)']:.0f}  p99 {s['p(99)']:.0f}  max {s['max']:.0f}")
 if r:
     print(f"refresh ms:                    med {r['med']:.0f}  p95 {r['p(95)']:.0f}  max {r['max']:.0f}")
+a = k6.get("retryAfter") or {}
+if a.get("max"):
+    print(f"told to wait (Retry-After s):  min {a['min']:.0f}  med {a['med']:.0f}  max {a['max']:.0f}")
 d = k6.get("shedMs") or {}
 if d.get("max"):
     print(f"refused after ms:              min {d['min']:.0f}  med {d['med']:.0f}  max {d['max']:.0f}")
@@ -185,7 +192,7 @@ if tokens != k6["signInOk"] + k6["refreshOk"]:
     wrong.append("tokens in the database do not match sign-ins plus refreshes")
 if failure_rows != expected_rows:
     wrong.append("failure rows do not match the typos refused (another client signing in wrongly during the run?)")
-accounted = k6["signInOk"] + k6["rightPasswordThrottled"] + k6["shed"] + k6["errored"]
+accounted = k6["signInOk"] + k6["rightPasswordThrottled"] + k6["shed"] + k6["errored"] + k6.get("gaveUp", 0)
 if accounted != typed_right:
     wrong.append(f"k6 accounted for {accounted} shoppers out of {typed_right}")
 for problem in wrong:

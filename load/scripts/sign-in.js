@@ -5,12 +5,19 @@
 // one container, so to the platform they all share one client address: an office, or a mobile carrier's NAT.
 
 import http from 'k6/http';
+import { sleep } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
 
 const GATEWAY = __ENV.GATEWAY || 'http://gateway:8080';
 const PREFIX = __ENV.PREFIX;
 const SHOPPERS = Number(__ENV.SHOPPERS || 1000);
 const TYPO_PERCENT = Number(__ENV.TYPO_PERCENT || 0);
+// Seconds the shoppers who type it right wait after those who mistype. 0, the default, sends everyone together.
+// Set, it puts every failure ahead of every success: the order that can lock an address before it earns any
+// credit (ADR 0077).
+const TYPOS_LEAD = Number(__ENV.TYPOS_LEAD || 0);
+// 1: those who mistype give up rather than type it right, so the address records failures and no successes.
+const TYPISTS_GIVE_UP = __ENV.TYPISTS_GIVE_UP === '1';
 const PASSWORD = __ENV.PASSWORD;
 const LABEL = __ENV.LABEL || 'sign-in';
 
@@ -29,12 +36,15 @@ const typoThrottled = new Counter('typo_throttled');
 // A shopper whose typo was refused and who then got in: their success clears the one failure row that counts
 // against them from this client (ADR 0058), which the runner's books have to allow for.
 const typoThenSignedIn = new Counter('typo_then_signed_in');
+const gaveUp = new Counter('gave_up');
 // The refresh after it.
 const refreshed = new Counter('refresh_ok');
 const refreshErrored = new Counter('refresh_errored');
 
 const signInMs = new Trend('sign_in_ok_ms', true);
 const refreshMs = new Trend('refresh_ok_ms', true);
+// What a refused shopper is told to wait: how long the address stays locked.
+const retryAfter = new Trend('retry_after_s');
 // How long a refused shopper waited before being told to come back: a fixed figure would be a timeout
 // somewhere, a spread would be a queue that overflowed. ADR 0074.
 const shedMs = new Trend('sign_in_shed_ms', true);
@@ -67,7 +77,11 @@ export default function () {
 
 	// Spread evenly rather than at random, so a 5% run is exactly 5% and two runs are the same experiment.
 	let typoRecorded = false;
-	if (shopper % 100 < TYPO_PERCENT) {
+	const typist = shopper % 100 < TYPO_PERCENT;
+	if (!typist && TYPOS_LEAD > 0) {
+		sleep(TYPOS_LEAD);
+	}
+	if (typist) {
 		const typo = signIn(email, `${PASSWORD}-typo`, 'sign-in-typo');
 		if (typo.status === 401) {
 			typoRefused.add(1);
@@ -80,6 +94,10 @@ export default function () {
 		}
 	}
 
+	if (typist && TYPISTS_GIVE_UP) {
+		gaveUp.add(1);
+		return;
+	}
 	const response = signIn(email, PASSWORD, 'sign-in');
 	if (response.status === 200) {
 		signedIn.add(1);
@@ -89,6 +107,7 @@ export default function () {
 		}
 	} else if (response.status === 429) {
 		rightPasswordRefused.add(1);
+		retryAfter.add(Number(response.headers['Retry-After'] || 0));
 		return;
 	} else if (response.status === 503) {
 		shed.add(1);
@@ -120,6 +139,7 @@ export function handleSummary(data) {
 	const result = {
 		shoppers: SHOPPERS,
 		typoPercent: TYPO_PERCENT,
+		typosLead: TYPOS_LEAD,
 		signInOk: count('sign_in_ok'),
 		rightPasswordThrottled: count('sign_in_right_password_throttled'),
 		shed: count('sign_in_shed'),
@@ -127,11 +147,13 @@ export function handleSummary(data) {
 		typoRefused: count('typo_refused'),
 		typoThrottled: count('typo_throttled'),
 		typoThenSignedIn: count('typo_then_signed_in'),
+		gaveUp: count('gave_up'),
 		refreshOk: count('refresh_ok'),
 		refreshErrored: count('refresh_errored'),
 		signInMs: trend('sign_in_ok_ms'),
 		refreshMs: trend('refresh_ok_ms'),
 		shedMs: trend('sign_in_shed_ms'),
+		retryAfter: trend('retry_after_s'),
 		durationMs: data.state.testRunDurationMs,
 	};
 	return {
