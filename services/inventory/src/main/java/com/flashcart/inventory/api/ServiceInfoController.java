@@ -26,13 +26,16 @@ public class ServiceInfoController {
 	private final String applicationName;
 	private final String version;
 	private final InventoryProperties properties;
+	private final java.time.Duration waitlistHoldTtl;
 
 	public ServiceInfoController(@Value("${spring.application.name}") String applicationName,
 			@Value("${flashcart.version:0.1.0-SNAPSHOT}") String version,
-			InventoryProperties properties) {
+			InventoryProperties properties,
+			@Value("${flashcart.inventory.waitlist.hold-ttl:PT10M}") java.time.Duration waitlistHoldTtl) {
 		this.applicationName = applicationName;
 		this.version = version;
 		this.properties = properties;
+		this.waitlistHoldTtl = waitlistHoldTtl;
 	}
 
 	@GetMapping("/_info")
@@ -49,6 +52,9 @@ public class ServiceInfoController {
 				// Reported so a load run can be labelled with the configuration that actually ran,
 				// rather than the one it was asked for. A measurement labelled with an intention is
 				// a number that gets quoted later and cannot be checked.
-				"availabilityGate", String.valueOf(properties.gate().enabled()));
+				"availabilityGate", String.valueOf(properties.gate().enabled()),
+				// How long a unit is held for a shopper the waitlist told, which load/waitlist.sh shortens to see
+				// holds lapse and pass down the line within a run (ADR 0078).
+				"waitlistHoldTtl", waitlistHoldTtl.toString());
 	}
 }

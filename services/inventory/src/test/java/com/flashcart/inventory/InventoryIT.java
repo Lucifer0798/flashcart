@@ -658,6 +658,7 @@ class InventoryIT extends AbstractInventoryIT {
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).containsEntry("status", "live");
 		assertThat(response.getBody()).containsEntry("reservationStrategy", "ATOMIC_UPDATE");
+		assertThat(response.getBody()).containsKey("waitlistHoldTtl");
 	}
 
 	// --- the movement ledger for one reservation, which nothing was exercising -----------------------

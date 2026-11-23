@@ -126,7 +126,17 @@ public class OrderService {
 
 		Order order;
 		try {
-			order = transactions.execute(status -> create(idempotencyKey, customerId, flashSaleId, priced));
+			// The reservation command is queued in the same transaction as the order, so the two commit together
+			// or not at all. It used to be published after the commit, which was right before the outbox
+			// (Phase 8): publishing to Kafka inside the transaction could hold stock for an order that then failed
+			// to persist. The outbox made that ordering unnecessary and left its cost. When the second step failed,
+			// as it did when a restock rush emptied the connection pool, the order was committed with no command
+			// behind it and stayed CREATED for ever: eleven of them in one run (ADR 0078).
+			order = transactions.execute(status -> {
+				Order created = create(idempotencyKey, customerId, flashSaleId, priced);
+				saga.requestReservation(created);
+				return created;
+			});
 		}
 		catch (DuplicateIdempotencyKeyException ex) {
 			return orders.findByIdempotencyKey(idempotencyKey)
@@ -134,11 +144,6 @@ public class OrderService {
 							"Order for key %s could not be placed".formatted(idempotencyKey)));
 		}
 
-		// Published after the transaction has committed, not inside it. Publishing first would let
-		// inventory reserve stock for an order that then failed to persist — and until Phase 8's
-		// outbox, this ordering is the best available answer: an order that exists without its
-		// command is recoverable by retrying, whereas a hold without an order is not.
-		saga.requestReservation(order);
 		return order;
 	}
 

@@ -82,3 +82,4 @@ when someone revisits it in six months.
 | [0075](0075-the-gateway-remembered-the-old-address.md) | The gateway remembered the old address | Accepted |
 | [0076](0076-everyone-checks-out-at-once.md) | Everyone checks out at once | Accepted |
 | [0077](0077-a-locked-address-waits-it-out.md) | A locked address waits it out | Accepted |
+| [0078](0078-the-queue-decides-who-gets-it.md) | The queue decides who gets it | Accepted |
