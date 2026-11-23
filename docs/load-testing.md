@@ -145,6 +145,15 @@ from a bug in the order service. `UpstreamUnavailableException` now maps to `503
 Both were invisible to the load harness, which only ever asked the platform to do too much, never to
 do without.
 
+## The waitlist, when a sold-out item comes back
+
+`load/waitlist.sh [waiters] [units] [no-show-percent] [strangers]` queues waiters for a sold-out SKU, restocks it,
+and has the told check out, except the given share, who never come back. Strangers who never queued buy at the
+restock. It restarts inventory with a short hold (`WAITLIST_HOLD_TTL`, two minutes by default), reads the setting
+back from `_info`, and restores ten minutes on the way out. A Java `Duration` of sixty seconds prints as `PT1M`, so
+the read-back compares seconds rather than strings: the first version refused its own correct setting. See
+[ADR 0078](adr/0078-the-queue-decides-who-gets-it.md).
+
 ## Checkout, when the sale opens
 
 `load/checkout.sh [shoppers] [stock]` has every shopper sign in, then order at the same moment, and watch their

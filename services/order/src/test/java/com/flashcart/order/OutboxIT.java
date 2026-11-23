@@ -191,6 +191,34 @@ class OutboxIT {
 	}
 
 	@Test
+	@DisplayName("an order whose command cannot be queued is not placed: the two commit together or not at all")
+	void anOrderAndItsCommandAreOneCommit() {
+		String key = "idem-" + UUID.randomUUID();
+		// The outbox made unwritable, as an emptied connection pool made the second step fail at a restock rush.
+		// Before ADR 0078 the order committed first and the command was queued after, so this left an order with
+		// no command behind it, CREATED for ever.
+		jdbc.execute("alter table outbox_messages rename to outbox_messages_away");
+		try {
+			var refused = rest.postForEntity("/api/v1/orders",
+					new PlaceOrderRequest(key, null, List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))), Map.class);
+			assertThat(refused.getStatusCode().is5xxServerError()).isTrue();
+		}
+		finally {
+			jdbc.execute("alter table outbox_messages_away rename to outbox_messages");
+		}
+
+		assertThat(jdbc.queryForObject("select count(*) from orders where idempotency_key = ?", Integer.class, key))
+				.isZero();
+		// And a retry, with the outbox back, places it properly: order and command together.
+		OrderResponse retried = rest.postForEntity("/api/v1/orders",
+				new PlaceOrderRequest(key, null, List.of(new PlaceOrderRequest.Line("AUD-HP-001", 1))),
+				OrderResponse.class).getBody();
+		assertThat(retried.status()).isEqualTo(OrderStatus.CREATED);
+		assertThat(outbox()).singleElement()
+				.satisfies(row -> assertThat(row).containsEntry("message_key", retried.id().toString()));
+	}
+
+	@Test
 	@DisplayName("the saga's own commands are queued too, in the order they were decided")
 	void sagaCommandsAreQueuedInOrder() {
 		OrderResponse order = place();

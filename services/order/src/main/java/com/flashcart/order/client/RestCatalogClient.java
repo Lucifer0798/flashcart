@@ -8,6 +8,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClient;
 
 /** Fetches the price a shopper is actually paying right now, flash sale included. */
@@ -47,6 +48,12 @@ public class RestCatalogClient implements CatalogClient {
 		}
 		catch (ResourceAccessException ex) {
 			throw new CatalogUnavailableException("Catalog could not be reached for SKU " + sku, ex);
+		}
+		catch (RestClientException ex) {
+			// Reached, but its answer could not be read: under a restock rush catalog's response broke off
+			// mid-body, and that surfaced as a 500 from checkout. Catalog not answering usefully is the same
+			// fact for a shopper as catalog not answering, and is retryable (ADR 0078).
+			throw new CatalogUnavailableException("Catalog's answer could not be read for SKU " + sku, ex);
 		}
 	}
 

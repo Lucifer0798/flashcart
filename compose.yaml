@@ -337,6 +337,9 @@ services:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       AVAILABILITY_GATE_ENABLED: "${AVAILABILITY_GATE_ENABLED:-true}"
+      # How long a unit is held for a shopper the waitlist told. Ten minutes, unless load/waitlist.sh shortens it
+      # to see unused holds lapse and pass down the line within one run (ADR 0078).
+      FLASHCART_INVENTORY_WAITLIST_HOLD_TTL: ${WAITLIST_HOLD_TTL:-PT10M}
     ports:
       - "18085:8085"
     depends_on:

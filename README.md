@@ -667,6 +667,20 @@ empty pool opened 500 connections into an accept queue of 100. The gateway now r
 seconds, every service queues 1,000, and `scripts/connection-limits-check.py` keeps the two in step. See
 [ADR 0076](docs/adr/0076-everyone-checks-out-at-once.md).
 
+**And when a sold-out item comes back, the queue decides who gets it.**
+
+```bash
+./load/waitlist.sh 3000 1000 10 1000   # 3,000 waiting, 1,000 units, 10% never come back, 1,000 strangers
+```
+
+Everyone queues for a sold-out SKU, the units land, and the oldest waiters are told and hold one each. A share never
+comes back, so their holds have to lapse down the line. Shoppers who never queued try to buy the moment it lands.
+The run checks that nobody was told out of turn, nothing was oversold, no stranger was served while the queue had
+takers, every told shopper who came back was served, and there was one email each. The queue was right from the
+start. The rush at the restock was not. It emptied the order service's connection pool and left eleven orders
+committed without the command that starts their saga. The order and its command now commit together. See
+[ADR 0078](docs/adr/0078-the-queue-decides-who-gets-it.md).
+
 ## Who is asking
 
 ```bash
