@@ -96,4 +96,8 @@ public final class UserDtos {
 	/** The current password, asked for again because closing cannot be undone. */
 	public record CloseRequest(@NotBlank String password) {
 	}
+
+	/** The current password, because a token alone is what a thief would have. ADR 0079. */
+	public record SignOutEverywhereRequest(@NotBlank @Size(max = 200) String password) {
+	}
 }

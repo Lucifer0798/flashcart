@@ -637,8 +637,12 @@ jobs:
           # That reuse ended the session, so sign in afresh, then sign out everywhere.
           SESSION=$(curl -sf -X POST $G/api/v1/users/sessions -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\",\"password\":\"$PASS\"}")
           ACCESS=$(echo "$SESSION" | field accessToken); THIRD=$(echo "$SESSION" | field refreshToken)
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/me/sign-out-everywhere -H "Authorization: Bearer $ACCESS")
-          test "$CODE" = "204"
+          # The access token alone is not enough, so a stolen one cannot sign the owner out (ADR 0079).
+          everywhere() { curl -s -o /dev/null -w '%{http_code}' -X POST $G/api/v1/users/me/sign-out-everywhere -H "Authorization: Bearer $ACCESS" -H 'Content-Type: application/json' -d "{\"password\":\"$1\"}"; }
+          CODE=$(everywhere "not-the-password")
+          test "$CODE" = "401" || { echo "signed out everywhere with a wrong password: $CODE"; exit 1; }
+          CODE=$(everywhere "$PASS")
+          test "$CODE" = "204" || { echo "sign-out-everywhere with the password: $CODE"; exit 1; }
           test "$(refresh "$THIRD")" = "401" || { echo "a session outlived signing out everywhere"; exit 1; }
           echo "refreshed once, reuse caught, signed out everywhere"
 

@@ -233,6 +233,26 @@ class SignInThrottleIT {
 		assertThat(signIn(email, PASSWORD, here).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 	}
 
+	@Test
+	@DisplayName("signing out everywhere checks the password under the same throttle as sign-in")
+	void signingOutEverywhereIsThrottled() {
+		String email = register();
+		String here = client();
+		HttpHeaders signedIn = new HttpHeaders();
+		signedIn.setBearerAuth((String) signIn(email, PASSWORD, client()).getBody().get("accessToken"));
+		signedIn.set("X-Forwarded-For", here);
+		for (int i = 0; i < 3; i++) {
+			assertThat(signOutEverywhere(signedIn, "wrong-" + i).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		// Refused even with the right password, as sign-in is, and nothing was revoked.
+		assertThat(signOutEverywhere(signedIn, PASSWORD).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+		assertThat(jdbc.queryForObject("select count(*) from refresh_tokens t join users u on u.id = t.user_id "
+				+ "where u.email = ? and t.revoked_at is null", Integer.class, email)).isEqualTo(1);
+		// The same counts: those failures hold sign-in back from here too, so neither path is a way round.
+		assertThat(signIn(email, PASSWORD, here).getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+	}
+
 	// --- password reset requests (ADR 0060) -------------------------------------------------------------
 
 	@Test
@@ -468,6 +488,11 @@ class SignInThrottleIT {
 	private ResponseEntity<Map> close(HttpHeaders headers, String password) {
 		return rest.exchange("/api/v1/users/me/close", HttpMethod.POST, new HttpEntity<>(Map.of("password", password),
 				headers), Map.class);
+	}
+
+	private ResponseEntity<Map> signOutEverywhere(HttpHeaders headers, String password) {
+		return rest.exchange("/api/v1/users/me/sign-out-everywhere", HttpMethod.POST,
+				new HttpEntity<>(Map.of("password", password), headers), Map.class);
 	}
 
 	private ResponseEntity<Map> requestReset(String email, String forwardedFor) {

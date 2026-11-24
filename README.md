@@ -739,8 +739,10 @@ Each refresh token works **once** and comes back replaced. If one that was alrea
 more than ten seconds later, someone else has a copy, so the whole session ends. Within those ten seconds it
 is two tabs racing: the loser gets 401, should re-read the new token and retry, and the session stands
 ([ADR 0065](docs/adr/0065-two-tabs-are-not-a-thief.md)). `POST /api/v1/users/sessions/sign-out` with a refresh
-token ends that session. `POST /api/v1/users/me/sign-out-everywhere` ends all of them, and so do a password
-reset and closing the account. Every service verifies access tokens itself, so none can be withdrawn. What
+token ends that session. `POST /api/v1/users/me/sign-out-everywhere` with the current `password` ends all of
+them, and so do a password reset and closing the account. It asks for the password, under the sign-in
+throttle, so a stolen access token cannot keep its owner signed out
+([ADR 0079](docs/adr/0079-a-stolen-token-cannot-sign-you-out.md)). Every service verifies access tokens itself, so none can be withdrawn. What
 is withdrawn is the next one, so every session ends within fifteen minutes. A refresh reads the account
 again, so a granted or revoked staff role takes effect within the same window. See
 [ADR 0059](docs/adr/0059-a-session-ends-within-fifteen-minutes.md).
