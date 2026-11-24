@@ -152,14 +152,36 @@ class SessionsIT {
 		Map<String, Object> phone = signIn(email);
 		String laptop = (String) signIn(email).get("refreshToken");
 
-		assertThat(post("/api/v1/users/me/sign-out-everywhere", bearer((String) phone.get("accessToken"))))
+		assertThat(signOutEverywhere(bearer((String) phone.get("accessToken")), PASSWORD).getStatusCode())
 				.isEqualTo(HttpStatus.NO_CONTENT);
 
 		assertThat(refresh((String) phone.get("refreshToken")).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 		assertThat(refresh(laptop).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 		// A fresh sign-in is unaffected.
 		assertThat(refresh((String) signIn(email).get("refreshToken")).getStatusCode()).isEqualTo(HttpStatus.OK);
-		assertThat(post("/api/v1/users/me/sign-out-everywhere", new HttpHeaders())).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(signOutEverywhere(new HttpHeaders(), PASSWORD).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+	}
+
+	@Test
+	@DisplayName("a stolen access token cannot sign its owner out everywhere: that needs the password too")
+	void aTokenAloneCannotSignOutEverywhere() {
+		String email = register();
+		Map<String, Object> phone = signIn(email);
+		String laptop = (String) signIn(email).get("refreshToken");
+		HttpHeaders stolen = bearer((String) phone.get("accessToken"));
+
+		ResponseEntity<Map> guessed = signOutEverywhere(stolen, "not-the-password");
+		assertThat(guessed.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		assertThat(guessed.getBody()).containsEntry("code", "INVALID_CREDENTIALS");
+		// As every caller did before ADR 0079: no body at all.
+		assertThat(post("/api/v1/users/me/sign-out-everywhere", stolen)).isEqualTo(HttpStatus.BAD_REQUEST);
+		assertThat(signOutEverywhere(stolen, "").getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+		// Nothing was revoked, on the record or in effect.
+		assertThat(jdbc.queryForObject("select count(*) from refresh_tokens t join users u on u.id = t.user_id "
+				+ "where u.email = ? and t.revoked_at is not null", Integer.class, email)).isZero();
+		assertThat(refresh(laptop).getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(refresh((String) phone.get("refreshToken")).getStatusCode()).isEqualTo(HttpStatus.OK);
 	}
 
 	@Test
@@ -263,6 +285,11 @@ class SessionsIT {
 		catch (NoSuchAlgorithmException ex) {
 			throw new IllegalStateException(ex);
 		}
+	}
+
+	private ResponseEntity<Map> signOutEverywhere(HttpHeaders headers, String password) {
+		return rest.exchange("/api/v1/users/me/sign-out-everywhere", HttpMethod.POST,
+				new HttpEntity<>(Map.of("password", password), headers), Map.class);
 	}
 
 	private HttpStatusCode post(String path, HttpHeaders headers) {

@@ -147,10 +147,25 @@ public class UserService {
 		return sessions.start(user);
 	}
 
-	/** Every session of this account ends at its next refresh, this one included. ADR 0059. */
-	@Transactional
-	public void signOutEverywhere(UUID id) {
-		require(id);
+	/**
+	 * Every session of this account ends at its next refresh, this one included. ADR 0059.
+	 *
+	 * <p>Asks for the password as well as the token. An access token alone is what a thief has, and with it
+	 * they could sign the owner out of every device, again every time the owner signed back in, for as long
+	 * as the token lasted. Checked under the sign-in throttle with the same counts, as closing and changing
+	 * the password are, so this is no way round it either. ADR 0079.
+	 */
+	// No rollback for a wrong password, so the failure it records outlives the refusal (ADR 0062).
+	@Transactional(noRollbackFor = UnauthenticatedException.class)
+	public void signOutEverywhere(UUID id, String rawPassword, String clientAddress) {
+		User user = require(id);
+		throttle.check(user.getEmail(), clientAddress);
+		if (!passwords.matches(rawPassword, user.getPasswordHash())) {
+			throttle.failed(user.getEmail(), clientAddress);
+			log.info("Refused to sign {} out everywhere: wrong password", id);
+			throw new UnauthenticatedException();
+		}
+		throttle.succeeded(user.getEmail(), clientAddress, user.getCreatedAt());
 		sessions.revokeAll(id, "signed out everywhere");
 	}
 

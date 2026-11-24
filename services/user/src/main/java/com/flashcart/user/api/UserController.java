@@ -17,6 +17,7 @@ import com.flashcart.user.api.dto.UserDtos.RefreshRequest;
 import com.flashcart.user.api.dto.UserDtos.RegisterRequest;
 import com.flashcart.user.api.dto.UserDtos.RenameRequest;
 import com.flashcart.user.api.dto.UserDtos.SignInRequest;
+import com.flashcart.user.api.dto.UserDtos.SignOutEverywhereRequest;
 import com.flashcart.user.api.dto.UserDtos.TokenResponse;
 import com.flashcart.user.api.dto.UserDtos.UserResponse;
 import com.flashcart.user.domain.Address;
@@ -140,15 +141,21 @@ public class UserController {
 
 	@PostMapping("/me/sign-out-everywhere")
 	@Operation(summary = "Sign out of every session",
-			description = "Every refresh token of the account is revoked, so every device is signed out at "
-					+ "its next refresh, within one access token's lifetime. This one included. See ADR 0059.")
+			description = "Needs the current password as well as the token, checked under the sign-in "
+					+ "throttle, so a stolen token cannot keep signing its owner out. Every refresh token of the "
+					+ "account is revoked, so every device is signed out at its next refresh, within one access "
+					+ "token's lifetime. This one included. See ADR 0059 and ADR 0079.")
 	@ApiResponses({
 			@ApiResponse(responseCode = "204", description = "Every session will end within minutes"),
-			@ApiResponse(responseCode = "401", description = "No token, or one that does not verify")
+			@ApiResponse(responseCode = "400", description = "No password given"),
+			@ApiResponse(responseCode = "401", description = "INVALID_CREDENTIALS -- wrong password; or no token, "
+					+ "or one that does not verify"),
+			@ApiResponse(responseCode = "429", description = "TOO_MANY_ATTEMPTS -- the sign-in throttle holds")
 	})
 	public ResponseEntity<Void> signOutEverywhere(
-			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
-		users.signOutEverywhere(caller(authorization));
+			@RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+			@Valid @RequestBody SignOutEverywhereRequest request, HttpServletRequest http) {
+		users.signOutEverywhere(caller(authorization), request.password(), clientAddress(http));
 		return ResponseEntity.noContent().build();
 	}
 
