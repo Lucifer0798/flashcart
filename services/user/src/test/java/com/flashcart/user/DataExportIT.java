@@ -276,6 +276,33 @@ class DataExportIT {
 
 	// --- helpers --------------------------------------------------------------------------------------
 
+	@Test
+	@DisplayName("a download is announced on the user topic, so the owner is emailed like any other file's")
+	void aDownloadIsAnnounced() {
+		Shopper shopper = register("Announced Shopper");
+
+		assertThat(export(shopper.headers()).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		assertThat(jdbc.queryForList("select topic, payload->>'service' as service, payload->>'customerId' as customer "
+				+ "from outbox_messages where event_type = 'CustomerDataExported' and message_key = ?", shopper.id()))
+				.singleElement().satisfies(row -> assertThat(row).containsEntry("topic", "flashcart.user.events")
+						.containsEntry("service", "user").containsEntry("customer", shopper.id()));
+	}
+
+	@Test
+	@DisplayName("a refused download is not announced")
+	void aRefusedDownloadIsNotAnnounced() {
+		HttpHeaders forged = new HttpHeaders();
+		forged.setBearerAuth("not-a-real-token");
+		int before = jdbc.queryForObject("select count(*) from outbox_messages where event_type = 'CustomerDataExported'",
+				Integer.class);
+
+		assertThat(export(forged).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+
+		assertThat(jdbc.queryForObject("select count(*) from outbox_messages where event_type = 'CustomerDataExported'",
+				Integer.class)).isEqualTo(before);
+	}
+
 	private record Shopper(String id, String email, HttpHeaders headers) {
 	}
 

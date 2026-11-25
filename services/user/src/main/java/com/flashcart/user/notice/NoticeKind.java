@@ -86,6 +86,22 @@ public enum NoticeKind {
 		}
 	},
 
+	DATA_EXPORTED {
+		@Override
+		Email render(String name, String orderNumber, Map<String, Object> payload, Instant sendBefore) {
+			// The owner's one sign that somebody else took a copy. Worded so the owner who did it is not
+			// alarmed, and so one who did not knows what it held and what to do. ADR 0080.
+			Object at = payload.get("downloadedAt");
+			String when = at == null ? "" : " at " + TIME.format(Instant.parse((String) at));
+			return new Email("A copy of your FlashCart data was downloaded",
+					("Someone signed in to this account downloaded a copy of the data we hold about you%s. It can "
+							+ "include your name, email and addresses, your orders and payments, and the emails we "
+							+ "sent you.\n\nIf that was you, there is nothing to do.\n\nIf it wasn't, someone is "
+							+ "signed in as you. Change your password now, or reset it with \"Forgot password\", and "
+							+ "every device will be signed out.").formatted(when), name);
+		}
+	},
+
 	PASSWORD_RESET {
 		@Override
 		Email render(String name, String orderNumber, Map<String, Object> payload, Instant sendBefore) {

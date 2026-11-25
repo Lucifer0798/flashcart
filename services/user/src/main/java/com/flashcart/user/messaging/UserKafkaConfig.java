@@ -2,6 +2,7 @@ package com.flashcart.user.messaging;
 
 import com.flashcart.common.event.ConsumerFactories;
 import com.flashcart.common.event.message.BackInStock;
+import com.flashcart.common.event.message.CustomerDataExported;
 import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDelivered;
@@ -60,6 +61,12 @@ public class UserKafkaConfig {
 	public ConcurrentKafkaListenerContainerFactory<String, PaymentRefunded> paymentRefundedFactory(KafkaProperties properties,
 			KafkaConnectionDetails details, KafkaTemplate<String, Object> template) {
 		return ConsumerFactories.listenerFactory(properties, details, GROUP, PaymentRefunded.class, template);
+	}
+
+	@Bean
+	public ConcurrentKafkaListenerContainerFactory<String, CustomerDataExported> dataExportedFactory(
+			KafkaProperties properties, KafkaConnectionDetails details, KafkaTemplate<String, Object> template) {
+		return ConsumerFactories.listenerFactory(properties, details, GROUP, CustomerDataExported.class, template);
 	}
 
 	@Bean
