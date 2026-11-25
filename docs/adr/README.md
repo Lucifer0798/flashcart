@@ -84,3 +84,4 @@ when someone revisits it in six months.
 | [0077](0077-a-locked-address-waits-it-out.md) | A locked address waits it out | Accepted |
 | [0078](0078-the-queue-decides-who-gets-it.md) | The queue decides who gets it | Accepted |
 | [0079](0079-a-stolen-token-cannot-sign-you-out.md) | A stolen token cannot sign you out | Accepted |
+| [0080](0080-a-download-is-not-a-secret.md) | A download is not a secret | Accepted |

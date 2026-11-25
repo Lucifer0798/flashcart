@@ -18,6 +18,7 @@ import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDelivered;
 import com.flashcart.common.event.EventMetadata;
 import com.flashcart.common.event.message.AccountClosed;
+import com.flashcart.common.event.message.CustomerDataExported;
 import com.flashcart.common.event.message.RefundPayment;
 import com.flashcart.common.event.message.ReleaseInventory;
 import com.flashcart.common.event.message.RequestPayment;
@@ -1043,6 +1044,22 @@ class OrderIT {
 				.satisfies(access -> assertThat(access).containsEntry("resourceId", mine)
 						.containsOnlyKeys("action", "description", "resourceId", "readAt"));
 		assertThat(export.getBody().toString()).doesNotContain(theirs).doesNotContain("support-1");
+	}
+
+	@Test
+	@DisplayName("a download is announced on the order topic, so the user service can email its owner")
+	void aDownloadIsAnnounced() {
+		signedInAs("export-o-told");
+
+		assertThat(rest.getForEntity("/api/v1/order/_export/mine", Map.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		// This service's tests record what is published rather than writing an outbox.
+		assertThat(events.all()).filteredOn(published -> published.message() instanceof CustomerDataExported exported
+				&& exported.customerId().equals("export-o-told")).singleElement().satisfies(published -> {
+					assertThat(published.topic()).isEqualTo("flashcart.order.events");
+					assertThat(((CustomerDataExported) published.message()).service()).isEqualTo("order");
+					assertThat(published.message().aggregateId()).isEqualTo("export-o-told");
+				});
 	}
 
 	@Test

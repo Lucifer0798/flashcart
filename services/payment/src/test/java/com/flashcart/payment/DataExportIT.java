@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.flashcart.common.event.message.CustomerDataExported;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -20,6 +21,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DataExportIT extends AbstractPaymentIT {
 
 	private static final String PATH = "/api/v1/payment/_export/mine";
+
+	@Test
+	@DisplayName("a download is announced on this service's topic, so the user service can email its owner")
+	void aDownloadIsAnnounced() {
+		assertThat(as("export-p-told", PATH).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		// This service's tests record what is published rather than writing an outbox.
+		assertThat(events.all()).filteredOn(published -> published.message() instanceof CustomerDataExported exported
+				&& exported.customerId().equals("export-p-told")).singleElement().satisfies(published -> {
+					assertThat(published.topic()).isEqualTo("flashcart.payment.events");
+					assertThat(((CustomerDataExported) published.message()).service()).isEqualTo("payment");
+					assertThat(published.message().aggregateId()).isEqualTo("export-p-told");
+				});
+	}
 
 	@Test
 	@DisplayName("the file holds the caller's payments and when staff looked, and nobody else's")

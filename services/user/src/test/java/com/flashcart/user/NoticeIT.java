@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -11,6 +14,7 @@ import java.util.UUID;
 
 import com.flashcart.common.event.EventMetadata;
 import com.flashcart.common.event.message.BackInStock;
+import com.flashcart.common.event.message.CustomerDataExported;
 import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDispatched;
@@ -192,6 +196,36 @@ class NoticeIT {
 	}
 
 	// --- orders (ADR 0048) -------------------------------------------------------------------------
+
+	@Test
+	@DisplayName("a download is emailed to its owner once an hour, however many of the five files it took")
+	void downloadsAreEmailedOnceAnHour() {
+		Shopper shopper = register();
+		Instant hour = Instant.now().truncatedTo(ChronoUnit.HOURS).minus(Duration.ofHours(2));
+		Instant first = hour.plusSeconds(60);
+		Instant nextHour = hour.plusSeconds(61 * 60);
+
+		// A whole copy, file after file, then one more file the next hour.
+		listener.onDataExported(exported("user", shopper.id(), first));
+		listener.onDataExported(exported("order", shopper.id(), first.plusSeconds(1)));
+		listener.onDataExported(exported("payment", shopper.id(), first.plusSeconds(2)));
+		listener.onDataExported(exported("shipping", shopper.id(), first.plusSeconds(3)));
+		listener.onDataExported(exported("inventory", shopper.id(), hour.plusSeconds(59 * 60)));
+		listener.onDataExported(exported("order", shopper.id(), nextHour));
+		sender.sendDue();
+
+		assertThat(mail.sent).hasSize(2).allSatisfy(email -> {
+			assertThat(email.getSubject()).isEqualTo("A copy of your FlashCart data was downloaded");
+			assertThat(email.getTo()).containsExactly(shopper.email());
+			assertThat(email.getText()).contains("If that was you, there is nothing to do.")
+					.contains("Change your password now, or reset it with \"Forgot password\"");
+		});
+		DateTimeFormatter time = DateTimeFormatter.ofPattern("HH:mm 'UTC'").withZone(ZoneOffset.UTC);
+		// The first file of each hour sets the time its email gives.
+		assertThat(mail.sent).extracting(SimpleMailMessage::getText).anySatisfy(
+				text -> assertThat(text).contains("about you at " + time.format(first) + "."))
+				.anySatisfy(text -> assertThat(text).contains("about you at " + time.format(nextHour) + "."));
+	}
 
 	@Test
 	@DisplayName("a confirmed order is emailed once, however many times it is announced")
@@ -782,6 +816,10 @@ class NoticeIT {
 	private static EventMetadata meta(String type, Instant occurredAt) {
 		EventMetadata now = EventMetadata.of(type, UUID.randomUUID());
 		return new EventMetadata(now.eventId(), now.eventType(), now.aggregateId(), occurredAt, now.correlationId());
+	}
+
+	private static CustomerDataExported exported(String service, String customerId, Instant at) {
+		return new CustomerDataExported(meta(CustomerDataExported.TYPE, at), customerId, service);
 	}
 
 	private static BackInStock backInStock(UUID entry, String customerId, Instant heldUntil) {

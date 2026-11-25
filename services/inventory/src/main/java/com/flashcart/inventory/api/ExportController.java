@@ -3,6 +3,8 @@ package com.flashcart.inventory.api;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import com.flashcart.common.event.EventPublisher;
+import com.flashcart.common.event.Topics;
 import com.flashcart.common.security.CallerIdentity;
 import com.flashcart.common.security.OperatorAccessLogReader;
 import com.flashcart.common.web.DataExport;
@@ -29,13 +31,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class ExportController {
 
 	private final CallerIdentity caller;
+	private final EventPublisher events;
 	private final WaitlistService waitlist;
 	private final ReservationService reservations;
 	private final CustomerSaleLimitRepository saleLimits;
 	private final OperatorAccessLogReader accessLog;
 
 	public ExportController(CallerIdentity caller, WaitlistService waitlist, ReservationService reservations,
-			CustomerSaleLimitRepository saleLimits, OperatorAccessLogReader accessLog) {
+			CustomerSaleLimitRepository saleLimits, OperatorAccessLogReader accessLog, EventPublisher events) {
+		this.events = events;
 		this.caller = caller;
 		this.waitlist = waitlist;
 		this.reservations = reservations;
@@ -64,6 +68,6 @@ public class ExportController {
 						limit.getConsumedUnits()))
 				.toList());
 		sections.put("staffAccess", accessLog.mine(authorization, DataExport.ALL_STAFF_READS));
-		return DataExport.of("inventory", customerId, sections);
+		return DataExport.of(events, Topics.INVENTORY_EVENTS, "inventory", customerId, sections);
 	}
 }

@@ -4,6 +4,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import com.flashcart.common.event.EventPublisher;
+import com.flashcart.common.event.Topics;
 import com.flashcart.common.security.CallerIdentity;
 import com.flashcart.common.security.OperatorAccessLogReader;
 import com.flashcart.common.web.DataExport;
@@ -28,12 +30,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class ExportController {
 
 	private final CallerIdentity caller;
+	private final EventPublisher events;
 	private final UserService users;
 	private final AccountExport account;
 	private final OperatorAccessLogReader accessLog;
 
 	public ExportController(CallerIdentity caller, UserService users, AccountExport account,
-			OperatorAccessLogReader accessLog) {
+			OperatorAccessLogReader accessLog, EventPublisher events) {
+		this.events = events;
 		this.caller = caller;
 		this.users = users;
 		this.account = account;
@@ -61,6 +65,6 @@ public class ExportController {
 		sections.put("passwordResets", account.passwordResets(id));
 		sections.put("roleChanges", account.roleChanges(id));
 		sections.put("staffAccess", accessLog.mine(authorization, DataExport.ALL_STAFF_READS));
-		return DataExport.of("user", customerId, sections);
+		return DataExport.of(events, Topics.USER_EVENTS, "user", customerId, sections);
 	}
 }

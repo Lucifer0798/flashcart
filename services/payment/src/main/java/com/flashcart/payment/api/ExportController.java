@@ -3,6 +3,8 @@ package com.flashcart.payment.api;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import com.flashcart.common.event.EventPublisher;
+import com.flashcart.common.event.Topics;
 import com.flashcart.common.security.CallerIdentity;
 import com.flashcart.common.security.OperatorAccessLogReader;
 import com.flashcart.common.web.DataExport;
@@ -26,10 +28,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class ExportController {
 
 	private final CallerIdentity caller;
+	private final EventPublisher events;
 	private final PaymentService payments;
 	private final OperatorAccessLogReader accessLog;
 
-	public ExportController(CallerIdentity caller, PaymentService payments, OperatorAccessLogReader accessLog) {
+	public ExportController(CallerIdentity caller, PaymentService payments, OperatorAccessLogReader accessLog,
+			EventPublisher events) {
+		this.events = events;
 		this.caller = caller;
 		this.payments = payments;
 		this.accessLog = accessLog;
@@ -49,6 +54,6 @@ public class ExportController {
 		Map<String, Object> sections = new LinkedHashMap<>();
 		sections.put("payments", payments.forCustomer(customerId).stream().map(PaymentResponse::from).toList());
 		sections.put("staffAccess", accessLog.mine(authorization, DataExport.ALL_STAFF_READS));
-		return DataExport.of("payment", customerId, sections);
+		return DataExport.of(events, Topics.PAYMENT_EVENTS, "payment", customerId, sections);
 	}
 }

@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import com.flashcart.common.event.EventPublisher;
+import com.flashcart.common.event.message.CustomerDataExported;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 
@@ -26,9 +28,19 @@ public final class DataExport {
 	private DataExport() {
 	}
 
-	/** @param sections what this service holds, by name, in the order they should read */
-	public static ResponseEntity<Map<String, Object>> of(String service, String customerId,
-			Map<String, Object> sections) {
+	/**
+	 * The file, announced first on the service's events topic so its owner is emailed (ADR 0080).
+	 *
+	 * <p>Announced before it is answered, through the outbox: if the announcement cannot be written, the
+	 * download fails rather than happening unseen. A file that is announced and then lost on the way still
+	 * gets its email, which is the side to err on.
+	 *
+	 * @param topic    this service's events topic
+	 * @param sections what this service holds, by name, in the order they should read
+	 */
+	public static ResponseEntity<Map<String, Object>> of(EventPublisher events, String topic, String service,
+			String customerId, Map<String, Object> sections) {
+		events.publish(topic, CustomerDataExported.of(service, customerId));
 		Map<String, Object> body = new LinkedHashMap<>();
 		body.put("service", service);
 		body.put("customerId", customerId);

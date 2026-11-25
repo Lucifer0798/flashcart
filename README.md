@@ -808,6 +808,11 @@ errors and retry counts are about our mail rather than you. Who on staff looked,
 support. **Download before closing an account:** closing erases who you were, and the user service then has
 nothing to give you. See [ADR 0066](docs/adr/0066-your-data-as-a-file.md).
 
+**You are emailed when it happens.** Every file is announced on its service's events topic, and the user service
+emails the account "A copy of your FlashCart data was downloaded", once an hour however many files were taken.
+If it wasn't you, someone is signed in as you, and the email says what to do. See
+[ADR 0080](docs/adr/0080-a-download-is-not-a-secret.md).
+
 ### Closing an account
 
 ```bash

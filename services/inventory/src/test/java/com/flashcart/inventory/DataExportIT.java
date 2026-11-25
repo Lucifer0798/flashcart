@@ -8,11 +8,13 @@ import com.flashcart.common.security.AccessTokens;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -20,6 +22,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DataExportIT extends AbstractInventoryIT {
 
 	private static final String PATH = "/api/v1/inventory/_export/mine";
+
+	@Autowired
+	private JdbcTemplate jdbc;
+
+	@Test
+	@DisplayName("a download is announced on this service's topic, so the user service can email its owner")
+	void aDownloadIsAnnounced() {
+		assertThat(rest.exchange(PATH, HttpMethod.GET, new HttpEntity<>(as("export-i-told")), Map.class).getStatusCode())
+				.isEqualTo(HttpStatus.OK);
+
+		assertThat(jdbc.queryForList("select topic, payload->>'service' as service, payload->>'customerId' as customer "
+				+ "from outbox_messages where event_type = 'CustomerDataExported' and message_key = ?", "export-i-told"))
+				.singleElement().satisfies(row -> assertThat(row).containsEntry("topic", "flashcart.inventory.events")
+						.containsEntry("service", "inventory").containsEntry("customer", "export-i-told"));
+	}
 
 	@Test
 	@DisplayName("the file holds the caller's waitlist places, held stock and sale caps, and nobody else's")

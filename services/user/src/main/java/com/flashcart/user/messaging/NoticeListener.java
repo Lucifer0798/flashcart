@@ -8,6 +8,7 @@ import java.util.Map;
 import com.flashcart.common.event.DomainEvent;
 import com.flashcart.common.event.Topics;
 import com.flashcart.common.event.message.BackInStock;
+import com.flashcart.common.event.message.CustomerDataExported;
 import com.flashcart.common.event.message.OrderCancelled;
 import com.flashcart.common.event.message.OrderConfirmed;
 import com.flashcart.common.event.message.OrderDelivered;
@@ -119,6 +120,23 @@ public class NoticeListener {
 		payload.put("reference", event.reference());
 		record(event, order(event, NoticeKind.REFUNDED, "refunded", event.orderNumber(), event.customerId(),
 				payload));
+	}
+
+	/**
+	 * A customer's data was downloaded, from any of the five services (ADR 0066). One email per customer per
+	 * hour, keyed by the hour of the download: a whole copy is five files, taken within seconds, and five
+	 * emails saying the same thing would teach the owner to ignore them. The first file of the hour sets the
+	 * time the email gives. ADR 0080.
+	 */
+	@KafkaListener(topics = { Topics.USER_EVENTS, Topics.ORDER_EVENTS, Topics.PAYMENT_EVENTS, Topics.SHIPPING_EVENTS,
+			Topics.INVENTORY_EVENTS }, containerFactory = "dataExportedFactory",
+			groupId = UserKafkaConfig.GROUP + "-data-exported")
+	public void onDataExported(CustomerDataExported event) {
+		long hour = event.occurredAt().getEpochSecond() / 3600;
+		Map<String, Object> payload = new HashMap<>();
+		payload.put("downloadedAt", event.occurredAt().toString());
+		record(event, new Notice("data-exported:" + event.customerId() + ":" + hour, NoticeKind.DATA_EXPORTED,
+				event.customerId(), null, event.occurredAt(), payload, event.occurredAt().plus(maxAge)));
 	}
 
 	private static Map<String, Object> backInStockPayload(BackInStock event) {
