@@ -59,6 +59,12 @@ jobs:
           # the pool overflowed at a sale's opening and reset 44 orders (ADR 0076).
           python3 scripts/connection-limits-check.py
 
+      - name: Every container the stack starts comes back when Docker restarts
+        run: |
+          # Only the services had a restart policy, so every Docker Desktop restart left Postgres and Kafka down
+          # and the services crash-looping against them, three days running (ADR 0081).
+          python3 scripts/restart-policy-check.py
+
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5

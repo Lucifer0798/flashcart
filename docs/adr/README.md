@@ -85,3 +85,4 @@ when someone revisits it in six months.
 | [0078](0078-the-queue-decides-who-gets-it.md) | The queue decides who gets it | Accepted |
 | [0079](0079-a-stolen-token-cannot-sign-you-out.md) | A stolen token cannot sign you out | Accepted |
 | [0080](0080-a-download-is-not-a-secret.md) | A download is not a secret | Accepted |
+| [0081](0081-the-stack-comes-back-by-itself.md) | The stack comes back by itself | Accepted |
