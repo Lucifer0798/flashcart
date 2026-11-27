@@ -43,9 +43,17 @@ x-service-base: &service-base
 services:
 
   # --- infrastructure -------------------------------------------------------------------------
+  #
+  # Every container here restarts with Docker, as the services do. When the engine stops -- Docker Desktop
+  # quitting or updating, its VM shutting down, the machine sleeping -- every container exits, and the engine
+  # brings back only those with a restart policy. Until ADR 0081 that was the services alone: Postgres and
+  # Kafka stayed down, and the services crash-looped against them until someone ran `up` again.
+  # `unless-stopped`, so a container stopped on purpose stays stopped. scripts/restart-policy-check.py
+  # fails if one is added without it.
 
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: flashcart
       POSTGRES_PASSWORD: flashcart
@@ -67,6 +75,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     # appendonly keeps reservation state across a restart. Phase 7 is what makes this load-bearing;
     # it is on from the start so the durability behaviour is the same in every phase.
     command: ["redis-server", "--appendonly", "yes"]
@@ -82,6 +91,7 @@ services:
 
   kafka:
     image: apache/kafka:3.9.0
+    restart: unless-stopped
     # KRaft: no ZooKeeper. One process is both broker and controller here.
     environment:
       # The broker defaults to a 1G heap, which it comes nowhere near with four topics and a
@@ -386,6 +396,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.1.0
+    restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=6h
@@ -405,6 +416,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.5.1
+    restart: unless-stopped
     environment:
       # Anonymous admin: this is a local demonstration stack, and a login prompt between someone and
       # the dashboard is friction with no security value on a laptop-only port binding.
@@ -428,6 +440,7 @@ services:
   # actually emailed rather than merely recorded as notified.
   mailpit:
     image: axllent/mailpit:v1.27
+    restart: unless-stopped
     ports:
       - "18025:8025"
     healthcheck:
@@ -439,6 +452,7 @@ services:
   # Where alerts go (ADR 0043). Before this, every rule fired into Prometheus's own UI and nowhere else.
   alertmanager:
     image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
@@ -457,6 +471,7 @@ services:
   # report. `curl localhost:19095/alerts` is the inbox. Standard library Python, mounted, not built.
   alert-sink:
     image: python:3.12-alpine
+    restart: unless-stopped
     command: ["python", "-u", "/sink/sink.py", "8080"]
     environment:
       WATCHDOG_MAX_AGE: "180"
@@ -480,6 +495,7 @@ services:
   # failure you just caused, not for keeping.
   zipkin:
     image: openzipkin/zipkin:3.4
+    restart: unless-stopped
     environment:
       STORAGE_TYPE: mem
       # Trimmed hard. The default heap is generous for a container that holds minutes of traces.

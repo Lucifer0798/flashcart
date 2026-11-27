@@ -103,8 +103,14 @@ Requires Docker and JDK 21+. Maven comes from the wrapper.
 docker compose up --build
 ```
 
-Eleven containers: PostgreSQL, Redis, Kafka, Kafka UI, and the seven services. Everything reports
-healthy in about a minute on a warm cache.
+Sixteen containers: PostgreSQL, Redis, Kafka, the seven services, Prometheus, Grafana, Alertmanager and its
+alert sink, Mailpit and Zipkin. Kafka UI is behind the `tools` profile. Everything reports healthy in about a
+minute on a warm cache.
+
+**It comes back by itself when Docker restarts.** Every container has `restart: unless-stopped`, so after
+Docker Desktop quits, updates or sleeps, the whole stack returns without another `up`.
+`scripts/restart-policy-check.py` fails if a container is added without the policy. See
+[ADR 0081](docs/adr/0081-the-stack-comes-back-by-itself.md).
 
 The catalog starts under the `demo` profile, so it comes up with a browsable catalog and a flash
 sale that is already live:

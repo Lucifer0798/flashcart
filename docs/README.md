@@ -101,6 +101,7 @@ Grouped by what they are about rather than by number. Chronological order is in
 - [0078](adr/0078-the-queue-decides-who-gets-it.md) — The queue decides who gets it
 - [0079](adr/0079-a-stolen-token-cannot-sign-you-out.md) — A stolen token cannot sign you out
 - [0080](adr/0080-a-download-is-not-a-secret.md) — A download is not a secret
+- [0081](adr/0081-the-stack-comes-back-by-itself.md) — The stack comes back by itself
 - [0028](adr/0028-looking-is-not-acting.md) — Looking is not acting
 - [0029](adr/0029-an-operator-read-was-a-silence.md) — An operator read was a silence
 - [0034](adr/0034-who-read-my-data.md) — Who read my data
